@@ -24,6 +24,18 @@ from .config import settings
 
 _model = None  # lazy whisper model
 
+# Whisper-`base` mishears "jarvis" pretty consistently as one of these,
+# especially with a non-native accent. Treat all of them as the wake word.
+_WAKE_WORD_ALTERNATES: tuple[str, ...] = (
+    "jarvis", "travis", "charvis", "chavis", "javis", "yarvis",
+    "djarvis", "dschawis", "jarwis", "jervis",
+    "ciao",  # whisper often hears the German "Jarvis" as Italian "ciao"
+)
+
+# 16-bit PCM RMS below this counts as "silence" — skip the chunk entirely
+# instead of letting Whisper hallucinate ghost transcripts on quiet rooms.
+SILENCE_RMS_THRESHOLD = 350
+
 
 def _load_model():  # -> "whisper.Whisper"
     global _model
@@ -59,18 +71,28 @@ def transcribe(audio_bytes: bytes, *, sample_rate: int = 16_000) -> str:
         tmp.unlink(missing_ok=True)
 
 
+def _wake_match(lowered: str) -> tuple[int, int] | None:
+    """Return (start, end) of the first matched wake-word variant in ``lowered``."""
+    # Try the configured wake word first, then known mishearings.
+    candidates = (settings.WAKE_WORD, *_WAKE_WORD_ALTERNATES)
+    for word in candidates:
+        idx = lowered.find(word)
+        if idx != -1:
+            return idx, idx + len(word)
+    return None
+
+
 def has_wake_word(text: str) -> bool:
-    """Return True if the configured wake word appears in ``text``."""
-    return settings.WAKE_WORD in text.lower()
+    """Return True if the wake word (or a known mishearing) appears in ``text``."""
+    return _wake_match(text.lower()) is not None
 
 
 def strip_wake_word(text: str) -> str:
     """Drop the wake word and any leading punctuation from a transcript."""
-    lowered = text.lower()
-    idx = lowered.find(settings.WAKE_WORD)
-    if idx == -1:
+    match = _wake_match(text.lower())
+    if match is None:
         return text
-    tail = text[idx + len(settings.WAKE_WORD):]
+    tail = text[match[1]:]
     return tail.lstrip(" ,.!?:;-").strip()
 
 
@@ -94,6 +116,13 @@ def listen_once(duration_s: float = 5.0, sample_rate: int = 16_000) -> str:
         sd.wait()
     finally:
         print("[MIC OFF]", flush=True)
+
+    # Energy gate: silent windows go to Whisper and come back with
+    # hallucinated English ("I'll see you next time", etc.). Skip them.
+    samples = recording.astype(np.int32).reshape(-1)
+    rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
+    if rms < SILENCE_RMS_THRESHOLD:
+        return ""  # treated as "nothing heard" by the caller
 
     pcm = recording.astype(np.int16).tobytes()
     wav = _pcm_to_wav(pcm, sample_rate=sample_rate)

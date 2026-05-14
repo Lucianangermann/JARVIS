@@ -1,33 +1,41 @@
-"""Local wake-word voice loop for the MacBook server.
+"""Local wake-word voice loop for the MacBook server — streaming version.
 
-How it works
-------------
-1. Continuously record short windows (``LISTEN_WINDOW_S``) from the default
-   mic. Whisper transcribes each window.
-2. If the wake word (``settings.WAKE_WORD``, default ``"jarvis"``) appears
-   anywhere in the transcript:
-       - If text follows the wake word in the same window, that is the
-         command — run it through the Brain and speak the reply.
-       - Otherwise, beep-style TTS prompt ("Yes?") and record one more
-         ``COMMAND_WINDOW_S`` window as the command.
-3. Loop. ``[MIC ON]`` / ``[MIC OFF]`` is printed every time the mic opens
-   so it's obvious when audio is captured.
+Design
+------
+Earlier versions recorded fixed 4 s windows in a tight loop. That left a
+gap of ~1–2 s after each window while Whisper ran — anything you said
+during that gap was lost. This version uses a continuous mic stream with
+energy-based voice-activity detection (VAD):
+
+    * ``sd.InputStream`` runs continuously, pushing 100 ms PCM blocks
+      into an in-memory queue.
+    * We treat the user as **silent** until RMS crosses
+      ``SPEECH_RMS_THRESHOLD`` in any block. From that moment we start
+      accumulating blocks.
+    * When the RMS stays under ``SILENCE_RMS_THRESHOLD`` for
+      ``SILENCE_HANG_S`` continuously, the segment is closed and sent
+      to Whisper.
+    * If the transcript contains the wake word, the rest of the
+      transcript is the command. The Brain replies, TTS speaks the
+      answer, the queue is drained (so JARVIS doesn't transcribe its
+      own voice), and the loop continues listening.
 
 Privacy
 -------
-Whisper runs entirely locally. No audio leaves the machine until Claude
-sees the transcript (text only). The mic is open only inside the
-``listen_once`` calls below — see ``[MIC ON]/[MIC OFF]`` markers.
+The mic stream is local; nothing leaves the machine until Claude sees
+the transcript (text only). ``[MIC] speech`` / ``[MIC] silence`` is
+printed so it's visible when audio is being captured for transcription.
 
 Run
 ---
-This is launched automatically by ``main.py`` when ``JARVIS_LOCAL_VOICE=1``.
-For standalone testing without the HTTP server::
+Launched automatically by ``main.py`` when ``JARVIS_LOCAL_VOICE=1``. For
+standalone testing without the HTTP server::
 
     python -m server.voice_loop
 """
 from __future__ import annotations
 
+import queue
 import threading
 import time
 from typing import TYPE_CHECKING
@@ -37,10 +45,28 @@ from .config import settings
 if TYPE_CHECKING:
     from .brain import Brain
 
-# Tunables — short windows = lower wake-word latency, more CPU.
-LISTEN_WINDOW_S = 4.0      # rolling listen window for the wake word
-COMMAND_WINDOW_S = 6.0     # follow-up window after a bare "jarvis"
-COOLDOWN_S = 0.2           # gap between captures to let TTS finish + drain queue
+
+# --- Audio config -------------------------------------------------------- #
+
+SAMPLE_RATE = 16_000
+BLOCK_S = 0.1                          # 100 ms PCM blocks → smooth VAD
+BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_S)
+
+# Hysteresis: a higher threshold to *open* the segment, a lower one to
+# count as silence — avoids flapping on borderline blocks.
+SPEECH_RMS_THRESHOLD = 600
+SILENCE_RMS_THRESHOLD = 300
+
+# How long sustained silence ends a segment, and the minimum / maximum
+# segment length we'll transcribe at all.
+SILENCE_HANG_S = 0.8                   # 800 ms of silence → segment done
+MIN_SPEECH_S = 0.3                     # discard blips shorter than this
+MAX_SPEECH_S = 15.0                    # cap utterances so Whisper stays snappy
+
+# Tiny prefix preserved before the first speech block — captures the
+# attack of the wake word that the threshold detector just missed.
+PRE_ROLL_S = 0.4
+PRE_ROLL_BLOCKS = int(PRE_ROLL_S / BLOCK_S)
 
 
 _stop_event = threading.Event()
@@ -52,75 +78,156 @@ def request_stop() -> None:
 
 
 def run(brain: "Brain", session_id: str | None = None) -> None:
-    """Block forever (until ``request_stop()``) running the wake-word loop.
-
-    ``session_id`` keys the Brain's per-session history. Defaults to the
-    server's auth token so a voice session shares memory with the
-    ``Authorization: Bearer …`` HTTP/WS clients.
-    """
-    # Imported here so the module can be imported in environments without
+    """Block forever (until ``request_stop()``) running the streaming loop."""
+    # Imports are local so the module can be loaded in environments without
     # the voice stack — we only fail when run() is actually called.
+    import collections
+
+    import numpy as np
+    import sounddevice as sd
+
     from . import stt, tts
 
     session = session_id or settings.JARVIS_AUTH_TOKEN
 
-    print(f"[JARVIS] local voice loop ready — wake word: {settings.WAKE_WORD!r}")
-    print(f"[JARVIS] window={LISTEN_WINDOW_S}s   say '{settings.WAKE_WORD} <command>'")
+    print(f"[JARVIS] streaming voice loop ready — wake word: {settings.WAKE_WORD!r}")
+    print(f"[JARVIS] say '{settings.WAKE_WORD} <command>'    "
+          f"(speech_rms>{SPEECH_RMS_THRESHOLD}, silence_rms<{SILENCE_RMS_THRESHOLD})")
 
-    # Preload whisper once so the first wake-word hit isn't laggy.
+    # Warm up Whisper so the first hit isn't laggy.
     try:
         stt._load_model()  # noqa: SLF001 — intentional warm-up
     except Exception as exc:  # noqa: BLE001
         print(f"[JARVIS] could not load whisper model: {exc}")
         return
 
-    while not _stop_event.is_set():
+    audio_q: queue.Queue = queue.Queue()
+
+    def _callback(indata, frames, time_info, status):  # noqa: ARG001
+        if status:
+            print(f"[JARVIS] mic status: {status}")
+        # int16, mono, flat
+        audio_q.put(indata.copy().reshape(-1))
+
+    # Rolling pre-roll so we don't clip the first phoneme of "jarvis".
+    pre_roll: "collections.deque" = collections.deque(maxlen=PRE_ROLL_BLOCKS)
+
+    in_speech = False
+    buf: list = []
+    silence_blocks = 0
+    silence_blocks_to_end = int(SILENCE_HANG_S / BLOCK_S)
+    min_speech_blocks = int(MIN_SPEECH_S / BLOCK_S)
+    max_speech_blocks = int(MAX_SPEECH_S / BLOCK_S)
+
+    try:
+        with sd.InputStream(
+            samplerate=SAMPLE_RATE,
+            channels=1,
+            dtype="int16",
+            blocksize=BLOCK_SIZE,
+            callback=_callback,
+        ):
+            while not _stop_event.is_set():
+                try:
+                    block = audio_q.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+
+                # RMS in int32 space to avoid int16 overflow.
+                samples = block.astype(np.int32)
+                rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
+
+                if not in_speech:
+                    pre_roll.append(block)
+                    if rms > SPEECH_RMS_THRESHOLD:
+                        in_speech = True
+                        buf = list(pre_roll)        # keep the pre-roll
+                        buf.append(block)
+                        silence_blocks = 0
+                        print("[MIC] speech started")
+                    continue
+
+                # In-speech: keep accumulating, watch for sustained silence.
+                buf.append(block)
+                if rms < SILENCE_RMS_THRESHOLD:
+                    silence_blocks += 1
+                else:
+                    silence_blocks = 0
+
+                end_by_silence = silence_blocks >= silence_blocks_to_end
+                end_by_cap = len(buf) >= max_speech_blocks
+                if not (end_by_silence or end_by_cap):
+                    continue
+
+                # Segment closed — transcribe.
+                in_speech = False
+                if len(buf) - silence_blocks < min_speech_blocks:
+                    # Too short to be real speech. Drop and reset.
+                    buf = []
+                    silence_blocks = 0
+                    pre_roll.clear()
+                    print("[MIC] (segment too short, ignored)")
+                    continue
+
+                print(f"[MIC] segment closed ({BLOCK_S * len(buf):.1f}s) — transcribing…")
+                pcm = np.concatenate(buf).tobytes()
+                wav = stt._pcm_to_wav(pcm, sample_rate=SAMPLE_RATE)  # noqa: SLF001
+                buf = []
+                silence_blocks = 0
+                pre_roll.clear()
+
+                try:
+                    transcript = stt.transcribe(wav, sample_rate=SAMPLE_RATE)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[JARVIS] transcribe error: {exc}")
+                    transcript = ""
+
+                if not transcript:
+                    continue
+
+                if not stt.has_wake_word(transcript):
+                    print(f"[JARVIS] (no wake word) heard: {transcript!r}")
+                    continue
+
+                command = stt.strip_wake_word(transcript)
+                print(f"[JARVIS] wake word fired. heard={transcript!r}")
+
+                if not command:
+                    tts.speak("Ja?")
+                    tts.wait(timeout=10.0)
+                    _drain(audio_q)
+                    continue
+
+                print(f"[CLIENT: MacBook] [YOU·voice] {command}")
+                try:
+                    reply = brain.reply(session, command)
+                except Exception as exc:  # noqa: BLE001
+                    reply = f"Entschuldige, etwas ist schiefgelaufen: {exc}"
+                print(f"[JARVIS] {reply}")
+                tts.speak(reply)
+                tts.wait(timeout=120.0)
+
+                # Drain anything captured while JARVIS was speaking so we
+                # don't transcribe his own voice on the next round.
+                _drain(audio_q)
+    finally:
+        print("[JARVIS] streaming voice loop stopped.")
+
+
+def _drain(q: queue.Queue) -> None:
+    """Best-effort flush of the audio queue."""
+    drained = 0
+    while True:
         try:
-            transcript = stt.listen_once(duration_s=LISTEN_WINDOW_S)
-        except Exception as exc:  # noqa: BLE001 — mic may disappear, etc.
-            print(f"[JARVIS] mic error: {exc}; retrying in 2s")
-            _stop_event.wait(2.0)
-            continue
-
-        if not transcript:
-            continue
-        if not stt.has_wake_word(transcript):
-            # Comment this out if you want quieter logs.
-            # print(f"[JARVIS] (no wake word: {transcript!r})")
-            continue
-
-        command = stt.strip_wake_word(transcript)
-        print(f"[JARVIS] wake word fired. heard={transcript!r}")
-
-        if not command:
-            # Bare "jarvis" with nothing after → ask for the actual command.
-            tts.speak("Yes?")
-            # Give TTS a moment to start so we don't record ourselves.
-            time.sleep(0.6)
-            try:
-                command = stt.listen_once(duration_s=COMMAND_WINDOW_S).strip()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[JARVIS] mic error during command capture: {exc}")
-                continue
-            if not command:
-                tts.speak("I didn't catch that.")
-                continue
-
-        print(f"[CLIENT: MacBook] [YOU·voice] {command}")
-        try:
-            reply = brain.reply(session, command)
-        except Exception as exc:  # noqa: BLE001
-            reply = f"Sorry, something went wrong: {exc}"
-        print(f"[JARVIS] {reply}")
-        tts.speak(reply)
-
-        # Brief cooldown so the loop doesn't immediately re-record TTS output.
-        _stop_event.wait(COOLDOWN_S)
-
-    print("[JARVIS] local voice loop stopped.")
+            q.get_nowait()
+            drained += 1
+        except queue.Empty:
+            break
+    if drained:
+        print(f"[MIC] drained {drained} buffered blocks "
+              f"({drained * BLOCK_S:.1f}s) after TTS")
 
 
-# Allow `python -m server.voice_loop` for a server-less voice test.
 if __name__ == "__main__":  # pragma: no cover
     from .brain import Brain
 

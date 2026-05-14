@@ -53,6 +53,15 @@ class Settings:
     # --- Voice ---
     WAKE_WORD: str = os.getenv("WAKE_WORD", "jarvis").lower()
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "base")
+    # Substring or full id of the TTS voice. Empty = autoselect based on
+    # TTS_LANGUAGE. Example values: "Anna", "Markus", "Samantha", or a
+    # full id like "com.apple.voice.compact.de-DE.Anna".
+    TTS_VOICE: str = os.getenv("TTS_VOICE", "")
+    # Preferred BCP-47 locale prefix when autoselecting (e.g. "de", "en").
+    TTS_LANGUAGE: str = os.getenv("TTS_LANGUAGE", "de")
+    # Speaking rate in words/min. macOS default ≈ 200; we slow down a bit
+    # for clarity.
+    TTS_RATE: int = int(os.getenv("TTS_RATE", "180"))
 
     # --- Safety limits ---
     MAX_INPUT_LENGTH: int = 500
