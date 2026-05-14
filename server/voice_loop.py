@@ -102,20 +102,29 @@ USER_VOICE_GATE_OUT_FACTOR = 0.1
 
 # Fast interrupt: while JARVIS is busy, the user's voice (already
 # AEC'd + gated) must stay above FAST_INTERRUPT_RMS for at least
-# FAST_INTERRUPT_MIN_S of *consecutive* 10 ms blocks (with up to
-# FAST_INTERRUPT_MISS_TOLERANCE brief dips inside the streak).
+# FAST_INTERRUPT_MIN_S of *consecutive* 10 ms blocks AND contain a
+# sub-run of FAST_INTERRUPT_MIN_RUN_BLOCKS uninterrupted hits.
 #
-# - The strict-consecutive part rejects keyboard clicks: each keystroke
-#   is a 10-30 ms RMS spike followed by a long quiet gap.
+# - The streak length rejects isolated keyboard clicks (each keystroke
+#   is a 10-30 ms RMS spike followed by a quiet gap).
+# - The uninterrupted-run requirement rejects *bursts* of clicks (fast
+#   typing or a double-click can chain enough hits + tolerated misses
+#   to fake a long streak, but no single click sustains 40 ms+ of
+#   continuous energy the way a vowel does).
 # - The miss-tolerance handles natural vocal RMS dips inside a single
 #   sustained vowel (otherwise pitch fluctuations could reset the run
 #   half-way through a clean "Stop").
-# - The threshold sits just above typical AEC residual (~50-300 during
-#   pure JARVIS) and below typical user voice (~500-800).
+# - The threshold sits clearly above typical AEC residual (~50-300
+#   during pure JARVIS) and below user voice mid-vowel (~700-1500).
 FAST_INTERRUPT_RMS = 500
-FAST_INTERRUPT_MIN_S = 0.12
+FAST_INTERRUPT_MIN_S = 0.13
 FAST_INTERRUPT_MIN_BLOCKS = int(FAST_INTERRUPT_MIN_S / BLOCK_S)
-FAST_INTERRUPT_MISS_TOLERANCE = 3   # allow 3 sub-threshold blocks in a row
+FAST_INTERRUPT_MISS_TOLERANCE = 2   # allow 2 sub-threshold blocks (20ms dip)
+# Minimum uninterrupted run of above-threshold blocks anywhere in the
+# streak. 30 ms is the lower bound for a steady-state vowel — quiet
+# voices still cross it easily, while keyboard/mouse clicks (1-2 block
+# transients) cannot, even when chained into a burst.
+FAST_INTERRUPT_MIN_RUN_BLOCKS = 3
 
 # Once the gate opens we hold it open for this long, even if the level
 # drops back below threshold. This captures full words — consonants
@@ -301,13 +310,19 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     followup_until = 0.0  # monotonic deadline; 0 = inactive
     followup_window = settings.FOLLOWUP_TIMEOUT_S
 
-    # Fast-interrupt streak tracker. `count` is how many blocks since
-    # the streak started; `misses` is how many of those were below
-    # threshold in a row. A miss run longer than the tolerance breaks
-    # the streak (so keyboard clicks can't accumulate over a long
-    # tapping session), but short pitch dips within a vowel survive.
+    # Fast-interrupt streak tracker.
+    #   `count`      — blocks since the streak started (hits + tolerated misses)
+    #   `misses`     — consecutive sub-threshold blocks in the current dip
+    #   `run`        — current uninterrupted hit run (resets on any miss)
+    #   `max_run`    — longest uninterrupted hit run seen in this streak
+    # The streak fires only when `count >= MIN_BLOCKS` AND
+    # `max_run >= MIN_RUN_BLOCKS`. That combination passes a clean vowel
+    # but rejects keyboard/mouse bursts (whose runs stay at 1-3 blocks
+    # even if the overall streak length looks long enough).
     fast_int_count = 0
     fast_int_misses = 0
+    fast_int_run = 0
+    fast_int_max_run = 0
 
     # Brain work runs in a worker thread so the main loop can keep
     # processing audio (and hear "Stop" / "Halt") while JARVIS thinks
@@ -413,28 +428,41 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
 
                     # FAST INTERRUPT: count blocks above threshold,
                     # tolerating up to FAST_INTERRUPT_MISS_TOLERANCE
-                    # short dips in a row. A longer miss run resets the
-                    # streak. Keyboard clicks (1-3 blocks high, ≥5
-                    # blocks low) get reset every keystroke; vocal
-                    # vowels (steady 10+ blocks with brief dips) keep
-                    # accumulating.
+                    # short dips in a row. We also track the longest
+                    # uninterrupted hit run — fires only when *both* the
+                    # total streak is long enough AND a single vowel-like
+                    # run sat above the threshold. Keystrokes & mouse
+                    # clicks have runs of 1-3 blocks, so even a burst of
+                    # them won't satisfy the run requirement.
                     if rms > FAST_INTERRUPT_RMS:
                         fast_int_count += 1
                         fast_int_misses = 0
+                        fast_int_run += 1
+                        if fast_int_run > fast_int_max_run:
+                            fast_int_max_run = fast_int_run
                     elif fast_int_count > 0:
                         fast_int_misses += 1
+                        fast_int_run = 0
                         if fast_int_misses > FAST_INTERRUPT_MISS_TOLERANCE:
                             fast_int_count = 0
                             fast_int_misses = 0
+                            fast_int_max_run = 0
                         else:
                             fast_int_count += 1  # still inside the streak
-                    if fast_int_count >= FAST_INTERRUPT_MIN_BLOCKS:
+                    if (
+                        fast_int_count >= FAST_INTERRUPT_MIN_BLOCKS
+                        and fast_int_max_run >= FAST_INTERRUPT_MIN_RUN_BLOCKS
+                    ):
                         print(f"[JARVIS] FAST INTERRUPT (energy burst, "
-                              f"rms~{rms:.0f}, ~{fast_int_count * BLOCK_S * 1000:.0f}ms)")
+                              f"rms~{rms:.0f}, "
+                              f"~{fast_int_count * BLOCK_S * 1000:.0f}ms, "
+                              f"run={fast_int_max_run * BLOCK_S * 1000:.0f}ms)")
                         brain_cancel.set()
                         tts.stop()
                         fast_int_count = 0
                         fast_int_misses = 0
+                        fast_int_run = 0
+                        fast_int_max_run = 0
                         barge_in_buffer.clear()
                         _drain(audio_q)
                         continue
@@ -457,9 +485,12 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                         ).start()
                     continue
 
-                # Idle: reset fast-interrupt counter so a stale count
+                # Idle: reset fast-interrupt counters so a stale streak
                 # doesn't carry into the next TTS session.
                 fast_int_count = 0
+                fast_int_misses = 0
+                fast_int_run = 0
+                fast_int_max_run = 0
 
                 if not in_speech:
                     pre_roll.append(block)
