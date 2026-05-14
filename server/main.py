@@ -84,7 +84,11 @@ async def lifespan(app: FastAPI):
                 target=voice_loop.run,
                 args=(app.state.brain,),
                 name="jarvis-voice",
-                daemon=True,
+                # NOT a daemon: the thread holds a live PortAudio
+                # InputStream, and if the interpreter kills it mid-cleanup
+                # we get a double-free crash on macOS. We join it
+                # explicitly in the finally block below.
+                daemon=False,
             )
             voice_thread.start()
             print("[JARVIS] local voice loop started (JARVIS_LOCAL_VOICE=1)")
@@ -96,6 +100,9 @@ async def lifespan(app: FastAPI):
             from . import voice_loop
 
             voice_loop.request_stop()
+            voice_thread.join(timeout=5.0)
+            if voice_thread.is_alive():
+                print("[JARVIS] voice thread did not stop cleanly within 5s")
         if _VOICE_OK and tts is not None:
             tts.shutdown()
         print("[JARVIS] shutdown complete")

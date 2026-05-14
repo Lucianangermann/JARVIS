@@ -62,6 +62,11 @@ class Settings:
     # Speaking rate in words/min. macOS default ≈ 200; we slow down a bit
     # for clarity.
     TTS_RATE: int = int(os.getenv("TTS_RATE", "180"))
+    # After the wake word fires, stay active for this many seconds — every
+    # speech segment is treated as a command, no wake word needed — until
+    # the user says one of the end phrases ("okay das war's", "tschüss",
+    # …) or the timeout lapses. 0 disables follow-up mode entirely.
+    FOLLOWUP_TIMEOUT_S: float = float(os.getenv("FOLLOWUP_TIMEOUT_S", "60"))
 
     # --- Safety limits ---
     MAX_INPUT_LENGTH: int = 500

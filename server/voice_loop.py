@@ -119,6 +119,13 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     min_speech_blocks = int(MIN_SPEECH_S / BLOCK_S)
     max_speech_blocks = int(MAX_SPEECH_S / BLOCK_S)
 
+    # Follow-up mode: once the wake word fires, the session stays active
+    # for FOLLOWUP_TIMEOUT_S seconds — every segment in that window is a
+    # command, no wake word needed. Refreshes after each reply; ends when
+    # the user says one of the end phrases or the timer lapses.
+    followup_until = 0.0  # monotonic deadline; 0 = inactive
+    followup_window = settings.FOLLOWUP_TIMEOUT_S
+
     try:
         with sd.InputStream(
             samplerate=SAMPLE_RATE,
@@ -185,16 +192,53 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 if not transcript:
                     continue
 
-                if not stt.has_wake_word(transcript):
-                    print(f"[JARVIS] (no wake word) heard: {transcript!r}")
+                # Are we still inside a follow-up window?
+                now = time.monotonic()
+                in_followup = followup_window > 0 and now < followup_until
+                if followup_until and not in_followup:
+                    print("[JARVIS] follow-up window lapsed — listening for "
+                          f"wake word again ({settings.WAKE_WORD!r})")
+                    followup_until = 0.0
+
+                # End phrase always wins, even outside follow-up mode.
+                if in_followup and stt.is_end_phrase(transcript):
+                    print(f"[JARVIS] end phrase heard: {transcript!r}")
+                    tts.speak("Alles klar. Bis später.")
+                    tts.wait(timeout=10.0)
+                    followup_until = 0.0
+                    _drain(audio_q)
                     continue
 
-                command = stt.strip_wake_word(transcript)
-                print(f"[JARVIS] wake word fired. heard={transcript!r}")
+                # Decide whether this segment is a command.
+                if in_followup:
+                    # Every utterance counts. Strip the wake word if the
+                    # user accidentally said "Jarvis" again.
+                    command = (
+                        stt.strip_wake_word(transcript)
+                        if stt.has_wake_word(transcript)
+                        else transcript
+                    )
+                    print(f"[JARVIS] (follow-up) heard={transcript!r}")
+                else:
+                    # Idle: only react to the wake word.
+                    if not stt.has_wake_word(transcript):
+                        print(f"[JARVIS] (no wake word) heard: {transcript!r}")
+                        continue
+                    command = stt.strip_wake_word(transcript)
+                    print(f"[JARVIS] wake word fired. heard={transcript!r}")
+                    if not command:
+                        # Just "Jarvis" — confirm and enter follow-up mode.
+                        tts.speak("Ja?")
+                        tts.wait(timeout=10.0)
+                        if followup_window > 0:
+                            followup_until = time.monotonic() + followup_window
+                        _drain(audio_q)
+                        continue
 
-                if not command:
-                    tts.speak("Ja?")
-                    tts.wait(timeout=10.0)
+                if not command.strip():
+                    # Empty-after-strip — refresh the window and listen on.
+                    if followup_window > 0:
+                        followup_until = time.monotonic() + followup_window
                     _drain(audio_q)
                     continue
 
@@ -206,6 +250,11 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 print(f"[JARVIS] {reply}")
                 tts.speak(reply)
                 tts.wait(timeout=120.0)
+
+                # Extend the follow-up window — every reply gives the user
+                # another FOLLOWUP_TIMEOUT_S to keep going.
+                if followup_window > 0:
+                    followup_until = time.monotonic() + followup_window
 
                 # Drain anything captured while JARVIS was speaking so we
                 # don't transcribe his own voice on the next round.

@@ -27,10 +27,25 @@ _model = None  # lazy whisper model
 # Whisper-`base` mishears "jarvis" pretty consistently as one of these,
 # especially with a non-native accent. Treat all of them as the wake word.
 _WAKE_WORD_ALTERNATES: tuple[str, ...] = (
-    "jarvis", "travis", "charvis", "chavis", "javis", "yarvis",
+    "jarvis", "jaravis", "travis", "charvis", "chavis", "javis", "yarvis",
     "djarvis", "dschawis", "jarwis", "jervis",
     "ciao",  # whisper often hears the German "Jarvis" as Italian "ciao"
 )
+
+# "End conversation" phrases for the voice loop's follow-up mode.
+# Matched against the normalised transcript (lowercased, punctuation
+# stripped, single-spaced). Keep them distinctive enough to avoid false
+# positives in regular speech.
+_END_PHRASES: frozenset[str] = frozenset({
+    "okay das wars", "okay das war es", "okay das war's",
+    "ok das wars", "ok das war es", "ok das war's",
+    "das wars", "das war es", "das war's",
+    "tschüss", "tschüss jarvis",
+    "ende", "ende jarvis",
+    "stop", "stopp", "stop jarvis", "stopp jarvis",
+    "danke jarvis", "danke das wars",
+    "schluss", "schluss jarvis",
+})
 
 # 16-bit PCM RMS below this counts as "silence" — skip the chunk entirely
 # instead of letting Whisper hallucinate ghost transcripts on quiet rooms.
@@ -85,6 +100,21 @@ def _wake_match(lowered: str) -> tuple[int, int] | None:
 def has_wake_word(text: str) -> bool:
     """Return True if the wake word (or a known mishearing) appears in ``text``."""
     return _wake_match(text.lower()) is not None
+
+
+def _normalise(text: str) -> str:
+    """Lowercase, strip punctuation, collapse whitespace."""
+    import re as _re
+
+    text = text.lower()
+    text = _re.sub(r"[^\w\säöüß']", " ", text, flags=_re.UNICODE)
+    text = _re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def is_end_phrase(text: str) -> bool:
+    """Return True if ``text`` is one of the conversation-ending phrases."""
+    return _normalise(text) in _END_PHRASES
 
 
 def strip_wake_word(text: str) -> str:
