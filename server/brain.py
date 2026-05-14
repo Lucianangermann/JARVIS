@@ -42,7 +42,15 @@ def _system_command_tool() -> dict[str, Any]:
             "- show_time(): say the current local time.\n"
             "- show_date(): say today's date.\n"
             "- volume(direction): direction ∈ {up, down, mute, unmute} (macOS only).\n"
-            "- music(action): action ∈ {play, pause, next, previous} (macOS only)."
+            "- music(action, query?): control Spotify on macOS. "
+            "action ∈ {play, pause, next, previous, play_track, play_playlist}. "
+            "For 'play_track' pass query=<song title> "
+            "(e.g. query='Bohemian Rhapsody Queen'). "
+            "For 'play_playlist' pass query=<playlist name> "
+            "(e.g. query='chill vibes'). "
+            "For the transport actions (play/pause/next/previous) omit query. "
+            "Use these whenever the user asks to play music, switch songs, "
+            "or play a specific track/playlist — Spotify launches automatically."
         ),
         "input_schema": {
             "type": "object",

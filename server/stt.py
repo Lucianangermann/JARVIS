@@ -24,6 +24,42 @@ from .config import settings
 
 _model = None  # lazy whisper model
 
+# Whisper's German training data is heavy on TV / YouTube subtitles, so
+# when given silence or pure noise it confidently emits one of these
+# canned phrases. Drop transcripts that match — they're never real user
+# speech, and dispatching them to Claude as commands wastes a turn.
+_WHISPER_HALLUCINATIONS: tuple[str, ...] = (
+    "untertitel",
+    "vielen dank fürs zuschauen",
+    "vielen dank fürs zusehen",
+    "vielen dank für ihre aufmerksamkeit",
+    "untertitelung des zdf",
+    "untertitel im auftrag des zdf",
+    "untertitel der amara.org-community",
+    "amara.org",
+    "thanks for watching",
+    "thank you for watching",
+    "subtitles by",
+    "transcription by",
+    ". .",
+    "..",
+    "...",
+    "♪",
+)
+
+
+def looks_like_hallucination(text: str) -> bool:
+    """Return True if ``text`` matches one of Whisper's canned phantom outputs."""
+    if not text or not text.strip():
+        return True
+    lowered = text.lower().strip(" .,!?")
+    if len(lowered) < 2:
+        return True
+    for needle in _WHISPER_HALLUCINATIONS:
+        if needle in lowered:
+            return True
+    return False
+
 # Whisper-`base` mishears "jarvis" pretty consistently as one of these,
 # especially with a non-native accent. Treat all of them as the wake word.
 _WAKE_WORD_ALTERNATES: tuple[str, ...] = (
@@ -32,19 +68,30 @@ _WAKE_WORD_ALTERNATES: tuple[str, ...] = (
     "ciao",  # whisper often hears the German "Jarvis" as Italian "ciao"
 )
 
-# "End conversation" phrases for the voice loop's follow-up mode.
-# Matched against the normalised transcript (lowercased, punctuation
-# stripped, single-spaced). Keep them distinctive enough to avoid false
-# positives in regular speech.
+# "End conversation" phrases — exit follow-up mode entirely AND interrupt
+# whatever JARVIS is doing right now. Matched against the normalised
+# transcript (lowercased, punctuation stripped, single-spaced).
 _END_PHRASES: frozenset[str] = frozenset({
     "okay das wars", "okay das war es", "okay das war's",
     "ok das wars", "ok das war es", "ok das war's",
     "das wars", "das war es", "das war's",
     "tschüss", "tschüss jarvis",
     "ende", "ende jarvis",
-    "stop", "stopp", "stop jarvis", "stopp jarvis",
     "danke jarvis", "danke das wars",
+})
+
+# "Stop / barge-in" phrases — cancel the current reply or search and go
+# back to listening, but DO NOT exit follow-up mode. Use these to cut
+# JARVIS off mid-sentence without ending the session.
+_STOP_PHRASES: frozenset[str] = frozenset({
+    "stop", "stopp", "stop jarvis", "stopp jarvis",
+    "halt", "halt mal", "halt stop", "halt jarvis",
+    "warte", "warte mal", "warte jarvis",
     "schluss", "schluss jarvis",
+    "okay stop", "ok stop", "okay halt", "ok halt",
+    "okay warte", "ok warte",
+    "psst", "pst", "pscht",
+    "ruhe",
 })
 
 # 16-bit PCM RMS below this counts as "silence" — skip the chunk entirely
@@ -69,8 +116,25 @@ def transcribe(audio_bytes: bytes, *, sample_rate: int = 16_000) -> str:
 
     Accepts a full WAV file (RIFF header) or raw PCM samples — we sniff
     the leading bytes. Returns lowercase, whitespace-collapsed text.
+
+    Drops very-low-energy clips on the floor: feeding Whisper near-silent
+    audio reliably produces hallucinated phrases ("Untertitel im Auftrag
+    des ZDF", random English, …). Cheaper to bail than to filter that
+    out later.
     """
+    import numpy as _np
+
     model = _load_model()
+
+    # RMS sanity check on raw bytes (before any WAV wrapping). Skip the
+    # 44-byte WAV header if present.
+    raw = audio_bytes[44:] if audio_bytes[:4] == b"RIFF" else audio_bytes
+    if len(raw) >= 2:
+        samples = _np.frombuffer(raw, dtype=_np.int16)
+        if samples.size:
+            rms = float(_np.sqrt(_np.mean(samples.astype(_np.int32) ** 2)))
+            if rms < 100:
+                return ""
 
     # Whisper's Python API wants a file path; write to a tempfile.
     if audio_bytes[:4] != b"RIFF":
@@ -80,7 +144,12 @@ def transcribe(audio_bytes: bytes, *, sample_rate: int = 16_000) -> str:
         fp.write(audio_bytes)
         tmp = Path(fp.name)
     try:
-        result = model.transcribe(str(tmp), fp16=False)
+        kwargs = {"fp16": False}
+        if settings.WHISPER_LANGUAGE:
+            # Pin the language. Without this, short German utterances
+            # like "stopp" often auto-detect as English ("up").
+            kwargs["language"] = settings.WHISPER_LANGUAGE
+        result = model.transcribe(str(tmp), **kwargs)
         return " ".join(result.get("text", "").lower().split())
     finally:
         tmp.unlink(missing_ok=True)
@@ -102,6 +171,19 @@ def has_wake_word(text: str) -> bool:
     return _wake_match(text.lower()) is not None
 
 
+def starts_with_wake_word(text: str) -> bool:
+    """Return True if ``text`` *starts* with the wake word (after trimming
+    leading punctuation and whitespace). Used as a barge-in signal during
+    TTS playback: JARVIS rarely starts his own sentences with "Jarvis",
+    so a wake word at the front of a transcript reliably means the user
+    is talking over him."""
+    lowered = text.lower().lstrip(" ,.!?:;-\t\n")
+    for word in _WAKE_WORD_ALTERNATES:
+        if lowered.startswith(word):
+            return True
+    return False
+
+
 def _normalise(text: str) -> str:
     """Lowercase, strip punctuation, collapse whitespace."""
     import re as _re
@@ -115,6 +197,48 @@ def _normalise(text: str) -> str:
 def is_end_phrase(text: str) -> bool:
     """Return True if ``text`` is one of the conversation-ending phrases."""
     return _normalise(text) in _END_PHRASES
+
+
+def is_stop_phrase(text: str) -> bool:
+    """Return True if ``text`` is a stop / end phrase. Either one cancels
+    the in-flight reply; end phrases additionally exit follow-up mode."""
+    norm = _normalise(text)
+    return norm in _STOP_PHRASES or norm in _END_PHRASES
+
+
+# First-word stop matchers. Catches Whisper variants like "stoppt",
+# "stoppen", "halt mal", "okay stop ich meine …", etc. — anything that
+# *begins* with one of these is treated as an interrupt. False positives
+# are way less annoying than false negatives here (the user can always
+# re-issue; a JARVIS that won't shut up is the worse failure mode).
+_STOP_FIRST_WORDS: frozenset[str] = frozenset({
+    "stop", "stopp", "stops", "stopps", "stoppt", "stoppen",
+    "halt", "schluss", "ende",
+    "warte", "wartet", "wartemal",
+    "pst", "psst", "pscht",
+    "ruhe",
+})
+
+# When the first word is one of these "okay/ok"-style prefixes, look at
+# the SECOND word for a stop match — handles "okay stop", "ok halt", etc.
+_STOP_LEAD_WORDS: frozenset[str] = frozenset({"okay", "ok", "oke", "k"})
+
+
+def starts_with_stop_phrase(text: str) -> bool:
+    """Lenient stop-phrase detector — matches any utterance whose first
+    (or second-after-okay) word is a stop variant. Catches Whisper
+    mis-transcriptions and short-burst command starts."""
+    norm = _normalise(text)
+    if not norm:
+        return False
+    words = norm.split()
+    if not words:
+        return False
+    if words[0] in _STOP_FIRST_WORDS:
+        return True
+    if len(words) >= 2 and words[0] in _STOP_LEAD_WORDS and words[1] in _STOP_FIRST_WORDS:
+        return True
+    return False
 
 
 def strip_wake_word(text: str) -> str:

@@ -10,6 +10,7 @@ Anything not in ALLOWED_COMMANDS is rejected and logged to
 from __future__ import annotations
 
 import datetime as _dt
+import os
 import platform
 import re
 import shutil
@@ -77,20 +78,99 @@ def _volume(direction: str) -> str:
     return f"Volume {direction}."
 
 
-def _music(action: str) -> str:
-    """Play / pause the system music app on macOS."""
+def _spotify_installed() -> bool:
+    """Return True if the Spotify .app bundle is present in standard locations."""
+    candidates = [
+        "/Applications/Spotify.app",
+        os.path.expanduser("~/Applications/Spotify.app"),
+    ]
+    return any(os.path.isdir(p) for p in candidates)
+
+
+# spotify:track:abc123, spotify:playlist:abc123, spotify:album:abc123, …
+_SPOTIFY_URI_RE = re.compile(r"^spotify:(track|playlist|album|artist):[A-Za-z0-9]+$")
+
+
+def _spotify_launch_if_needed() -> None:
+    subprocess.run(
+        ["open", "-a", "Spotify"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _osascript(script: str) -> tuple[int, str, str]:
+    """Run an AppleScript string, return (returncode, stdout, stderr)."""
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        check=False, capture_output=True, text=True,
+    )
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+
+def _music(action: str, query: str = "") -> str:
+    """Control Spotify on macOS, including search-and-play by name."""
     if platform.system() != "Darwin":
         return "Music control is only wired up for macOS in this build."
-    if action not in {"play", "pause", "next", "previous"}:
-        raise ValueError("action must be play|pause|next|previous")
+    valid = {"play", "pause", "next", "previous", "play_track", "play_playlist"}
+    if action not in valid:
+        raise ValueError(f"action must be one of {sorted(valid)}")
+
+    if not _spotify_installed():
+        return ("Spotify ist auf diesem Mac nicht installiert. "
+                "Installiere es von https://spotify.com/download oder aus dem App Store.")
+
+    # --- Search-and-play paths --------------------------------------------- #
+    if action in {"play_track", "play_playlist"}:
+        if not query or not query.strip():
+            raise ValueError(f"{action} braucht ein 'query'-Argument.")
+        from . import spotify as _spotify  # late import: avoids requests at startup
+
+        kind = "track" if action == "play_track" else "playlist"
+        try:
+            hit = _spotify.search(query, kind=kind)
+        except _spotify.SpotifyConfigError as exc:
+            return str(exc)
+        except Exception as exc:  # noqa: BLE001
+            return f"Spotify-Suche fehlgeschlagen: {exc}"
+
+        if not hit or not hit.get("uri"):
+            return f'Konnte keinen passenden {kind} zu "{query}" finden.'
+
+        uri = hit["uri"]
+        # Sanity-check the URI before splicing it into AppleScript.
+        if not _SPOTIFY_URI_RE.match(uri):
+            return f"Spotify lieferte eine unerwartete URI: {uri!r}."
+
+        _spotify_launch_if_needed()
+        rc, _out, err = _osascript(f'tell application "Spotify" to play track "{uri}"')
+        if rc != 0:
+            return ("Spotify konnte den Befehl nicht ausführen: "
+                    f"{err or 'keine Details verfügbar'}")
+
+        label = hit["name"] or query
+        if kind == "track" and hit.get("artists"):
+            label = f"{label} von {hit['artists']}"
+        elif kind == "playlist" and hit.get("owner"):
+            label = f"{label} (von {hit['owner']})"
+        return f"Spotify spielt: {label}"
+
+    # --- Transport controls ------------------------------------------------ #
+    if action == "play":
+        _spotify_launch_if_needed()
+
     cmd_map = {
-        "play": 'tell application "Music" to play',
-        "pause": 'tell application "Music" to pause',
-        "next": 'tell application "Music" to next track',
-        "previous": 'tell application "Music" to previous track',
+        "play": 'tell application "Spotify" to play',
+        "pause": 'tell application "Spotify" to pause',
+        "next": 'tell application "Spotify" to next track',
+        "previous": 'tell application "Spotify" to previous track',
     }
-    subprocess.run(["osascript", "-e", cmd_map[action]], check=False)
-    return f"Music {action}."
+    rc, _out, err = _osascript(cmd_map[action])
+    if rc != 0:
+        return ("Spotify konnte den Befehl nicht ausführen: "
+                f"{err or 'keine Details verfügbar'}")
+    return f"Spotify: {action}."
 
 
 # --- Registry -------------------------------------------------------------- #
@@ -131,8 +211,19 @@ ALLOWED_COMMANDS: dict[str, tuple[Callable[..., str], dict[str, Any]]] = {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["play", "pause", "next", "previous"],
-                }
+                    "enum": [
+                        "play", "pause", "next", "previous",
+                        "play_track", "play_playlist",
+                    ],
+                },
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Song title (for play_track) or playlist name "
+                        "(for play_playlist). Required for those actions, "
+                        "ignored otherwise."
+                    ),
+                },
             },
             "required": ["action"],
             "additionalProperties": False,

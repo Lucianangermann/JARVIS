@@ -53,6 +53,10 @@ class Settings:
     # --- Voice ---
     WAKE_WORD: str = os.getenv("WAKE_WORD", "jarvis").lower()
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "base")
+    # Force Whisper to a specific language ("de", "en", …). Empty string
+    # lets Whisper auto-detect, which can flip to English on short
+    # German utterances ("stopp" → "up"). Default to German.
+    WHISPER_LANGUAGE: str = os.getenv("WHISPER_LANGUAGE", "de")
     # Substring or full id of the TTS voice. Empty = autoselect based on
     # TTS_LANGUAGE. Example values: "Anna", "Markus", "Samantha", or a
     # full id like "com.apple.voice.compact.de-DE.Anna".
@@ -67,6 +71,15 @@ class Settings:
     # the user says one of the end phrases ("okay das war's", "tschüss",
     # …) or the timeout lapses. 0 disables follow-up mode entirely.
     FOLLOWUP_TIMEOUT_S: float = float(os.getenv("FOLLOWUP_TIMEOUT_S", "60"))
+
+    # --- Spotify Web API (search only) ---
+    # Create a developer app at https://developer.spotify.com/dashboard
+    # and paste Client ID / Client Secret here. Required for play_track /
+    # play_playlist; the basic play/pause/next/previous commands work
+    # without it (they just steer whatever Spotify is currently doing).
+    SPOTIFY_CLIENT_ID: str = os.getenv("SPOTIFY_CLIENT_ID", "")
+    SPOTIFY_CLIENT_SECRET: str = os.getenv("SPOTIFY_CLIENT_SECRET", "")
+    SPOTIFY_MARKET: str = os.getenv("SPOTIFY_MARKET", "DE")
 
     # --- Safety limits ---
     MAX_INPUT_LENGTH: int = 500
