@@ -148,6 +148,9 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     reply: str
+    # Populated by /audio so the web client can render what was actually
+    # transcribed alongside the reply. Empty for /chat.
+    transcript: str | None = None
 
 
 # --- Routes --------------------------------------------------------------- #
@@ -204,7 +207,7 @@ async def audio(
     print(f"[CLIENT: {tag}] [YOU·audio] {transcript}")
     reply = request.app.state.brain.reply(token, transcript)
     print(f"[JARVIS] {reply}")
-    return ChatResponse(reply=reply)
+    return ChatResponse(reply=reply, transcript=transcript)
 
 
 @app.websocket("/ws")

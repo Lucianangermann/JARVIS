@@ -152,7 +152,7 @@
     padding: 12px 14px;
     font-size: 16px;          /* >=16px stops iOS from zooming on focus */
   }
-  #send {
+  #send, #mic {
     background: var(--accent);
     border: 0;
     color: #0d1117;
@@ -161,7 +161,26 @@
     border-radius: var(--radius);
     font-size: 15px;
   }
-  #send:disabled { opacity: 0.5; }
+  #send:disabled, #mic:disabled { opacity: 0.5; }
+  #mic {
+    padding: 0 14px;
+    font-size: 18px;
+    line-height: 1;
+    min-width: 48px;
+  }
+  #mic.rec {
+    background: var(--err);
+    color: #fff;
+    animation: pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.7); }
+    50%      { box-shadow: 0 0 0 8px rgba(248, 81, 73, 0); }
+  }
+  #mic.busy {
+    background: var(--fg-dim);
+    color: #0d1117;
+  }
 </style>
 </head>
 <body>
@@ -200,6 +219,7 @@
     autocapitalize="sentences"
     autocomplete="off"
   />
+  <button id="mic" disabled title="Tap to record, tap again to send">🎤</button>
   <button id="send" disabled>Send</button>
 </footer>
 
@@ -213,6 +233,7 @@
   const tokenEl = $("token");
   const inputEl = $("input");
   const sendEl = $("send");
+  const micEl = $("mic");
   const connectEl = $("connect");
 
   // Persist preferences locally — never sent anywhere we don't control.
@@ -267,13 +288,21 @@
       setStatus("connected", "ok");
       setupEl.style.display = "none";
       sendEl.disabled = false;
+      micEl.disabled = false;
       inputEl.focus();
+      // iOS Safari blocks SpeechSynthesis until a user-gesture-triggered
+      // utterance fires once. The Connect tap counts — speak an empty
+      // string so the *real* reply later actually plays.
+      unlockSpeech();
     };
     socket.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data);
         if (msg.error) addMsg(msg.error, "err");
-        else if (msg.reply) addMsg(msg.reply, "jarvis");
+        else if (msg.reply) {
+          addMsg(msg.reply, "jarvis");
+          speak(msg.reply);
+        }
       } catch (exc) {
         addMsg("Bad message from server: " + exc, "err");
       }
@@ -281,6 +310,7 @@
     socket.onerror = () => setStatus("error", "bad");
     socket.onclose = (ev) => {
       sendEl.disabled = true;
+      micEl.disabled = true;
       const reason = ev.reason || ("code " + ev.code);
       setStatus("disconnected (" + reason + ")", "bad");
       if (ev.code === 4401) {
@@ -299,6 +329,230 @@
     socket.send(JSON.stringify({ text }));
     inputEl.value = "";
   }
+
+  // ─── Voice: push-to-talk → /audio → speak reply ─────────────────────
+  // We record with MediaRecorder (only audio format the browser will
+  // pick natively), decode it back into PCM via the WebAudio API,
+  // resample to 16 kHz mono, wrap it in a WAV container and POST to the
+  // existing /audio endpoint. The server transcribes with Whisper, runs
+  // the Brain, and returns {reply, transcript} — we render both and
+  // speak the reply via SpeechSynthesis.
+
+  let mediaStream = null;
+  let mediaRecorder = null;
+  let recordChunks = [];
+  let isRecording = false;
+  let speechVoice = null;
+
+  function unlockSpeech() {
+    if (!("speechSynthesis" in window)) return;
+    try {
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0;
+      speechSynthesis.speak(u);
+    } catch {}
+    // Voice list is populated async on some browsers.
+    const pick = () => {
+      const voices = speechSynthesis.getVoices();
+      speechVoice =
+        voices.find((v) => v.lang === "de-DE") ||
+        voices.find((v) => v.lang && v.lang.startsWith("de")) ||
+        voices[0] || null;
+    };
+    pick();
+    speechSynthesis.onvoiceschanged = pick;
+  }
+
+  function speak(text) {
+    if (!("speechSynthesis" in window) || !text) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "de-DE";
+    if (speechVoice) u.voice = speechVoice;
+    speechSynthesis.speak(u);
+  }
+
+  async function ensureMic() {
+    if (mediaStream) return mediaStream;
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    return mediaStream;
+  }
+
+  function pickMimeType() {
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",       // iOS Safari
+      "audio/ogg;codecs=opus",
+    ];
+    for (const t of candidates) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
+    }
+    return "";
+  }
+
+  async function startRecording() {
+    if (isRecording) return;
+    speechSynthesis.cancel();
+    try {
+      await ensureMic();
+    } catch (err) {
+      addMsg("Mic permission denied: " + (err.message || err), "err");
+      return;
+    }
+    const mime = pickMimeType();
+    recordChunks = [];
+    mediaRecorder = new MediaRecorder(mediaStream, mime ? { mimeType: mime } : {});
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) recordChunks.push(e.data);
+    };
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(recordChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      if (blob.size < 1000) {
+        addMsg("Recording too short.", "err");
+        setMicState("idle");
+        return;
+      }
+      setMicState("busy");
+      try {
+        const wav = await blobToWav16k(blob);
+        await postAudio(wav);
+      } catch (err) {
+        addMsg("Audio upload failed: " + (err.message || err), "err");
+      } finally {
+        setMicState("idle");
+      }
+    };
+    mediaRecorder.start();
+    isRecording = true;
+    setMicState("rec");
+  }
+
+  function stopRecording() {
+    if (!isRecording) return;
+    isRecording = false;
+    try { mediaRecorder.stop(); } catch {}
+  }
+
+  function setMicState(state) {
+    micEl.classList.remove("rec", "busy");
+    if (state === "rec") {
+      micEl.classList.add("rec");
+      micEl.textContent = "■";
+    } else if (state === "busy") {
+      micEl.classList.add("busy");
+      micEl.textContent = "…";
+    } else {
+      micEl.textContent = "🎤";
+    }
+  }
+
+  async function blobToWav16k(blob) {
+    const arrayBuf = await blob.arrayBuffer();
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    const decoded = await new Promise((resolve, reject) => {
+      // Callback form for Safari compatibility.
+      ctx.decodeAudioData(arrayBuf.slice(0), resolve, reject);
+    });
+
+    // Down-mix to mono.
+    let mono;
+    if (decoded.numberOfChannels === 1) {
+      mono = decoded.getChannelData(0);
+    } else {
+      mono = new Float32Array(decoded.length);
+      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+        const data = decoded.getChannelData(ch);
+        for (let i = 0; i < data.length; i++) mono[i] += data[i] / decoded.numberOfChannels;
+      }
+    }
+
+    // Linear resample to 16 kHz. Cheap but plenty for speech.
+    const target = 16000;
+    let pcmF32;
+    if (decoded.sampleRate === target) {
+      pcmF32 = mono;
+    } else {
+      const ratio = decoded.sampleRate / target;
+      const outLen = Math.floor(mono.length / ratio);
+      pcmF32 = new Float32Array(outLen);
+      for (let i = 0; i < outLen; i++) {
+        const idx = i * ratio;
+        const i0 = Math.floor(idx);
+        const i1 = Math.min(i0 + 1, mono.length - 1);
+        const frac = idx - i0;
+        pcmF32[i] = mono[i0] * (1 - frac) + mono[i1] * frac;
+      }
+    }
+
+    // Float [-1, 1] → int16 PCM → WAV container.
+    const buf = new ArrayBuffer(44 + pcmF32.length * 2);
+    const view = new DataView(buf);
+    const writeStr = (off, str) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+    };
+    writeStr(0, "RIFF");
+    view.setUint32(4, 36 + pcmF32.length * 2, true);
+    writeStr(8, "WAVE");
+    writeStr(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);          // PCM
+    view.setUint16(22, 1, true);          // mono
+    view.setUint32(24, target, true);
+    view.setUint32(28, target * 2, true); // byte rate
+    view.setUint16(32, 2, true);          // block align
+    view.setUint16(34, 16, true);         // bits per sample
+    writeStr(36, "data");
+    view.setUint32(40, pcmF32.length * 2, true);
+    let off = 44;
+    for (let i = 0; i < pcmF32.length; i++) {
+      const s = Math.max(-1, Math.min(1, pcmF32[i]));
+      view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      off += 2;
+    }
+    ctx.close();
+    return new Blob([buf], { type: "audio/wav" });
+  }
+
+  async function postAudio(wavBlob) {
+    const url = (serverEl.value || "").trim().replace(/\/$/, "") + "/audio";
+    const token = (tokenEl.value || "").trim();
+    const fd = new FormData();
+    fd.append("file", wavBlob, "speech.wav");
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token },
+      body: fd,
+    });
+    if (!res.ok) {
+      let detail = "HTTP " + res.status;
+      try {
+        const j = await res.json();
+        if (j.detail) detail += " — " + j.detail;
+      } catch {}
+      addMsg("audio /upload failed: " + detail, "err");
+      return;
+    }
+    const data = await res.json();
+    if (data.transcript) addMsg(data.transcript, "you");
+    if (data.reply) {
+      addMsg(data.reply, "jarvis");
+      speak(data.reply);
+    }
+  }
+
+  micEl.addEventListener("click", () => {
+    if (isRecording) stopRecording();
+    else startRecording();
+  });
 
   connectEl.addEventListener("click", connect);
   sendEl.addEventListener("click", send);
