@@ -1,0 +1,18 @@
+# --- Core: needed to run the text-based server ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-dotenv>=1.0
+pydantic>=2.7
+# Required by FastAPI for UploadFile / multipart parsing on /audio
+python-multipart>=0.0.9
+
+# Claude API
+anthropic>=0.40
+
+# HTTP client (Windows client + tools)
+requests>=2.32
+websockets>=12.0
+
+# Voice (STT + TTS) is optional — install separately if needed:
+#     pip install -r requirements-voice.txt
+# It pulls torch + llvmlite which can fail to build on some macOS setups.

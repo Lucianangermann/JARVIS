@@ -1,0 +1,68 @@
+"""Centralised settings, loaded from .env via python-dotenv.
+
+Everything else in the server reads from `settings` so we can keep secrets
+out of the codebase and let tests monkey-patch a single object.
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from the project root (parent of this file's parent).
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+
+
+def _required(key: str) -> str:
+    val = os.getenv(key, "").strip()
+    if not val or val.startswith("replace") or val.endswith("REPLACE-ME"):
+        raise RuntimeError(
+            f"Missing required env var {key!r}. Copy .env.example to .env and fill it in."
+        )
+    return val
+
+
+def _csv(key: str, default: str) -> list[str]:
+    raw = os.getenv(key, default)
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+class Settings:
+    # --- Secrets ---
+    ANTHROPIC_API_KEY: str = _required("ANTHROPIC_API_KEY")
+    JARVIS_AUTH_TOKEN: str = _required("JARVIS_AUTH_TOKEN")
+
+    # --- Network ---
+    HOST: str = os.getenv("HOST", "127.0.0.1")
+    PORT: int = int(os.getenv("PORT", "8000"))
+    ALLOWED_ORIGINS: list[str] = _csv(
+        "ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000"
+    )
+
+    # --- Model ---
+    MODEL: str = os.getenv("MODEL", "claude-haiku-4-5-20251001")
+    SYSTEM_PROMPT: str = os.getenv(
+        "SYSTEM_PROMPT",
+        "You are JARVIS, a concise and capable voice assistant. "
+        "Keep spoken replies under 3 sentences unless the user asks for detail. "
+        "Refuse anything outside the whitelisted command set.",
+    )
+
+    # --- Voice ---
+    WAKE_WORD: str = os.getenv("WAKE_WORD", "jarvis").lower()
+    WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "base")
+
+    # --- Safety limits ---
+    MAX_INPUT_LENGTH: int = 500
+    RATE_LIMIT_PER_MINUTE: int = 10
+    MAX_HISTORY_TURNS: int = 20  # user+assistant pairs kept per session
+
+    # --- Paths ---
+    LOG_DIR: Path = PROJECT_ROOT / "logs"
+    REJECTED_LOG: Path = LOG_DIR / "rejected.log"
+
+
+settings = Settings()
+settings.LOG_DIR.mkdir(parents=True, exist_ok=True)
