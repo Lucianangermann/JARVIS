@@ -132,6 +132,12 @@ FAST_INTERRUPT_MISS_TOLERANCE = 2   # allow 2 sub-threshold blocks (20ms dip)
 # voices still cross it easily, while keyboard/mouse clicks (1-2 block
 # transients) cannot, even when chained into a burst.
 FAST_INTERRUPT_MIN_RUN_BLOCKS = 3
+# During TTS playback, AEC residual can peak at 20-25% of speaker
+# output. We scale the fast-interrupt threshold by this factor so loud
+# TTS doesn't trip false interrupts. User voice during loud TTS has to
+# be proportionally louder — but that's the natural barge-in volume
+# anyway (people speak up to talk over their assistant).
+FAST_INTERRUPT_OUT_FACTOR = 0.30
 
 # Speex's adaptive echo filter needs ~200-300 ms to converge to a fresh
 # TTS output path. During that window the cleaned mic stream leaks 1000+
@@ -216,6 +222,10 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
         # when AEC is still converging on a fresh TTS playback path —
         # any value in [1, AEC_GRACE_BLOCKS] means "grace active".
         "speaker_audible_blocks": 0,
+        # Most recent TTS output RMS (per audio tick). Used by the main
+        # loop to scale the fast-interrupt threshold so AEC residual
+        # during loud TTS doesn't trip a false interrupt.
+        "last_out_rms": 0.0,
     }
     diag_every = 100  # 100 × 10 ms = 1 s
 
@@ -274,6 +284,9 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
             diag_state["speaker_audible_blocks"] += 1
         else:
             diag_state["speaker_audible_blocks"] = 0
+        # Latest speaker RMS, shared with main loop for the adaptive
+        # fast-interrupt threshold (echo residual scales with TTS volume).
+        diag_state["last_out_rms"] = out_rms_block
         if out_rms_block > 300:  # speakers actively playing
             clean_rms_block = float(
                 np.sqrt(np.mean(cleaned.astype(np.int32) ** 2))
@@ -524,6 +537,15 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                     # TTS — AEC hasn't converged yet and the cleaned
                     # signal carries echo residual that looks identical
                     # to a sustained vowel.
+                    # Adaptive threshold: during loud TTS, the cleaned
+                    # mic stream carries echo residual proportional to
+                    # speaker output. We require user voice to clear
+                    # that floor — 30% of speaker RMS, or the static
+                    # 500 floor when speakers are quieter.
+                    fi_threshold = max(
+                        FAST_INTERRUPT_RMS,
+                        FAST_INTERRUPT_OUT_FACTOR * diag_state.get("last_out_rms", 0.0),
+                    )
                     if in_aec_grace:
                         # Don't accumulate; also actively reset so we
                         # exit grace with a clean slate.
@@ -531,7 +553,7 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                         fast_int_misses = 0
                         fast_int_run = 0
                         fast_int_max_run = 0
-                    elif rms > FAST_INTERRUPT_RMS:
+                    elif rms > fi_threshold:
                         fast_int_count += 1
                         fast_int_misses = 0
                         fast_int_run += 1
