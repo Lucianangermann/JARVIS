@@ -427,6 +427,60 @@ def test_open_app_surfaces_not_found(monkeypatch):
     assert "nicht gefunden" in result.lower()
 
 
+def test_close_app_polite_quit_passes_canonical_name(monkeypatch):
+    """close_app via AppleScript should receive the canonical (alias-
+    resolved) app name, not the localised label."""
+    from server.mac_control import tier2_apps
+    captured = {}
+
+    def fake_osa(script, *args, **_kw):
+        captured["args"] = args
+        return "quit"
+
+    monkeypatch.setattr(tier2_apps, "_osa", fake_osa)
+    result = tier2_apps._close_app(name="Notizen")
+    assert "beendet" in result.lower()
+    assert captured["args"] == ("Notes",)
+
+
+def test_close_app_not_running_message(monkeypatch):
+    from server.mac_control import tier2_apps
+    monkeypatch.setattr(tier2_apps, "_osa", lambda *a, **kw: "not running")
+    result = tier2_apps._close_app(name="Photoshop")
+    assert "nicht offen" in result.lower()
+
+
+def test_close_app_force_uses_pkill(monkeypatch):
+    """force=True must skip AppleScript and use pkill -9 -x."""
+    from server.mac_control import tier2_apps
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv, **_kw):
+        captured["argv"] = argv
+        return FakeProc()
+
+    monkeypatch.setattr(tier2_apps.subprocess, "run", fake_run)
+    # Pre-empt _osa: if called, fail loudly so we catch a bug
+    monkeypatch.setattr(
+        tier2_apps, "_osa",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("polite path used")),
+    )
+    result = tier2_apps._close_app(name="Notizen", force=True)
+    assert "gewalt" in result.lower() or "beendet" in result.lower()
+    assert captured["argv"] == ["/usr/bin/pkill", "-9", "-x", "Notes"]
+
+
+def test_close_app_rejects_empty_and_injection():
+    from server.mac_control import tier2_apps
+    assert "fehlt" in tier2_apps._close_app(name="").lower()
+    assert "unzulässige" in tier2_apps._close_app(name="Notes\nMail").lower()
+
+
 def test_open_app_rejects_injection_chars():
     from server.mac_control import tier2_apps
     for bad in ("../etc", "with/slash", "name\nwith\nnewline"):

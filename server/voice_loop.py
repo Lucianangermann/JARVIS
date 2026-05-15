@@ -382,12 +382,18 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
             #      Whisper variants like "stoppt", "stop hör auf",
             #      "okay stop", "halt mal", …
             #   3. The wake word at the START of the transcript — user
-            #      is talking *over* JARVIS. JARVIS rarely starts his
-            #      own sentences with "Jarvis".
+            #      is talking *over* JARVIS — BUT require at least one
+            #      additional word ("Jarvis halt", "Jarvis was machst
+            #      du") so that a hallucinated lone "Jarvis." from TTS
+            #      echo can't cancel the reply.
+            wake_with_continuation = (
+                stt.starts_with_wake_word(transcript)
+                and len(transcript.split()) >= 2
+            )
             if (
                 stt.is_stop_phrase(transcript)
                 or stt.starts_with_stop_phrase(transcript)
-                or stt.starts_with_wake_word(transcript)
+                or wake_with_continuation
             ):
                 print(f"[JARVIS] BARGE-IN: {transcript!r}")
                 brain_cancel.set()

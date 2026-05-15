@@ -481,6 +481,70 @@ def _create_note(*, title: str = "", body: str = "", **_kw) -> str:
     return f"Notiz erstellt: {title}{suffix}"
 
 
+# Polite-quit template. We check the running process list via System
+# Events first so `tell app X to quit` doesn't accidentally *launch* X
+# in order to send it a quit event.
+_TR_QUIT_APP = """
+on run argv
+    set appName to item 1 of argv
+    tell application "System Events"
+        set theProcs to (every process whose name is appName)
+    end tell
+    if (count of theProcs) is 0 then
+        return "not running"
+    end if
+    tell application appName to quit
+    return "quit"
+end run
+"""
+
+
+def _close_app(*, name: str = "", force: bool = False, **_kw) -> str:
+    """Quit an app politely (force=True → SIGKILL via pkill).
+
+    Polite quit goes through AppleScript's standard Quit event. Apps
+    with unsaved work may show a save dialog — that's normal macOS
+    behaviour, JARVIS doesn't dismiss it. Use force=True only when
+    a polite quit has already failed or for unresponsive apps.
+    """
+    if not isinstance(name, str) or not name:
+        return "App-Name fehlt."
+    name = name.strip()
+    if any(ch in name for ch in "/\\:\x00\n\r\t"):
+        return f"App-Name enthält unzulässige Zeichen: {name!r}"
+    if len(name) > 80:
+        return "App-Name zu lang."
+
+    canonical = _APP_ALIASES.get(name.lower(), name)
+
+    if force:
+        # SIGKILL via pkill -x (exact process-name match). Fast,
+        # bypasses save prompts. Use sparingly.
+        try:
+            proc = subprocess.run(
+                ["/usr/bin/pkill", "-9", "-x", canonical],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            return f"Force-Quit fehlgeschlagen: {exc}"
+        if proc.returncode == 0:
+            return f"{canonical} mit Gewalt beendet."
+        if proc.returncode == 1:
+            return f"{canonical} war nicht offen."
+        return f"pkill returncode {proc.returncode}: {proc.stderr.strip()}"
+
+    try:
+        result = _osa(_TR_QUIT_APP, canonical)
+    except _ASError as exc:
+        return f"App-Beenden fehlgeschlagen: {exc}"
+    if result == "not running":
+        return f"{canonical} war nicht offen."
+    return f"{canonical} beendet."
+
+
 def _open_app(*, name: str = "", **_kw) -> str:
     """Open any installed macOS app by name.
 
@@ -550,6 +614,9 @@ _TIER2: tuple[tuple[str, callable, callable], ...] = (
         + (f" in {p.get('list','')!r}" if p.get('list') else "")
     )),
     ("open_app",          _open_app,          lambda **p: f"App öffnen: {p.get('name','?')}"),
+    ("close_app",         _close_app,         lambda **p: (
+        f"App schließen: {p.get('name','?')}{' (force)' if p.get('force') else ''}"
+    )),
 )
 
 
