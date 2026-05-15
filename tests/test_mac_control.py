@@ -616,6 +616,64 @@ def test_open_app_sees_new_allowlist_entry(temp_allowlist):
     assert "TestAppZ" in tier2_apps.current_allowed_apps()
 
 
+# --- whisper initial_prompt + backend selection --------------------------- #
+
+def test_transcribe_passes_initial_prompt_to_vanilla(monkeypatch):
+    """initial_prompt is a strong WER lever; verify it's plumbed through
+    the vanilla (openai-whisper) backend."""
+    from server import stt
+
+    captured = {}
+
+    class FakeVanilla:
+        def transcribe(self, path, **kwargs):
+            captured.update(kwargs)
+            return {"text": "ok"}
+
+    monkeypatch.setattr(stt, "_model", ("vanilla", FakeVanilla()))
+    monkeypatch.setattr(settings, "WHISPER_LANGUAGE", "de")
+    monkeypatch.setattr(settings, "WHISPER_INITIAL_PROMPT", "Jarvis Vokabular")
+
+    # ~50 ms of fake 16-bit PCM at 16 kHz, just enough to pass the RMS gate.
+    import numpy as _np
+    samples = (_np.random.default_rng(0).integers(-500, 500, 800, dtype=_np.int16)).tobytes()
+    stt.transcribe(samples)
+
+    assert captured.get("language") == "de"
+    assert captured.get("initial_prompt") == "Jarvis Vokabular"
+
+
+def test_transcribe_uses_faster_backend_when_present(monkeypatch):
+    """faster-whisper has a different call shape (returns (segments, info)
+    iterator). Verify we handle it correctly."""
+    from server import stt
+
+    class FakeSeg:
+        def __init__(self, t):
+            self.text = t
+
+    captured = {}
+
+    class FakeFaster:
+        def transcribe(self, path, **kwargs):
+            captured.update(kwargs)
+            return iter([FakeSeg("hallo "), FakeSeg("welt")]), object()
+
+    monkeypatch.setattr(stt, "_model", ("faster", FakeFaster()))
+    monkeypatch.setattr(settings, "WHISPER_LANGUAGE", "de")
+    monkeypatch.setattr(settings, "WHISPER_INITIAL_PROMPT", "biasing text")
+    monkeypatch.setattr(settings, "WHISPER_BEAM_SIZE", 7)
+
+    import numpy as _np
+    samples = (_np.random.default_rng(1).integers(-500, 500, 800, dtype=_np.int16)).tobytes()
+    out = stt.transcribe(samples)
+
+    assert captured.get("language") == "de"
+    assert captured.get("initial_prompt") == "biasing text"
+    assert captured.get("beam_size") == 7
+    assert out == "hallo welt"
+
+
 # --- voice phrase detectors ------------------------------------------------ #
 
 @pytest.mark.parametrize("text", [

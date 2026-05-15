@@ -57,6 +57,24 @@ class Settings:
     # lets Whisper auto-detect, which can flip to English on short
     # German utterances ("stopp" → "up"). Default to German.
     WHISPER_LANGUAGE: str = os.getenv("WHISPER_LANGUAGE", "de")
+    # Vocabulary biasing for Whisper. Short German prose covering the
+    # wake word + the verbs/nouns we use most. Whisper conditions the
+    # decoder on this, so it learns to prefer "Jarvis" over "Travis",
+    # "Spotify" over "Spotted Fight", "Notizen" over "Notiz", etc. Set
+    # to "" to disable.
+    WHISPER_INITIAL_PROMPT: str = os.getenv(
+        "WHISPER_INITIAL_PROMPT",
+        "Ein deutscher Sprachassistent namens Jarvis. "
+        "Befehle: Jarvis, spiel Spotify. Jarvis, pausiere die Musik. "
+        "Jarvis, erstelle eine Notiz. Jarvis, ergänze in der Notiz. "
+        "Jarvis, schick mir eine Erinnerung. Jarvis, öffne Safari. "
+        "Jarvis, lautstärke hoch. Jarvis, halt. Jarvis, weiter. "
+        "Jarvis, wie ist das Wetter. Jarvis, wie spät ist es.",
+    )
+    # Beam size for the faster-whisper backend (ignored by openai-whisper).
+    # 5 is a good accuracy/latency trade-off; raise to 8 for the most
+    # accuracy on long utterances.
+    WHISPER_BEAM_SIZE: int = int(os.getenv("WHISPER_BEAM_SIZE", "5"))
     # Substring or full id of the TTS voice. Empty = autoselect based on
     # TTS_LANGUAGE. Example values: "Anna", "Markus", "Samantha", or a
     # full id like "com.apple.voice.compact.de-DE.Anna".

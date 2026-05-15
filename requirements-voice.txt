@@ -7,6 +7,11 @@
 # Then retry.
 
 openai-whisper>=20231117
+# Optional but strongly recommended: 2-3× faster Whisper backend.
+# server/stt.py auto-detects and uses it if installed. With this you can
+# bump WHISPER_MODEL to large-v3-turbo and still beat the vanilla `small`
+# latency. Pulls in CTranslate2 (~50 MB).
+faster-whisper>=1.0
 pyttsx3>=2.90
 sounddevice>=0.4.7
 numpy>=1.26

@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .config import settings
 
-_model = None  # lazy whisper model
+_model = None  # lazy whisper model, tuple of (backend, model_obj)
 
 # Whisper's German training data is heavy on TV / YouTube subtitles, so
 # when given silence or pure noise it confidently emits one of these
@@ -115,13 +115,34 @@ _RESUME_PHRASES: frozenset[str] = frozenset({
 })
 
 
-def _load_model():  # -> "whisper.Whisper"
-    global _model
-    if _model is None:
-        import whisper  # imported lazily — heavy dep
+def _load_model():
+    """Load Whisper once and cache it. Prefer faster-whisper if installed.
 
-        print(f"[JARVIS] loading whisper model={settings.WHISPER_MODEL!r}…")
-        _model = whisper.load_model(settings.WHISPER_MODEL)
+    Returns a ``(backend, model_obj)`` tuple where backend is either
+    ``"faster"`` (CTranslate2-based, 2-3× faster, same models) or
+    ``"vanilla"`` (the openai-whisper reference impl). transcribe()
+    handles the call-site differences.
+    """
+    global _model
+    if _model is not None:
+        return _model
+
+    name = settings.WHISPER_MODEL
+    # Try faster-whisper first — same model names, much better latency
+    # especially for medium/large.
+    try:
+        from faster_whisper import WhisperModel  # type: ignore[import-not-found]
+
+        print(f"[JARVIS] loading faster-whisper model={name!r}…")
+        _model = ("faster", WhisperModel(name, device="auto", compute_type="auto"))
+        return _model
+    except ImportError:
+        pass
+
+    import whisper  # imported lazily — heavy dep
+    print(f"[JARVIS] loading whisper model={name!r} (vanilla backend; "
+          f"`pip install faster-whisper` for 2-3× speedup)…")
+    _model = ("vanilla", whisper.load_model(name))
     return _model
 
 
@@ -140,7 +161,7 @@ def transcribe(audio_bytes: bytes, *, sample_rate: int = 16_000) -> str:
     """
     import numpy as _np
 
-    model = _load_model()
+    backend, model = _load_model()
 
     # RMS sanity check on raw bytes (before any WAV wrapping). Skip the
     # 44-byte WAV header if present.
@@ -152,7 +173,6 @@ def transcribe(audio_bytes: bytes, *, sample_rate: int = 16_000) -> str:
             if rms < 100:
                 return ""
 
-    # Whisper's Python API wants a file path; write to a tempfile.
     if audio_bytes[:4] != b"RIFF":
         audio_bytes = _pcm_to_wav(audio_bytes, sample_rate=sample_rate)
 
@@ -160,11 +180,27 @@ def transcribe(audio_bytes: bytes, *, sample_rate: int = 16_000) -> str:
         fp.write(audio_bytes)
         tmp = Path(fp.name)
     try:
-        kwargs = {"fp16": False}
-        if settings.WHISPER_LANGUAGE:
-            # Pin the language. Without this, short German utterances
-            # like "stopp" often auto-detect as English ("up").
-            kwargs["language"] = settings.WHISPER_LANGUAGE
+        lang = settings.WHISPER_LANGUAGE or None
+        prompt = settings.WHISPER_INITIAL_PROMPT or None
+        if backend == "faster":
+            # faster-whisper streams segment objects; collect into one string.
+            segments, _info = model.transcribe(
+                str(tmp),
+                language=lang,
+                initial_prompt=prompt,
+                beam_size=settings.WHISPER_BEAM_SIZE,
+                # Match vanilla whisper defaults: no_speech_threshold + temperature
+                # fallback. Both backends accept the same constants here.
+                vad_filter=False,
+            )
+            text = " ".join((s.text or "").strip() for s in segments)
+            return " ".join(text.lower().split())
+        # vanilla openai-whisper
+        kwargs: dict[str, object] = {"fp16": False}
+        if lang:
+            kwargs["language"] = lang
+        if prompt:
+            kwargs["initial_prompt"] = prompt
         result = model.transcribe(str(tmp), **kwargs)
         return " ".join(result.get("text", "").lower().split())
     finally:
