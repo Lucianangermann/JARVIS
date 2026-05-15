@@ -94,6 +94,11 @@ class Settings:
     # Whether Tier 2 (apps & media) is granted automatically at startup
     # without an explicit unlock. Default off — see permission_manager.
     MAC_TIER2_AUTO_UNLOCK: bool = os.getenv("MAC_TIER2_AUTO_UNLOCK", "0") == "1"
+    # Skip the per-action confirmation for Tier 3 (files). The user's
+    # explicit voice/chat command counts as the confirmation — no extra
+    # Yes/No prompt. Tier 4 always still needs password. Trades audit
+    # friction for speed; recommended for single-user setups.
+    MAC_TIER3_AUTO_CONFIRM: bool = os.getenv("MAC_TIER3_AUTO_CONFIRM", "0") == "1"
     # Tier-4 (full system) gate. NEVER logged. Empty string disables Tier 4.
     JARVIS_SUDO_PASSWORD: str = os.getenv("JARVIS_SUDO_PASSWORD", "")
 

@@ -45,9 +45,11 @@ from server import stt  # noqa: E402
 @pytest.fixture(autouse=True)
 def _reset_state(monkeypatch):
     """Clean global state between tests so order doesn't matter."""
-    # mac_control on by default
+    # mac_control on by default; tier3 confirmation ON so the pending-flow
+    # tests are deterministic regardless of the caller's .env.
     monkeypatch.setattr(settings, "MAC_CONTROL_ENABLED", True)
     monkeypatch.setattr(settings, "JARVIS_SUDO_PASSWORD", "testpw")
+    monkeypatch.setattr(settings, "MAC_TIER3_AUTO_CONFIRM", False)
     permission_manager.lock_tier2()
     if kill_switch.is_set():
         kill_switch.resume()
@@ -188,6 +190,18 @@ def test_tier3_dispatch_returns_pending_then_consume_runs(sandbox_dir):
     final = dispatcher.consume(pid)
     assert final["status"] == "ok"
     assert target.exists() and target.read_text() == "hello"
+
+
+def test_tier3_auto_confirm_runs_inline(sandbox_dir, monkeypatch):
+    """With MAC_TIER3_AUTO_CONFIRM=True the dispatcher must skip the
+    pending step — the user's explicit command IS the confirmation."""
+    monkeypatch.setattr(settings, "MAC_TIER3_AUTO_CONFIRM", True)
+    target = sandbox_dir / "auto.txt"
+    env = dispatcher.dispatch("create_file",
+                              {"path": str(target), "content": "auto"})
+    assert env["status"] == "ok"
+    assert env["tier"] == 3
+    assert target.exists() and target.read_text() == "auto"
 
 
 def test_tier3_cancel_does_not_run(sandbox_dir):

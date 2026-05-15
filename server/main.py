@@ -281,6 +281,24 @@ def permissions(token: str = Depends(require_token)) -> dict[str, Any]:
     return mac_dispatcher.status()
 
 
+def _speak_result(envelope: dict[str, Any]) -> None:
+    """Announce a confirm/tier4-confirm outcome over the local Mac speakers.
+
+    Only fires when the voice stack is loaded — i.e. running on the Mac
+    that hosts the actual TTS. Browser clients still get the result text
+    via their own SpeechSynthesis (handled in index.html).
+    """
+    if not (_VOICE_OK and tts is not None):
+        return
+    text = (envelope.get("result") or envelope.get("reason") or "").strip()
+    if not text:
+        return
+    # Cap to avoid the speakers narrating a 100-line directory listing.
+    if len(text) > 240:
+        text = text[:240] + " …"
+    tts.speak(text)
+
+
 @app.post("/confirm")
 def confirm(
     payload: ConfirmRequest, token: str = Depends(require_token),
@@ -299,8 +317,10 @@ def confirm(
             status_code=400,
             detail="This pending action requires Tier-4 password — use /tier4-confirm.",
         )
-    return (mac_dispatcher.consume(payload.id) if payload.approve
-            else mac_dispatcher.cancel(payload.id))
+    envelope = (mac_dispatcher.consume(payload.id) if payload.approve
+                else mac_dispatcher.cancel(payload.id))
+    _speak_result(envelope)
+    return envelope
 
 
 @app.post("/tier4-confirm")
@@ -310,7 +330,9 @@ def tier4_confirm(
     """Tier 4 confirmation: requires the JARVIS_SUDO_PASSWORD value. The
     password is checked via constant-time compare in the dispatcher and
     is never logged."""
-    return mac_dispatcher.consume(payload.id, password=payload.password)
+    envelope = mac_dispatcher.consume(payload.id, password=payload.password)
+    _speak_result(envelope)
+    return envelope
 
 
 @app.post("/emergency-stop")

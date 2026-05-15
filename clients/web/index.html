@@ -798,11 +798,10 @@
         body: JSON.stringify({ id, approve }),
       });
       const data = await res.json();
-      addMsg(
-        (approve ? "✓ " : "✗ ") +
-        (data.result || data.reason || JSON.stringify(data)),
-        data.status === "ok" ? "jarvis" : "err",
-      );
+      const text = data.result || data.reason || JSON.stringify(data);
+      addMsg((approve ? "✓ " : "✗ ") + text,
+             data.status === "ok" ? "jarvis" : "err");
+      if (data.status === "ok" && data.result) speak(data.result);
     } catch (exc) {
       addMsg("Confirm fehlgeschlagen: " + exc, "err");
     } finally {
@@ -823,11 +822,10 @@
         body: JSON.stringify({ id, password }),
       });
       const data = await res.json();
-      addMsg(
-        (data.status === "ok" ? "✓ " : "✗ ") +
-        (data.result || data.reason || JSON.stringify(data)),
-        data.status === "ok" ? "jarvis" : "err",
-      );
+      const text = data.result || data.reason || JSON.stringify(data);
+      addMsg((data.status === "ok" ? "✓ " : "✗ ") + text,
+             data.status === "ok" ? "jarvis" : "err");
+      if (data.status === "ok" && data.result) speak(data.result);
     } catch (exc) {
       addMsg("Tier-4-Confirm fehlgeschlagen: " + exc, "err");
     } finally {

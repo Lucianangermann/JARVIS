@@ -105,8 +105,11 @@ def dispatch(name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
             return _run_inline(action, params)
         return _stash_pending(action, params, requires_password=False)
 
-    # Tier 3 — files. Always pending.
+    # Tier 3 — files. Pending unless MAC_TIER3_AUTO_CONFIRM is on, in
+    # which case the user's explicit command is the confirmation.
     if action.tier == Tier.FILES:
+        if settings.MAC_TIER3_AUTO_CONFIRM:
+            return _run_inline(action, params)
         return _stash_pending(action, params, requires_password=False)
 
     # Tier 4 — system. Pending + password required at consume time.
