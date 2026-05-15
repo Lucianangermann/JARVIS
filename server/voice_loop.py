@@ -136,10 +136,12 @@ FAST_INTERRUPT_MIN_RUN_BLOCKS = 3
 # Speex's adaptive echo filter needs ~200-300 ms to converge to a fresh
 # TTS output path. During that window the cleaned mic stream leaks 1000+
 # RMS echo and falsely trips the fast-interrupt (looks like a sustained
-# vowel from the AEC residual). We suspend fast-interrupt accumulation
-# for this many blocks after each idle → busy transition. Whisper-based
-# barge-in stays active (its hallucination filter handles echo).
-AEC_CONVERGENCE_GRACE_S = 0.35
+# vowel from the AEC residual). Grace is counted in AUDIBLE-TTS blocks
+# (out_rms > 300), measured by the audio callback — so the window is
+# tied to actual speaker output, not to the speak() call (which fires
+# 100-300 ms before audio reaches the speakers). Whisper-based barge-in
+# stays active (its hallucination filter handles echo).
+AEC_CONVERGENCE_GRACE_S = 0.40
 AEC_GRACE_BLOCKS = int(AEC_CONVERGENCE_GRACE_S / BLOCK_S)
 
 # Once the gate opens we hold it open for this long, even if the level
@@ -209,6 +211,11 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
         # Hangover countdown: while > 0, the gate stays open even if the
         # mic falls below USER_VOICE_RMS_GATE for a few blocks.
         "gate_open_left": 0,
+        # Consecutive audible-TTS blocks (out_rms_block > 300). Reset to
+        # 0 when speakers go quiet. The main loop reads this to know
+        # when AEC is still converging on a fresh TTS playback path —
+        # any value in [1, AEC_GRACE_BLOCKS] means "grace active".
+        "speaker_audible_blocks": 0,
     }
     diag_every = 100  # 100 × 10 ms = 1 s
 
@@ -259,6 +266,14 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
         out_rms_block = float(
             np.sqrt(np.mean(tts_samples.astype(np.int32) ** 2))
         )
+        # Audible-TTS counter for AEC grace. Increments while speakers
+        # are active, resets when they go quiet — so each new TTS burst
+        # gets a fresh convergence window. Single-key dict write is
+        # atomic under the GIL; main-loop reads see consistent values.
+        if out_rms_block > 300:
+            diag_state["speaker_audible_blocks"] += 1
+        else:
+            diag_state["speaker_audible_blocks"] = 0
         if out_rms_block > 300:  # speakers actively playing
             clean_rms_block = float(
                 np.sqrt(np.mean(cleaned.astype(np.int32) ** 2))
@@ -340,9 +355,6 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     fast_int_misses = 0
     fast_int_run = 0
     fast_int_max_run = 0
-    # Countdown set on each idle→busy transition; while > 0 the
-    # fast-interrupt accumulator is paused to let AEC converge.
-    aec_grace_blocks = 0
 
     # Brain work runs in a worker thread so the main loop can keep
     # processing audio (and hear "Stop" / "Halt") while JARVIS thinks
@@ -467,17 +479,25 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
 
                 # idle → busy transition: clear the barge-in rolling buffer
                 # so audio captured *before* JARVIS started talking can't
-                # trigger a false barge-in. Plus start the AEC convergence
-                # grace so the first ~350 ms of TTS playback doesn't trip
-                # fast-interrupt on echo residual.
+                # trigger a false barge-in.
                 if busy_now and not last_busy:
                     barge_in_buffer.clear()
-                    aec_grace_blocks = AEC_GRACE_BLOCKS
                     fast_int_count = 0
                     fast_int_misses = 0
                     fast_int_run = 0
                     fast_int_max_run = 0
                 last_busy = busy_now
+
+                # AEC convergence grace: when speakers JUST started
+                # playing a fresh TTS burst, the cleaned signal has
+                # ~1000+ RMS echo residual for ~150-300 ms. We read the
+                # callback's audible-block counter and treat the first
+                # AEC_GRACE_BLOCKS of audible TTS as a "don't trust the
+                # fast-interrupt" window. This is tied to actual
+                # speaker output, not to tts.speak() call time (which
+                # fires ~200 ms before audio reaches the speakers).
+                audible_blocks = diag_state["speaker_audible_blocks"]
+                in_aec_grace = 0 < audible_blocks <= AEC_GRACE_BLOCKS
 
                 if busy_now:
                     # While JARVIS is talking or thinking, completely
@@ -500,11 +520,17 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                     # clicks have runs of 1-3 blocks, so even a burst of
                     # them won't satisfy the run requirement.
                     #
-                    # While aec_grace_blocks > 0 we skip accumulation: AEC
-                    # hasn't converged to the new TTS path yet and the
-                    # cleaned signal contains residual echo at 1000+ RMS.
-                    if aec_grace_blocks > 0:
-                        aec_grace_blocks -= 1
+                    # in_aec_grace covers the first ~400 ms of audible
+                    # TTS — AEC hasn't converged yet and the cleaned
+                    # signal carries echo residual that looks identical
+                    # to a sustained vowel.
+                    if in_aec_grace:
+                        # Don't accumulate; also actively reset so we
+                        # exit grace with a clean slate.
+                        fast_int_count = 0
+                        fast_int_misses = 0
+                        fast_int_run = 0
+                        fast_int_max_run = 0
                     elif rms > FAST_INTERRUPT_RMS:
                         fast_int_count += 1
                         fast_int_misses = 0

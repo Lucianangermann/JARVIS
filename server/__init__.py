@@ -1,18 +1,35 @@
 """JARVIS server package."""
 import os
 
-# macOS multi-libomp workaround.
-# Many ML wheels ship their own copy of libomp.dylib (PyTorch from
-# openai-whisper, CTranslate2 from faster-whisper, sometimes numpy).
-# When two of them land in the same process, libomp aborts with
-#     OMP: Error #15: Initializing libiomp5.dylib, but found libiomp5
-#     .dylib already initialized.
-# Setting KMP_DUPLICATE_LIB_OK=TRUE before any of those libs load tells
-# OpenMP to keep going. Intel marks this "unsupported" because the two
-# libs *could* be ABI-incompatible, but for our use (inference with
-# stable models) it's safe in practice.
+# macOS multi-libomp + fork safety. These have to be set BEFORE any C
+# extension that uses OpenMP (numpy, torch, ctranslate2) is imported,
+# which is why they live in server/__init__.py — Python loads this
+# before server/main.py and before any of our modules.
 #
-# The clean fix is to uninstall whichever Whisper backend you don't
-# need (we prefer faster-whisper, so `pip uninstall openai-whisper`).
-# We use setdefault so an operator override still wins.
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+# 1) KMP_DUPLICATE_LIB_OK=TRUE
+#    Many ML wheels ship their own libomp.dylib. When two land in the
+#    same process, OpenMP aborts with "Error #15: Initializing libiomp
+#    .dylib, but found libiomp.dylib already initialized.". This tells
+#    OpenMP to keep going. Officially "unsupported"; in practice fine
+#    for inference. The clean fix is `pip uninstall openai-whisper`
+#    once faster-whisper is in place.
+#
+# 2) KMP_INIT_AT_FORK=FALSE
+#    Skip OMP runtime re-initialisation in forked children. Our
+#    subprocess calls (osascript, say, open) do fork+exec — between the
+#    fork and the exec the child briefly has parent OMP state, and
+#    re-init then can deadlock the parent. FALSE keeps the child
+#    clean.
+#
+# 3) OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+#    macOS Cocoa frameworks (used transitively by AppleScript /
+#    Foundation) abort fork() from multithreaded processes by default.
+#    Disabling lets osascript / say work while Whisper threads are
+#    alive in the parent. Documented escape hatch from Apple's own
+#    docs for exactly this scenario.
+for _k, _v in (
+    ("KMP_DUPLICATE_LIB_OK", "TRUE"),
+    ("KMP_INIT_AT_FORK", "FALSE"),
+    ("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES"),
+):
+    os.environ.setdefault(_k, _v)
