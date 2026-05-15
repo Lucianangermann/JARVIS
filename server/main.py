@@ -335,6 +335,13 @@ def tier4_confirm(
     return envelope
 
 
+@app.post("/pending/clear")
+def pending_clear(token: str = Depends(require_token)) -> dict[str, Any]:
+    """Bulk-cancel every outstanding pending action — handy when retry
+    loops stacked up duplicates and the user wants a clean slate."""
+    return mac_dispatcher.cancel_all()
+
+
 @app.post("/emergency-stop")
 def emergency_stop(token: str = Depends(require_token)) -> dict[str, Any]:
     """Trigger the kill switch — all Tier 2+ actions refuse until /resume."""

@@ -128,6 +128,26 @@ def dispatch(name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 
 def _stash_pending(action, params, *, requires_password: bool) -> dict[str, Any]:
     summary = _summary(action, params)
+    # Dedup: if Claude is called repeatedly for the same intent (user
+    # retrying because they didn't see the existing pending card), we
+    # don't want N copies of the same confirmation stacking up. Same
+    # action + same summary = same effective request.
+    for existing in confirmation.list_pending():
+        if existing.action == action.name and existing.summary == summary:
+            action_logger.log_confirmation(
+                action.tier, action.name, "DEDUP",
+                f"existing pending {existing.id} ({existing.age_s():.1f}s old)",
+            )
+            return {
+                "status": "pending",
+                "tier": int(action.tier),
+                "action": action.name,
+                "pending_id": existing.id,
+                "summary": summary,
+                "requires_password": existing.requires_password,
+                "deduped": True,
+            }
+
     # Bind params now — if the user takes 25 s to confirm we still get
     # the same call. Late-bound closures over the same params dict would
     # silently drift if something mutated it.
@@ -148,6 +168,17 @@ def _stash_pending(action, params, *, requires_password: bool) -> dict[str, Any]
         "summary": summary,
         "requires_password": requires_password,
     }
+
+
+def cancel_all() -> dict[str, Any]:
+    """Bulk-cancel every outstanding pending. Used by /pending/clear so
+    the user can wipe a stale queue without clicking each card."""
+    ids = [p.id for p in confirmation.list_pending()]
+    cancelled = 0
+    for pid in ids:
+        if cancel(pid).get("status") == "ok":
+            cancelled += 1
+    return {"cancelled": cancelled, "remaining": len(confirmation.list_pending())}
 
 
 # --- consume --------------------------------------------------------------- #

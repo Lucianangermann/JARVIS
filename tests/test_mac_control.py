@@ -216,6 +216,32 @@ def test_tier3_cancel_does_not_run(sandbox_dir):
 
 # --- tier 4 password ------------------------------------------------------- #
 
+def test_dispatch_dedups_identical_pending(sandbox_dir):
+    """Calling the same Tier-3 action twice with the same params must
+    return the same pending_id — otherwise retry loops stack identical
+    cards in the UI (the actual bug the user reported)."""
+    target = sandbox_dir / "dedup.txt"
+    a = dispatcher.dispatch("create_file", {"path": str(target), "content": "x"})
+    b = dispatcher.dispatch("create_file", {"path": str(target), "content": "x"})
+    assert a["status"] == "pending" and b["status"] == "pending"
+    assert a["pending_id"] == b["pending_id"]
+    assert b.get("deduped") is True
+    # Only one pending entry exists
+    assert len(confirmation.list_pending()) == 1
+
+
+def test_cancel_all_drains_pending(sandbox_dir):
+    """Bulk cancel must clear every pending in one call."""
+    for n in range(3):
+        dispatcher.dispatch("create_file",
+                            {"path": str(sandbox_dir / f"f{n}.txt"), "content": "x"})
+    assert len(confirmation.list_pending()) == 3
+    env = dispatcher.cancel_all()
+    assert env["cancelled"] == 3
+    assert env["remaining"] == 0
+    assert confirmation.list_pending() == []
+
+
 def test_tier4_wrong_password_keeps_pending(monkeypatch):
     """Tippfehler beim Passwort darf die Pending nicht verbrennen."""
     env = dispatcher.dispatch("terminal", {"command": "display_sleep"})
