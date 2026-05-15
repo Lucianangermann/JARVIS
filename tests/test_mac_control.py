@@ -317,6 +317,47 @@ def test_create_note_html_escape(monkeypatch):
     assert "<b>" not in body_arg
 
 
+def test_edit_note_rejects_empty_title():
+    from server.mac_control import tier2_apps
+    assert "title fehlt" in tier2_apps._edit_note(title="").lower()
+
+
+def test_edit_note_rejects_unknown_mode():
+    from server.mac_control import tier2_apps
+    result = tier2_apps._edit_note(title="x", body="y", mode="overwrite")
+    assert "mode" in result.lower()
+
+
+def test_edit_note_passes_mode_via_argv(monkeypatch):
+    """mode rides argv position 3 (after title, body) — verify."""
+    from server.mac_control import tier2_apps
+    captured = {}
+    monkeypatch.setattr(
+        tier2_apps, "_osa",
+        lambda script, *args, **_kw: captured.setdefault("args", args) and "Einkauf Mai",
+    )
+    tier2_apps._edit_note(title="Einkauf", body="Milch", mode="append")
+    args = captured["args"]
+    assert args[0] == "Einkauf"
+    assert args[1] == "Milch"
+    assert args[2] == "append"
+
+
+def test_edit_note_html_escapes_body(monkeypatch):
+    from server.mac_control import tier2_apps
+    captured = {}
+
+    def fake(script, *args, **_kw):
+        captured["body"] = args[1]
+        return "found"
+
+    monkeypatch.setattr(tier2_apps, "_osa", fake)
+    tier2_apps._edit_note(title="x", body="<script>alert(1)</script>\n2")
+    assert "&lt;script&gt;" in captured["body"]
+    assert "<br>" in captured["body"]
+    assert "<script>" not in captured["body"]
+
+
 def test_create_note_truncates_long_body(monkeypatch):
     from server.mac_control import tier2_apps
     monkeypatch.setattr(tier2_apps, "_osa", lambda *a, **k: "")

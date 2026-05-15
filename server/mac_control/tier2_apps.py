@@ -208,6 +208,40 @@ on run argv
 end run
 """
 
+# Edit an existing Note. Finds the target by exact title first, then by
+# `contains` match as a fallback (so "Einkauf" matches "Einkauf Mai 2026").
+# Modes: replace (overwrite body), append (add at end), prepend (add at start).
+_TR_EDIT_NOTE = """
+on run argv
+    set theTitle to item 1 of argv
+    set theBody to item 2 of argv
+    set theMode to item 3 of argv
+
+    tell application "Notes"
+        try
+            set theNote to first note whose name is theTitle
+        on error
+            try
+                set theNote to first note whose name contains theTitle
+            on error
+                error "Notiz mit Titel '" & theTitle & "' nicht gefunden."
+            end try
+        end try
+
+        if theMode is "replace" then
+            set body of theNote to theBody
+        else if theMode is "append" then
+            set body of theNote to (body of theNote) & "<br>" & theBody
+        else if theMode is "prepend" then
+            set body of theNote to theBody & "<br>" & (body of theNote)
+        else
+            error "Unbekannter mode: " & theMode
+        end if
+        return name of theNote
+    end tell
+end run
+"""
+
 # Reminder body is plain text (Reminders.app doesn't parse HTML in body).
 # Due date is optional; we parse YYYY-MM-DDTHH:MM in AppleScript so the
 # script body stays a constant. List name is optional — empty string
@@ -388,6 +422,40 @@ def _create_reminder(
     return ", ".join(parts) + "."
 
 
+_EDIT_MODES = ("replace", "append", "prepend")
+
+
+def _edit_note(*, title: str = "", body: str = "", mode: str = "replace", **_kw) -> str:
+    """Edit an existing note in Apple Notes by title.
+
+    mode='replace' (default) overwrites the body. 'append' adds at the
+    end (separated by a <br>). 'prepend' adds at the start.
+    """
+    if not isinstance(title, str) or not title.strip():
+        return "title fehlt."
+    title = title.strip()[:_NOTE_TITLE_MAX]
+    if mode not in _EDIT_MODES:
+        return f"mode muss {list(_EDIT_MODES)} sein (war: {mode!r})."
+    if not isinstance(body, str):
+        body = str(body)
+    truncated = len(body) > _NOTE_BODY_MAX
+    if truncated:
+        body = body[:_NOTE_BODY_MAX]
+    body_html = (
+        body.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br>")
+    )
+    try:
+        found = _osa(_TR_EDIT_NOTE, title, body_html, mode)
+    except _ASError as exc:
+        return f"Notiz bearbeiten fehlgeschlagen: {exc}"
+    verb = {"replace": "ersetzt", "append": "ergänzt", "prepend": "vorangestellt"}[mode]
+    suffix = " (Body gekürzt)" if truncated else ""
+    return f"Notiz {found!r} {verb}{suffix}."
+
+
 def _create_note(*, title: str = "", body: str = "", **_kw) -> str:
     if not isinstance(title, str) or not title.strip():
         return "title fehlt."
@@ -473,6 +541,9 @@ _TIER2: tuple[tuple[str, callable, callable], ...] = (
     ("volume_unmute",     _volume_unmute,     lambda **_: "Stummschaltung aufheben"),
     ("send_notification", _send_notification, lambda **p: f"Notification: {p.get('title','JARVIS')} — {p.get('body','')[:60]}"),
     ("create_note",       _create_note,       lambda **p: f"Notiz in Notes.app erstellen: {p.get('title','')[:80]}"),
+    ("edit_note",         _edit_note,         lambda **p: (
+        f"Notiz bearbeiten ({p.get('mode','replace')}): {p.get('title','')[:60]}"
+    )),
     ("create_reminder",   _create_reminder,   lambda **p: (
         f"Reminder erstellen: {p.get('title','')[:60]}"
         + (f" (fällig {p.get('due','')})" if p.get('due') else "")
