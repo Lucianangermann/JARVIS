@@ -325,6 +325,55 @@ def test_create_note_truncates_long_body(monkeypatch):
     assert "gekürzt" in result.lower() or "gekuerzt" in result.lower()
 
 
+# --- create_reminder ------------------------------------------------------- #
+
+def test_create_reminder_rejects_empty_title():
+    from server.mac_control import tier2_apps
+    assert "title fehlt" in tier2_apps._create_reminder(title="").lower()
+
+
+def test_create_reminder_rejects_bad_due():
+    from server.mac_control import tier2_apps
+    for bad in ("tomorrow", "2026/05/20", "2026-05-20", "today at 5pm"):
+        result = tier2_apps._create_reminder(title="x", due=bad)
+        assert "iso 8601" in result.lower(), f"{bad} should be rejected"
+
+
+def test_create_reminder_passes_due_and_list_via_argv(monkeypatch):
+    """due and list ride argv (no script interpolation). Verify they
+    actually reach _osa in the expected positions."""
+    from server.mac_control import tier2_apps
+    captured = {}
+    monkeypatch.setattr(
+        tier2_apps, "_osa",
+        lambda script, *args, **_kw: captured.setdefault("args", args) and "",
+    )
+    tier2_apps._create_reminder(
+        title="Milch kaufen",
+        body="bei Edeka",
+        due="2026-05-20T14:30",
+        list="Einkauf",
+    )
+    args = captured["args"]
+    assert args[0] == "Milch kaufen"
+    assert args[1] == "bei Edeka"
+    assert args[2] == "2026-05-20T14:30"
+    assert args[3] == "Einkauf"
+
+
+def test_create_reminder_empty_optionals(monkeypatch):
+    """No due, no list → empty strings, not None or missing."""
+    from server.mac_control import tier2_apps
+    captured = {}
+    monkeypatch.setattr(
+        tier2_apps, "_osa",
+        lambda script, *args, **_kw: captured.setdefault("args", args) and "",
+    )
+    tier2_apps._create_reminder(title="x")
+    args = captured["args"]
+    assert args[2] == "" and args[3] == ""
+
+
 # --- runtime app allowlist ------------------------------------------------- #
 
 @pytest.fixture
@@ -338,15 +387,15 @@ def temp_allowlist(monkeypatch, tmp_path):
 
 def test_allowlist_add_remove_roundtrip(temp_allowlist):
     from server.mac_control import allowlist
-    # Use a name not in DEFAULT_ALLOWED_APPS so it really lands in the
-    # persistent layer.
-    ok, msg = allowlist.add("Reminders")
-    assert ok and "Reminders" in msg
-    assert "Reminders" in allowlist.load_extras()
-    ok, msg = allowlist.add("Reminders")  # duplicate
+    # Use a name guaranteed not to be in DEFAULT_ALLOWED_APPS so this
+    # test doesn't break every time we add a sensible default later.
+    ok, msg = allowlist.add("TestAppZ")
+    assert ok and "TestAppZ" in msg
+    assert "TestAppZ" in allowlist.load_extras()
+    ok, msg = allowlist.add("TestAppZ")  # duplicate
     assert not ok
-    ok, _ = allowlist.remove("Reminders")
-    assert ok and "Reminders" not in allowlist.load_extras()
+    ok, _ = allowlist.remove("TestAppZ")
+    assert ok and "TestAppZ" not in allowlist.load_extras()
 
 
 def test_allowlist_rejects_blocked_apps(temp_allowlist):
@@ -370,9 +419,9 @@ def test_open_app_sees_new_allowlist_entry(temp_allowlist):
     """After adding via the allowlist module, current_allowed_apps()
     must include the new entry without a restart."""
     from server.mac_control import allowlist, tier2_apps
-    assert "Reminders" not in tier2_apps.current_allowed_apps()
-    allowlist.add("Reminders")
-    assert "Reminders" in tier2_apps.current_allowed_apps()
+    assert "TestAppZ" not in tier2_apps.current_allowed_apps()
+    allowlist.add("TestAppZ")
+    assert "TestAppZ" in tier2_apps.current_allowed_apps()
 
 
 # --- voice phrase detectors ------------------------------------------------ #

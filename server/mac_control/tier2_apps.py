@@ -43,7 +43,7 @@ DEFAULT_ALLOWED_APPS: frozenset[str] = frozenset({
     "Music", "Spotify",
     "Safari", "Google Chrome",
     "Terminal", "Visual Studio Code",
-    "Finder", "Notes",
+    "Finder", "Notes", "Reminders",
 })
 # Hard block. These handle secrets or expose a huge automation surface,
 # so they're refused regardless of what the persistent allowlist says.
@@ -193,6 +193,62 @@ on run argv
 end run
 """
 
+# Reminder body is plain text (Reminders.app doesn't parse HTML in body).
+# Due date is optional; we parse YYYY-MM-DDTHH:MM in AppleScript so the
+# script body stays a constant. List name is optional — empty string
+# means "default list".
+_TR_NEW_REMINDER = """
+on run argv
+    set theTitle to item 1 of argv
+    set theBody to item 2 of argv
+    set theDueIso to item 3 of argv
+    set theListName to item 4 of argv
+
+    set theProps to {name:theTitle}
+    if theBody is not "" then
+        set theProps to theProps & {body:theBody}
+    end if
+    if theDueIso is not "" then
+        set dueDate to my isoToDate(theDueIso)
+        set theProps to theProps & {due date:dueDate, remind me date:dueDate}
+    end if
+
+    tell application "Reminders"
+        if theListName is "" then
+            tell default list
+                make new reminder with properties theProps
+            end tell
+        else
+            try
+                set targetList to first list whose name is theListName
+            on error
+                error "Reminders-Liste " & theListName & " nicht gefunden."
+            end try
+            tell targetList
+                make new reminder with properties theProps
+            end tell
+        end if
+    end tell
+    return "ok"
+end run
+
+on isoToDate(iso)
+    set y to text 1 thru 4 of iso as integer
+    set mo to text 6 thru 7 of iso as integer
+    set d to text 9 thru 10 of iso as integer
+    set hh to text 12 thru 13 of iso as integer
+    set mm to text 15 thru 16 of iso as integer
+    set theDate to current date
+    set year of theDate to y
+    set month of theDate to mo
+    set day of theDate to d
+    set hours of theDate to hh
+    set minutes of theDate to mm
+    set seconds of theDate to 0
+    return theDate
+end isoToDate
+"""
+
 
 # --- handlers -------------------------------------------------------------- #
 
@@ -285,6 +341,36 @@ def _send_notification(*, title: str = "JARVIS", body: str = "", **_kw) -> str:
 
 _NOTE_TITLE_MAX = 200
 _NOTE_BODY_MAX = 8000
+_REMINDER_TITLE_MAX = 200
+_REMINDER_BODY_MAX = 2000
+_REMINDER_LIST_MAX = 80
+_ISO_RE_REM = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
+
+
+def _create_reminder(
+    *, title: str = "", body: str = "", due: str = "", list: str = "", **_kw
+) -> str:
+    if not isinstance(title, str) or not title.strip():
+        return "title fehlt."
+    title = title.strip()[:_REMINDER_TITLE_MAX]
+    if not isinstance(body, str):
+        body = str(body)
+    body = body[:_REMINDER_BODY_MAX]
+    if due and not _ISO_RE_REM.match(due):
+        return "due muss ISO 8601 sein: YYYY-MM-DDTHH:MM (z. B. 2026-05-20T14:30)"
+    if not isinstance(list, str):
+        list = ""
+    list_name = list.strip()[:_REMINDER_LIST_MAX]
+    try:
+        _osa(_TR_NEW_REMINDER, title, body, due or "", list_name)
+    except _ASError as exc:
+        return f"Reminder erstellen fehlgeschlagen: {exc}"
+    parts = [f"Reminder erstellt: {title}"]
+    if due:
+        parts.append(f"fällig {due}")
+    if list_name:
+        parts.append(f"in {list_name!r}")
+    return ", ".join(parts) + "."
 
 
 def _create_note(*, title: str = "", body: str = "", **_kw) -> str:
@@ -342,6 +428,11 @@ _TIER2: tuple[tuple[str, callable, callable], ...] = (
     ("volume_unmute",     _volume_unmute,     lambda **_: "Stummschaltung aufheben"),
     ("send_notification", _send_notification, lambda **p: f"Notification: {p.get('title','JARVIS')} — {p.get('body','')[:60]}"),
     ("create_note",       _create_note,       lambda **p: f"Notiz in Notes.app erstellen: {p.get('title','')[:80]}"),
+    ("create_reminder",   _create_reminder,   lambda **p: (
+        f"Reminder erstellen: {p.get('title','')[:60]}"
+        + (f" (fällig {p.get('due','')})" if p.get('due') else "")
+        + (f" in {p.get('list','')!r}" if p.get('list') else "")
+    )),
     ("open_app",          _open_app,          lambda **p: f"App öffnen: {p.get('name','?')}"),
 )
 
