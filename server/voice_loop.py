@@ -390,6 +390,10 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
         finally:
             transcribe_lock.release()
 
+    # Track the previous tick's busy state so we can react to the idle→busy
+    # transition (the moment TTS starts). See the buffer-clear below.
+    last_busy = False
+
     try:
         with sd.Stream(
             samplerate=SAMPLE_RATE,
@@ -414,6 +418,17 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 brain_alive_now = brain_thread is not None and brain_thread.is_alive()
                 tts_busy_now = not tts.is_idle()
                 busy_now = brain_alive_now or tts_busy_now
+
+                # idle → busy transition: clear the barge-in rolling buffer
+                # so audio captured *before* JARVIS started talking can't
+                # trigger a false barge-in. Common case this fixes: the user
+                # said "Jarvis, was kannst du …", the tail of that utterance
+                # is still in the rolling buffer when TTS starts replying,
+                # and the barge-in check sees "starts with wake word" → cancels
+                # the reply we just generated.
+                if busy_now and not last_busy:
+                    barge_in_buffer.clear()
+                last_busy = busy_now
 
                 if busy_now:
                     # While JARVIS is talking or thinking, completely
