@@ -139,7 +139,7 @@ def main() -> int:
         print(f"  {mark} {name}: {msg}")
 
     print("\n== Automation (per app) ==")
-    for app in ("Finder", "Music", "Spotify", "Calendar", "Safari"):
+    for app in ("Finder", "Music", "Spotify", "Calendar", "Safari", "Notes"):
         ok, msg = check_automation_target(app)
         mark = _OK if ok else _NO
         if not ok:

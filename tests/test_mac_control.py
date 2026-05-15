@@ -288,6 +288,43 @@ def test_mac_control_disabled_rejects(monkeypatch):
     assert "MAC_CONTROL_ENABLED" in env["reason"]
 
 
+# --- create_note ----------------------------------------------------------- #
+
+def test_create_note_rejects_empty_title():
+    from server.mac_control import tier2_apps
+    assert "title fehlt" in tier2_apps._create_note(title="", body="x").lower()
+    assert "title fehlt" in tier2_apps._create_note(title="   ", body="x").lower()
+
+
+def test_create_note_html_escape(monkeypatch):
+    """User content with HTML special chars must be escaped BEFORE
+    osascript so Notes renders it as text, not markup. We intercept
+    the osascript invocation to inspect what would be passed."""
+    from server.mac_control import tier2_apps
+    captured = {}
+
+    def fake_osa(script, *args, **_kw):
+        captured["args"] = args
+        return ""
+
+    monkeypatch.setattr(tier2_apps, "_osa", fake_osa)
+    tier2_apps._create_note(title="t", body="<b>bold</b>\nline2 & more")
+    body_arg = captured["args"][1]
+    assert "&lt;b&gt;bold&lt;/b&gt;" in body_arg
+    assert "<br>" in body_arg
+    assert "&amp;" in body_arg
+    # Raw < and & should be gone (note: <br> is the only allowed tag)
+    assert "<b>" not in body_arg
+
+
+def test_create_note_truncates_long_body(monkeypatch):
+    from server.mac_control import tier2_apps
+    monkeypatch.setattr(tier2_apps, "_osa", lambda *a, **k: "")
+    long_body = "x" * 20_000
+    result = tier2_apps._create_note(title="t", body=long_body)
+    assert "gekürzt" in result.lower() or "gekuerzt" in result.lower()
+
+
 # --- runtime app allowlist ------------------------------------------------- #
 
 @pytest.fixture
@@ -301,13 +338,15 @@ def temp_allowlist(monkeypatch, tmp_path):
 
 def test_allowlist_add_remove_roundtrip(temp_allowlist):
     from server.mac_control import allowlist
-    ok, msg = allowlist.add("Notes")
-    assert ok and "Notes" in msg
-    assert "Notes" in allowlist.load_extras()
-    ok, msg = allowlist.add("Notes")  # duplicate
+    # Use a name not in DEFAULT_ALLOWED_APPS so it really lands in the
+    # persistent layer.
+    ok, msg = allowlist.add("Reminders")
+    assert ok and "Reminders" in msg
+    assert "Reminders" in allowlist.load_extras()
+    ok, msg = allowlist.add("Reminders")  # duplicate
     assert not ok
-    ok, _ = allowlist.remove("Notes")
-    assert ok and "Notes" not in allowlist.load_extras()
+    ok, _ = allowlist.remove("Reminders")
+    assert ok and "Reminders" not in allowlist.load_extras()
 
 
 def test_allowlist_rejects_blocked_apps(temp_allowlist):
@@ -331,9 +370,9 @@ def test_open_app_sees_new_allowlist_entry(temp_allowlist):
     """After adding via the allowlist module, current_allowed_apps()
     must include the new entry without a restart."""
     from server.mac_control import allowlist, tier2_apps
-    assert "Notes" not in tier2_apps.current_allowed_apps()
-    allowlist.add("Notes")
-    assert "Notes" in tier2_apps.current_allowed_apps()
+    assert "Reminders" not in tier2_apps.current_allowed_apps()
+    allowlist.add("Reminders")
+    assert "Reminders" in tier2_apps.current_allowed_apps()
 
 
 # --- voice phrase detectors ------------------------------------------------ #

@@ -43,7 +43,7 @@ DEFAULT_ALLOWED_APPS: frozenset[str] = frozenset({
     "Music", "Spotify",
     "Safari", "Google Chrome",
     "Terminal", "Visual Studio Code",
-    "Finder",
+    "Finder", "Notes",
 })
 # Hard block. These handle secrets or expose a huge automation surface,
 # so they're refused regardless of what the persistent allowlist says.
@@ -179,6 +179,20 @@ on run argv
 end run
 """
 
+# Notes treats `body` as HTML — newlines need to become <br>, and any
+# raw markup in user content must be escaped so it doesn't render as
+# formatting. We do that escaping Python-side before passing through
+# argv so the AppleScript body itself stays a fixed string constant.
+_TR_NEW_NOTE = """
+on run argv
+    set theTitle to item 1 of argv
+    set theBody to item 2 of argv
+    tell application "Notes"
+        make new note with properties {name:theTitle, body:theBody}
+    end tell
+end run
+"""
+
 
 # --- handlers -------------------------------------------------------------- #
 
@@ -269,6 +283,35 @@ def _send_notification(*, title: str = "JARVIS", body: str = "", **_kw) -> str:
     return f"Notification angezeigt: {title} — {body}"
 
 
+_NOTE_TITLE_MAX = 200
+_NOTE_BODY_MAX = 8000
+
+
+def _create_note(*, title: str = "", body: str = "", **_kw) -> str:
+    if not isinstance(title, str) or not title.strip():
+        return "title fehlt."
+    if not isinstance(body, str):
+        body = str(body)
+    title = title.strip()[:_NOTE_TITLE_MAX]
+    truncated = len(body) > _NOTE_BODY_MAX
+    if truncated:
+        body = body[:_NOTE_BODY_MAX]
+    # Escape HTML, then turn line breaks into <br> so the note renders
+    # the way the user wrote it. Notes parses `body` as HTML.
+    body_html = (
+        body.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br>")
+    )
+    try:
+        _osa(_TR_NEW_NOTE, title, body_html)
+    except _ASError as exc:
+        return f"Notiz erstellen fehlgeschlagen: {exc}"
+    suffix = " (Body gekürzt)" if truncated else ""
+    return f"Notiz erstellt: {title}{suffix}"
+
+
 def _open_app(*, name: str = "", **_kw) -> str:
     if not isinstance(name, str) or not name:
         return "App-Name fehlt."
@@ -298,6 +341,7 @@ _TIER2: tuple[tuple[str, callable, callable], ...] = (
     ("volume_mute",       _volume_mute,       lambda **_: "Stummschalten"),
     ("volume_unmute",     _volume_unmute,     lambda **_: "Stummschaltung aufheben"),
     ("send_notification", _send_notification, lambda **p: f"Notification: {p.get('title','JARVIS')} — {p.get('body','')[:60]}"),
+    ("create_note",       _create_note,       lambda **p: f"Notiz in Notes.app erstellen: {p.get('title','')[:80]}"),
     ("open_app",          _open_app,          lambda **p: f"App öffnen: {p.get('name','?')}"),
 )
 
