@@ -98,6 +98,22 @@ _STOP_PHRASES: frozenset[str] = frozenset({
 # instead of letting Whisper hallucinate ghost transcripts on quiet rooms.
 SILENCE_RMS_THRESHOLD = 350
 
+# Hard kill-switch phrases — these don't just barge in, they DISARM the
+# entire mac_control surface (Tier 2+ refuses until a resume phrase).
+# Must explicitly include the wake word so a casual "Stop" while music
+# plays doesn't lock down the system.
+_KILL_SWITCH_PHRASES: frozenset[str] = frozenset({
+    "jarvis halt", "jarvis stopp", "jarvis stop",
+    "jarvis aus", "jarvis notaus", "notaus", "notaus jarvis",
+    "jarvis halt alles", "jarvis stop alles",
+})
+
+# Phrase the user must say to re-arm after a kill switch.
+_RESUME_PHRASES: frozenset[str] = frozenset({
+    "jarvis weiter", "jarvis resume", "jarvis fortsetzen",
+    "jarvis los", "jarvis weitermachen",
+})
+
 
 def _load_model():  # -> "whisper.Whisper"
     global _model
@@ -204,6 +220,20 @@ def is_stop_phrase(text: str) -> bool:
     the in-flight reply; end phrases additionally exit follow-up mode."""
     norm = _normalise(text)
     return norm in _STOP_PHRASES or norm in _END_PHRASES
+
+
+def is_kill_switch_phrase(text: str) -> bool:
+    """Return True if ``text`` triggers the mac_control kill switch.
+
+    Stricter than is_stop_phrase — these explicitly include the wake word
+    so an offhand "Stop" mid-conversation doesn't disarm the whole
+    automation surface. See ``_KILL_SWITCH_PHRASES``."""
+    return _normalise(text) in _KILL_SWITCH_PHRASES
+
+
+def is_resume_phrase(text: str) -> bool:
+    """Return True if ``text`` is a kill-switch resume phrase."""
+    return _normalise(text) in _RESUME_PHRASES
 
 
 # First-word stop matchers. Catches Whisper variants like "stoppt",

@@ -551,6 +551,25 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 brain_alive = brain_thread is not None and brain_thread.is_alive()
                 busy = brain_alive or (not tts.is_idle())
 
+                # ─── KILL SWITCH / RESUME ──────────────────────────────────
+                # "Jarvis halt" / "Notaus" → disarm the whole mac_control
+                # surface. Distinct from plain stop phrases (which only
+                # barge in) — kill_switch stays set until "Jarvis weiter".
+                if stt.is_kill_switch_phrase(transcript):
+                    from .mac_control import kill_switch as _ks
+                    _ks.trigger(f"voice: {transcript!r}")
+                    brain_cancel.set()
+                    tts.stop()
+                    tts.speak("Kill-Switch aktiv. Sag 'Jarvis weiter' zum Fortfahren.")
+                    _drain(audio_q)
+                    continue
+                if stt.is_resume_phrase(transcript):
+                    from .mac_control import kill_switch as _ks
+                    if _ks.is_set():
+                        _ks.resume()
+                        tts.speak("Wieder aktiv.")
+                    continue
+
                 # ─── STOP / END PHRASE always wins ─────────────────────────
                 # "Stop", "Halt", "Warte", … cut JARVIS off mid-flight.
                 # End phrases ("okay das war's", "tschüss", …) also exit

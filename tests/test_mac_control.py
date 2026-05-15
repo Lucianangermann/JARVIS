@@ -1,0 +1,276 @@
+"""Tests for the mac_control staged-permission system.
+
+Covers
+------
+- Kill switch blocks Tier 2+ and allows Tier 1; resume restores.
+- Tier of every action is its declared tier (intrinsic, not caller-chosen).
+- Sandbox rejects blocked paths AND symlink escapes.
+- Confirmation timeout purges stale pendings.
+- Dispatcher flow: Tier 3 → pending → consume runs handler.
+- Tier 4 wrong-password leaves pending alive for retry.
+- Password redaction in action_logger.
+- Unknown action / disabled mac_control rejection paths.
+- Voice kill-switch phrase detection (matches "jarvis halt", not "halt" alone).
+
+Side effects
+------------
+No tests run AppleScript, hit the network, or touch user files outside
+a per-test temp dir under ~/Documents (which the sandbox allows). All
+artifacts are removed via fixtures.
+"""
+from __future__ import annotations
+
+import os
+import time
+from pathlib import Path
+
+import pytest
+
+# Make sure mac_control sees MAC_CONTROL_ENABLED=1 before any of its
+# modules look at settings. (The tier modules read settings at import.)
+os.environ.setdefault("MAC_CONTROL_ENABLED", "1")
+os.environ.setdefault("JARVIS_SUDO_PASSWORD", "testpw")
+
+from server.config import settings  # noqa: E402
+from server.mac_control import (  # noqa: E402
+    action_logger, confirmation, dispatcher, kill_switch, permission_manager,
+    tier3_files,
+)
+from server.mac_control.permission_manager import Tier  # noqa: E402
+from server import stt  # noqa: E402
+
+
+# --- shared fixtures ------------------------------------------------------- #
+
+@pytest.fixture(autouse=True)
+def _reset_state(monkeypatch):
+    """Clean global state between tests so order doesn't matter."""
+    # mac_control on by default
+    monkeypatch.setattr(settings, "MAC_CONTROL_ENABLED", True)
+    monkeypatch.setattr(settings, "JARVIS_SUDO_PASSWORD", "testpw")
+    permission_manager.lock_tier2()
+    if kill_switch.is_set():
+        kill_switch.resume()
+    # Empty the confirmation store
+    for p in confirmation.list_pending():
+        confirmation.cancel(p.id)
+    yield
+    if kill_switch.is_set():
+        kill_switch.resume()
+    permission_manager.lock_tier2()
+
+
+@pytest.fixture
+def sandbox_dir():
+    """A throwaway directory inside the sandbox we can write to."""
+    base = Path.home() / "Documents" / f"jarvis_pytest_{os.getpid()}"
+    base.mkdir(exist_ok=True)
+    yield base
+    # rmtree — these are temp paths we created ourselves.
+    import shutil
+    shutil.rmtree(base, ignore_errors=True)
+
+
+# --- registry + intrinsic tiers -------------------------------------------- #
+
+def test_every_action_has_intrinsic_tier():
+    actions = permission_manager.all_actions()
+    assert len(actions) >= 30, "expected 30+ actions registered"
+    # No duplicates
+    names = [a.name for a in actions]
+    assert len(names) == len(set(names))
+    # Tier is always one of the enum values
+    for a in actions:
+        assert a.tier in (Tier.INFO, Tier.APPS, Tier.FILES, Tier.SYSTEM)
+
+
+def test_specific_tier_assignment():
+    """Spot-check that actions are in the tier we expect."""
+    assert permission_manager.get("get_time").tier == Tier.INFO
+    assert permission_manager.get("send_notification").tier == Tier.APPS
+    assert permission_manager.get("move").tier == Tier.FILES
+    assert permission_manager.get("terminal").tier == Tier.SYSTEM
+
+
+def test_caller_cannot_override_tier():
+    """Even if the dispatch caller passes ``tier`` in params, the
+    registry's tier is what's consulted. (Defence-in-depth — no caller
+    code reads a 'tier' kwarg today, but we'd notice if any did.)"""
+    env = dispatcher.dispatch("get_time", {"tier": 4})
+    assert env["status"] == "ok"
+    assert env["tier"] == 1
+
+
+# --- kill switch ----------------------------------------------------------- #
+
+def test_kill_switch_blocks_tier2_plus_but_allows_tier1():
+    kill_switch.trigger("pytest")
+    assert dispatcher.dispatch("get_time")["status"] == "ok"
+    r2 = dispatcher.dispatch("send_notification", {"title": "x", "body": "y"})
+    r3 = dispatcher.dispatch("list_dir", {"path": "~/Desktop"})
+    r4 = dispatcher.dispatch("terminal", {"command": "display_sleep"})
+    assert r2["status"] == "rejected" and "Kill" in r2["reason"]
+    assert r3["status"] == "rejected"
+    assert r4["status"] == "rejected"
+
+
+def test_kill_switch_resume_relocks_tier2():
+    """After kill switch, Tier 2 must NOT remain unlocked. Re-confirming
+    is required so a forgotten resume can't silently re-enable apps."""
+    # Unlock T2 normally
+    permission_manager.unlock_tier2()
+    assert permission_manager.tier2_is_unlocked()
+    kill_switch.trigger("pytest")
+    kill_switch.resume()
+    assert not permission_manager.tier2_is_unlocked()
+
+
+# --- sandbox --------------------------------------------------------------- #
+
+@pytest.mark.parametrize("path", [
+    "/etc/passwd",
+    "/etc/shadow",
+    "~/.ssh",
+    "~/.ssh/id_rsa",
+    "~/Library/Keychains",
+    "~/Library/Cookies",
+    "/System/Library/CoreServices",
+    "~/Desktop/../../etc/hosts",
+])
+def test_sandbox_blocks_outside(path):
+    with pytest.raises(tier3_files.SandboxError):
+        tier3_files._validate_path(path, must_exist=False)
+
+
+def test_sandbox_blocks_symlink_escape(sandbox_dir):
+    """A symlink in an allowed dir pointing outside the sandbox must
+    NOT pass the check — that's the whole point of using .resolve()."""
+    link = sandbox_dir / "escape"
+    link.symlink_to("/etc/hosts")
+    with pytest.raises(tier3_files.SandboxError):
+        tier3_files._validate_path(str(link), must_exist=True)
+
+
+def test_sandbox_allows_files_under_documents(sandbox_dir):
+    """Sanity: ordinary paths under ~/Documents work."""
+    target = sandbox_dir / "ok.txt"
+    target.write_text("hi")
+    resolved = tier3_files._validate_path(str(target), must_exist=True)
+    assert resolved.name == "ok.txt"
+
+
+# --- confirmation timeout -------------------------------------------------- #
+
+def test_confirmation_timeout_purges(monkeypatch):
+    """Pendings older than CONFIRMATION_TIMEOUT_S are gone on next access."""
+    monkeypatch.setattr(confirmation, "CONFIRMATION_TIMEOUT_S", 0.05)
+    p = confirmation.stash(
+        tier=3, action="x", handler=lambda: "ran", summary="s",
+    )
+    assert confirmation.peek(p.id) is not None
+    time.sleep(0.1)
+    assert confirmation.peek(p.id) is None
+    # consume returns None too
+    assert confirmation.consume(p.id) is None
+
+
+# --- dispatcher pending flow ----------------------------------------------- #
+
+def test_tier3_dispatch_returns_pending_then_consume_runs(sandbox_dir):
+    target = sandbox_dir / "note.txt"
+    env = dispatcher.dispatch("create_file",
+                              {"path": str(target), "content": "hello"})
+    assert env["status"] == "pending"
+    assert env["tier"] == 3
+    pid = env["pending_id"]
+    # File should NOT exist yet — handler hasn't run.
+    assert not target.exists()
+    final = dispatcher.consume(pid)
+    assert final["status"] == "ok"
+    assert target.exists() and target.read_text() == "hello"
+
+
+def test_tier3_cancel_does_not_run(sandbox_dir):
+    target = sandbox_dir / "should_not_appear.txt"
+    env = dispatcher.dispatch("create_file",
+                              {"path": str(target), "content": "x"})
+    pid = env["pending_id"]
+    cancel_env = dispatcher.cancel(pid)
+    assert cancel_env["status"] == "ok"
+    assert not target.exists()
+
+
+# --- tier 4 password ------------------------------------------------------- #
+
+def test_tier4_wrong_password_keeps_pending(monkeypatch):
+    """Tippfehler beim Passwort darf die Pending nicht verbrennen."""
+    env = dispatcher.dispatch("terminal", {"command": "display_sleep"})
+    pid = env["pending_id"]
+    bad = dispatcher.consume(pid, password="not the password")
+    assert bad["status"] == "rejected"
+    assert confirmation.peek(pid) is not None, "pending must survive wrong pw"
+
+
+def test_tier4_without_password_configured_rejects(monkeypatch):
+    monkeypatch.setattr(settings, "JARVIS_SUDO_PASSWORD", "")
+    env = dispatcher.dispatch("terminal", {"command": "display_sleep"})
+    assert env["status"] == "rejected"
+    assert "JARVIS_SUDO_PASSWORD" in env["reason"]
+
+
+# --- password redaction ---------------------------------------------------- #
+
+def test_password_redacted_in_logs(monkeypatch, tmp_path):
+    """If the password ever slips into a log message, the redactor
+    must turn it into ***REDACTED*** before it hits disk."""
+    secret = "supersecret-pw-42"
+    monkeypatch.setattr(settings, "JARVIS_SUDO_PASSWORD", secret)
+    action_logger.log_action(4, "noop", "SUCCESS",
+                             f"accidental leak: {secret} in message")
+    log_path = settings.LOG_DIR / "actions.log"
+    contents = log_path.read_text()
+    assert secret not in contents
+    assert "***REDACTED***" in contents
+
+
+# --- disabled / unknown ---------------------------------------------------- #
+
+def test_unknown_action_rejected():
+    env = dispatcher.dispatch("totally_made_up_action")
+    assert env["status"] == "rejected"
+    assert "unbekannt" in env["reason"].lower()
+
+
+def test_mac_control_disabled_rejects(monkeypatch):
+    monkeypatch.setattr(settings, "MAC_CONTROL_ENABLED", False)
+    env = dispatcher.dispatch("get_time")
+    assert env["status"] == "rejected"
+    assert "MAC_CONTROL_ENABLED" in env["reason"]
+
+
+# --- voice phrase detectors ------------------------------------------------ #
+
+@pytest.mark.parametrize("text", [
+    "jarvis halt", "Jarvis stopp", "JARVIS halt", "notaus",
+    "Jarvis halt alles",
+])
+def test_kill_switch_phrase_matches(text):
+    assert stt.is_kill_switch_phrase(text)
+
+
+@pytest.mark.parametrize("text", [
+    "halt",       # bare — only barge-in, not kill switch
+    "stop",       # same
+    "okay halt",  # same
+    "halt mal",
+    "",
+])
+def test_kill_switch_phrase_does_not_match_bare_stops(text):
+    assert not stt.is_kill_switch_phrase(text)
+
+
+@pytest.mark.parametrize("text", [
+    "jarvis weiter", "Jarvis resume", "jarvis fortsetzen",
+])
+def test_resume_phrase_matches(text):
+    assert stt.is_resume_phrase(text)

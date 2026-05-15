@@ -181,6 +181,115 @@
     background: var(--fg-dim);
     color: #0d1117;
   }
+
+  /* mac_control status bar */
+  #macbar {
+    padding: 8px 14px;
+    background: var(--bg-soft);
+    border-bottom: 1px solid #21262d;
+    display: none;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+  #macbar.show { display: flex; }
+  #macbar .label {
+    color: var(--fg-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .badge {
+    padding: 3px 8px;
+    border-radius: 10px;
+    background: rgba(139, 148, 158, 0.18);
+    color: var(--fg-dim);
+    font-weight: 600;
+    font-size: 12px;
+    border: 1px solid transparent;
+  }
+  .badge.on  { background: rgba(46,160,67,0.18);  color: #56d364; border-color: rgba(46,160,67,0.45); }
+  .badge.off { background: rgba(139,148,158,0.10); color: #6e7681; }
+  .badge.bad { background: rgba(248,81,73,0.18);  color: #f85149; border-color: rgba(248,81,73,0.45); }
+
+  #emergency {
+    margin-left: auto;
+    background: var(--err);
+    color: #fff;
+    border: 0;
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+  }
+  #emergency.armed { background: var(--err); }
+  #emergency.killed { background: var(--you); }
+
+  /* pending action cards */
+  #pending-area {
+    padding: 0 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  #pending-area:empty { padding: 0; }
+  .pending {
+    margin-top: 10px;
+    padding: 12px 14px;
+    border-radius: var(--radius);
+    background: rgba(88,166,255,0.10);
+    border: 1px solid rgba(88,166,255,0.45);
+  }
+  .pending.tier4 {
+    background: rgba(248,81,73,0.10);
+    border-color: rgba(248,81,73,0.45);
+  }
+  .pending .ptier {
+    display: inline-block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--fg-dim);
+    margin-bottom: 4px;
+  }
+  .pending .psum {
+    font-size: 14px;
+    color: var(--fg);
+    margin-bottom: 10px;
+    word-wrap: break-word;
+  }
+  .pending .prow {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .pending input[type="password"] {
+    flex: 1;
+    min-width: 140px;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid #30363d;
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 14px;
+  }
+  .pending button {
+    background: var(--accent);
+    color: #0d1117;
+    border: 0;
+    padding: 8px 14px;
+    border-radius: var(--radius);
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .pending button.deny {
+    background: var(--bg);
+    color: var(--fg-dim);
+    border: 1px solid #30363d;
+  }
 </style>
 </head>
 <body>
@@ -188,6 +297,18 @@
   <h1>JARVIS</h1>
   <span id="status">disconnected</span>
 </header>
+
+<section id="macbar">
+  <span class="label">mac</span>
+  <span class="badge" id="b-mac">off</span>
+  <span class="badge" id="b-t2">T2</span>
+  <span class="badge" id="b-t3">T3</span>
+  <span class="badge" id="b-t4">T4</span>
+  <span class="badge" id="b-kill">armed</span>
+  <button id="emergency" class="armed">⏹ Stop</button>
+</section>
+
+<section id="pending-area"></section>
 
 <section id="setup">
   <label for="server">Server URL</label>
@@ -235,6 +356,14 @@
   const sendEl = $("send");
   const micEl = $("mic");
   const connectEl = $("connect");
+  const macbarEl = $("macbar");
+  const pendingArea = $("pending-area");
+  const emergencyEl = $("emergency");
+  const bMac = $("b-mac");
+  const bT2 = $("b-t2");
+  const bT3 = $("b-t3");
+  const bT4 = $("b-t4");
+  const bKill = $("b-kill");
 
   // Persist preferences locally — never sent anywhere we don't control.
   serverEl.value = localStorage.getItem("jarvis.url") || location.origin;
@@ -289,11 +418,15 @@
       setupEl.style.display = "none";
       sendEl.disabled = false;
       micEl.disabled = false;
+      macbarEl.classList.add("show");
       inputEl.focus();
       // iOS Safari blocks SpeechSynthesis until a user-gesture-triggered
       // utterance fires once. The Connect tap counts — speak an empty
       // string so the *real* reply later actually plays.
       unlockSpeech();
+      // Initial mac_control status fetch + start the slow background poll.
+      refreshMac();
+      startMacPoll();
     };
     socket.onmessage = (ev) => {
       try {
@@ -303,6 +436,9 @@
           addMsg(msg.reply, "jarvis");
           speak(msg.reply);
         }
+        // Replies often follow a mac_action tool call — refresh status
+        // immediately so pending cards appear without waiting for poll.
+        refreshMac();
       } catch (exc) {
         addMsg("Bad message from server: " + exc, "err");
       }
@@ -552,6 +688,167 @@
   micEl.addEventListener("click", () => {
     if (isRecording) stopRecording();
     else startRecording();
+  });
+
+  // ─── mac_control: status badges, pending-action cards, kill switch ───
+  let macPollTimer = null;
+
+  async function authedFetch(path, init) {
+    const url = (serverEl.value || "").trim().replace(/\/$/, "") + path;
+    const token = (tokenEl.value || "").trim();
+    const opts = init ? { ...init } : {};
+    opts.headers = {
+      ...(opts.headers || {}),
+      Authorization: "Bearer " + token,
+    };
+    return fetch(url, opts);
+  }
+
+  function startMacPoll() {
+    if (macPollTimer) clearInterval(macPollTimer);
+    // 10 s slow poll — refreshMac() is also called after every chat
+    // reply, so this is just a safety net for confirmations that
+    // expired or were triggered by another client.
+    macPollTimer = setInterval(refreshMac, 10000);
+  }
+
+  async function refreshMac() {
+    let data;
+    try {
+      const res = await authedFetch("/permissions");
+      if (!res.ok) return;
+      data = await res.json();
+    } catch { return; }
+    renderBadges(data);
+    renderPending(data.pending || []);
+  }
+
+  function renderBadges(d) {
+    bMac.textContent = d.enabled ? "mac on" : "mac off";
+    bMac.className = "badge " + (d.enabled ? "on" : "off");
+
+    bT2.textContent = "T2 " + (d.tier2_unlocked ? "✓" : "lock");
+    bT2.className   = "badge " + (d.tier2_unlocked ? "on" : "off");
+
+    bT3.textContent = "T3 ask";
+    bT3.className   = "badge " + (d.enabled ? "on" : "off");
+
+    bT4.textContent = "T4 " + (d.tier4_available ? "pw" : "off");
+    bT4.className   = "badge " + (d.tier4_available ? "on" : "off");
+
+    const killed = d.kill_switch && d.kill_switch.killed;
+    bKill.textContent = killed ? "KILLED" : "armed";
+    bKill.className   = "badge " + (killed ? "bad" : "on");
+    emergencyEl.textContent = killed ? "▶ Resume" : "⏹ Stop";
+    emergencyEl.className   = killed ? "killed" : "armed";
+  }
+
+  function renderPending(items) {
+    pendingArea.innerHTML = "";
+    for (const p of items) {
+      const card = document.createElement("div");
+      card.className = "pending" + (p.tier === 4 ? " tier4" : "");
+      const tierLabel = document.createElement("span");
+      tierLabel.className = "ptier";
+      tierLabel.textContent = `Tier ${p.tier} · ${p.action} · ${p.age_s}s alt`;
+      const sum = document.createElement("div");
+      sum.className = "psum";
+      sum.textContent = p.summary;
+      const row = document.createElement("div");
+      row.className = "prow";
+
+      if (p.requires_password) {
+        const pw = document.createElement("input");
+        pw.type = "password";
+        pw.placeholder = "JARVIS-Passwort";
+        pw.autocomplete = "off";
+        const ok = document.createElement("button");
+        ok.textContent = "✓ Confirm";
+        ok.addEventListener("click", () => confirmTier4(p.id, pw.value, card));
+        pw.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") { e.preventDefault(); ok.click(); }
+        });
+        const deny = document.createElement("button");
+        deny.className = "deny";
+        deny.textContent = "✗ Cancel";
+        deny.addEventListener("click", () => confirmTier3(p.id, false, card));
+        row.append(pw, ok, deny);
+      } else {
+        const ok = document.createElement("button");
+        ok.textContent = "✓ Yes";
+        ok.addEventListener("click", () => confirmTier3(p.id, true, card));
+        const deny = document.createElement("button");
+        deny.className = "deny";
+        deny.textContent = "✗ No";
+        deny.addEventListener("click", () => confirmTier3(p.id, false, card));
+        row.append(ok, deny);
+      }
+
+      card.append(tierLabel, sum, row);
+      pendingArea.appendChild(card);
+    }
+  }
+
+  async function confirmTier3(id, approve, card) {
+    card.style.opacity = "0.5";
+    try {
+      const res = await authedFetch("/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, approve }),
+      });
+      const data = await res.json();
+      addMsg(
+        (approve ? "✓ " : "✗ ") +
+        (data.result || data.reason || JSON.stringify(data)),
+        data.status === "ok" ? "jarvis" : "err",
+      );
+    } catch (exc) {
+      addMsg("Confirm fehlgeschlagen: " + exc, "err");
+    } finally {
+      refreshMac();
+    }
+  }
+
+  async function confirmTier4(id, password, card) {
+    if (!password) {
+      addMsg("Passwort eingeben.", "err");
+      return;
+    }
+    card.style.opacity = "0.5";
+    try {
+      const res = await authedFetch("/tier4-confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, password }),
+      });
+      const data = await res.json();
+      addMsg(
+        (data.status === "ok" ? "✓ " : "✗ ") +
+        (data.result || data.reason || JSON.stringify(data)),
+        data.status === "ok" ? "jarvis" : "err",
+      );
+    } catch (exc) {
+      addMsg("Tier-4-Confirm fehlgeschlagen: " + exc, "err");
+    } finally {
+      refreshMac();
+    }
+  }
+
+  emergencyEl.addEventListener("click", async () => {
+    const killed = emergencyEl.classList.contains("killed");
+    try {
+      const res = await authedFetch(killed ? "/resume" : "/emergency-stop",
+                                    { method: "POST" });
+      const data = await res.json();
+      addMsg(killed ? "Wieder aktiv." :
+                      `🛑 Kill switch: ${data.reason || "active"}`,
+             killed ? "jarvis" : "err");
+    } catch (exc) {
+      addMsg("Kill-Switch-Toggle fehlgeschlagen: " + exc, "err");
+    } finally {
+      refreshMac();
+    }
   });
 
   connectEl.addEventListener("click", connect);

@@ -1,0 +1,3 @@
+# Dev-only — for running the test suite. Install with:
+#     pip install -r requirements-dev.txt
+pytest>=8.0

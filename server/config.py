@@ -86,6 +86,17 @@ class Settings:
     RATE_LIMIT_PER_MINUTE: int = 10
     MAX_HISTORY_TURNS: int = 20  # user+assistant pairs kept per session
 
+    # --- mac_control ---
+    # Master switch for the macOS automation surface. Off by default; set
+    # to 1 in .env once you've granted the TCC permissions and accepted
+    # the model in README_MAC_CONTROL.md.
+    MAC_CONTROL_ENABLED: bool = os.getenv("MAC_CONTROL_ENABLED", "0") == "1"
+    # Whether Tier 2 (apps & media) is granted automatically at startup
+    # without an explicit unlock. Default off — see permission_manager.
+    MAC_TIER2_AUTO_UNLOCK: bool = os.getenv("MAC_TIER2_AUTO_UNLOCK", "0") == "1"
+    # Tier-4 (full system) gate. NEVER logged. Empty string disables Tier 4.
+    JARVIS_SUDO_PASSWORD: str = os.getenv("JARVIS_SUDO_PASSWORD", "")
+
     # --- Paths ---
     LOG_DIR: Path = PROJECT_ROOT / "logs"
     REJECTED_LOG: Path = LOG_DIR / "rejected.log"

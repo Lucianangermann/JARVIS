@@ -42,6 +42,8 @@ from pydantic import BaseModel, Field
 from .auth import authorize_websocket, require_token
 from .brain import Brain
 from .config import settings
+from .mac_control import dispatcher as mac_dispatcher
+from .mac_control import kill_switch as mac_kill_switch
 
 # stt and tts are optional — the voice stack (whisper, pyttsx3, …) may not
 # be installed. The text endpoints work without them.
@@ -153,6 +155,16 @@ class ChatResponse(BaseModel):
     transcript: str | None = None
 
 
+class ConfirmRequest(BaseModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    approve: bool = True
+
+
+class Tier4ConfirmRequest(BaseModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=200)
+
+
 # --- Routes --------------------------------------------------------------- #
 
 @app.get("/")
@@ -257,6 +269,62 @@ async def ws(websocket: WebSocket) -> None:
         with contextlib.suppress(Exception):
             await websocket.send_json({"error": str(exc)})
             await websocket.close()
+
+
+# --- mac_control routes --------------------------------------------------- #
+
+@app.get("/permissions")
+def permissions(token: str = Depends(require_token)) -> dict[str, Any]:
+    """Snapshot of the permission/kill-switch state, plus current pending
+    actions. Used by the web UI to render the status row + confirmation
+    cards. Never includes the Tier-4 password or its hash."""
+    return mac_dispatcher.status()
+
+
+@app.post("/confirm")
+def confirm(
+    payload: ConfirmRequest, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    """Tier 2 / Tier 3 confirmation. Approves and runs (approve=True) or
+    cancels (approve=False) a pending action. Tier 4 pendings here return
+    a rejection — they must go through /tier4-confirm with the password.
+    """
+    from .mac_control import confirmation as _cf
+
+    peek = _cf.peek(payload.id)
+    if peek is None:
+        raise HTTPException(status_code=404, detail="Pending action not found or expired.")
+    if peek.requires_password:
+        raise HTTPException(
+            status_code=400,
+            detail="This pending action requires Tier-4 password — use /tier4-confirm.",
+        )
+    return (mac_dispatcher.consume(payload.id) if payload.approve
+            else mac_dispatcher.cancel(payload.id))
+
+
+@app.post("/tier4-confirm")
+def tier4_confirm(
+    payload: Tier4ConfirmRequest, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    """Tier 4 confirmation: requires the JARVIS_SUDO_PASSWORD value. The
+    password is checked via constant-time compare in the dispatcher and
+    is never logged."""
+    return mac_dispatcher.consume(payload.id, password=payload.password)
+
+
+@app.post("/emergency-stop")
+def emergency_stop(token: str = Depends(require_token)) -> dict[str, Any]:
+    """Trigger the kill switch — all Tier 2+ actions refuse until /resume."""
+    mac_kill_switch.trigger("api request")
+    return mac_kill_switch.status()
+
+
+@app.post("/resume")
+def resume(token: str = Depends(require_token)) -> dict[str, Any]:
+    """Clear the kill switch. Tier 2 stays locked — explicit reconfirm needed."""
+    mac_kill_switch.resume()
+    return mac_kill_switch.status()
 
 
 # --- Web UI --------------------------------------------------------------- #
