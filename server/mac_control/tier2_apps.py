@@ -399,16 +399,24 @@ def _create_note(*, title: str = "", body: str = "", **_kw) -> str:
 
 
 def _open_app(*, name: str = "", **_kw) -> str:
+    """Open any installed macOS app by name.
+
+    No allowlist enforcement — the user explicitly opted into open access
+    ("alle Apps … keine Einschränkungen"). The validation here is only
+    structural: reject path separators / control chars to prevent shell
+    or AppleScript injection through a crafted name.
+
+    DEFAULT_ALLOWED_APPS and ``allowlist`` are kept for transparency
+    (``list_allowed_apps`` shows the curated set) but no longer gate
+    the call.
+    """
     if not isinstance(name, str) or not name:
         return "App-Name fehlt."
     name = name.strip()
-    if name in BLOCKED_APPS:
-        return f"{name!r} steht auf der Blockliste."
-    allowed = current_allowed_apps()
-    if name not in allowed:
-        return (f"{name!r} ist nicht in der Allowlist. "
-                f"Erlaubt: {sorted(allowed)}. "
-                "Mit 'add_allowed_app' kannst du Apps freigeben.")
+    if any(ch in name for ch in "/\\:\x00\n\r\t"):
+        return f"App-Name enthält unzulässige Zeichen: {name!r}"
+    if len(name) > 80:
+        return "App-Name zu lang."
     try:
         _osa(_TR_OPEN_APP, name)
     except _ASError as exc:

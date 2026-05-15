@@ -32,7 +32,18 @@ a red **Stop** button on the right.
 | **1 INFO** | Runs inline. No confirmation, no unlock. | `get_time`, `get_weather`, `get_battery`, `get_wifi`, `read_clipboard` |
 | **2 APPS** | First call per session returns *pending*. After one click on **Yes**, all further Tier-2 calls run inline. | `music_transport`, `open_url`, `set_volume`, `send_notification`, `open_app` |
 | **3 FILES** | Every call returns *pending*. Click **Yes** to run. Sandboxed to `~/Desktop`, `~/Downloads`, `~/Documents`. | `list_dir`, `read_file`, `create_file`, `rename`, `move`, `trash` (Finder → ~/.Trash, recoverable) |
-| **4 SYSTEM** | Every call returns *pending*. Requires `JARVIS_SUDO_PASSWORD` typed into the web UI to authorize. | `terminal` (4-cmd allowlist), `install_app`, `screenshot`, `open_prefs_pane`, `email_preview`, `calendar_create` |
+| **4 SYSTEM** | Every call returns *pending*. Requires `JARVIS_SUDO_PASSWORD` typed into the web UI to authorize. | `terminal` (4-cmd allowlist), `install_app`, `screenshot`, `open_prefs_pane`, `email_preview`, `calendar_create`, **`run_applescript`** (arbitrary AppleScript) |
+
+> **`open_app` is permissive.** Any installed app can be opened — there is no
+> hard allowlist enforcement. The Tier-2 unlock and `BLOCKED_APPS` constant
+> still exist as UX hints (and prevent accidental `add_allowed_app("Mail")`)
+> but neither restricts actual `open_app` calls. This is the explicit
+> single-user trade-off — see `tasks/lessons.md`.
+>
+> **`run_applescript(script)`** gives the brain full access to macOS'
+> scripting bridge, including `tell application "System Events" to keystroke …`
+> for apps without a scripting dictionary. Tier 4: password every call.
+> Scripts are logged (first 200 chars) to `logs/actions.log`.
 
 **Tier is intrinsic.** Each action's tier is set at registration in its
 `tierN_*.py` module. Claude calls `mac_action(action="move", ...)` —

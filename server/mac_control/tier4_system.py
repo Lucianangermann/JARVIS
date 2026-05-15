@@ -259,6 +259,52 @@ end isoToDate
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
 
 
+_APPLESCRIPT_MAX = 4000
+_APPLESCRIPT_TIMEOUT_S = 30
+
+
+def _run_applescript(*, script: str = "", **_kw) -> str:
+    """Run *arbitrary* AppleScript. Gives JARVIS full operate-any-app
+    capability via macOS' scripting bridge or System Events keystrokes.
+
+    Tier 4 — password every time. The script source is logged (capped at
+    200 chars) so an audit trail exists in ``logs/actions.log``.
+
+    Hard rules still in effect
+    --------------------------
+    - subprocess uses an argv list, not shell=True.
+    - The script is fed via stdin; nothing the LLM produces is ever
+      interpolated into the argv.
+    - Output is truncated to 1000 chars before being returned to the
+      brain, so a "tell application Mail to get every message" doesn't
+      dump the entire inbox into chat history.
+    """
+    if not isinstance(script, str) or not script.strip():
+        return "script fehlt."
+    if len(script) > _APPLESCRIPT_MAX:
+        return f"Script zu lang (Limit {_APPLESCRIPT_MAX} Zeichen)."
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/osascript", "-"],
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=_APPLESCRIPT_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return f"AppleScript timeout nach {_APPLESCRIPT_TIMEOUT_S}s."
+    except FileNotFoundError as exc:
+        return f"osascript nicht gefunden: {exc}"
+    if proc.returncode != 0:
+        err = proc.stderr.strip()
+        return f"AppleScript-Fehler: {err or proc.returncode}"
+    out = proc.stdout.strip()
+    if len(out) > 1000:
+        out = out[:1000] + " …(gekürzt)"
+    return out or "AppleScript ausgeführt."
+
+
 def _add_allowed_app(*, name: str = "", **_kw) -> str:
     from . import allowlist as _al
     ok, msg = _al.add(name)
@@ -307,6 +353,7 @@ _TIER4: tuple[tuple[str, callable, callable], ...] = (
     ("calendar_create",    _calendar_create,    lambda **p: f"Termin: {p.get('title','')[:60]} ({p.get('start','')}→{p.get('end','')})"),
     ("add_allowed_app",    _add_allowed_app,    lambda **p: f"App in Allowlist aufnehmen: {p.get('name','')}"),
     ("remove_allowed_app", _remove_allowed_app, lambda **p: f"App aus Allowlist entfernen: {p.get('name','')}"),
+    ("run_applescript",    _run_applescript,    lambda **p: f"AppleScript ausführen ({len(p.get('script','') or '')} Z.): {(p.get('script','') or '').splitlines()[0][:80]}"),
 )
 
 

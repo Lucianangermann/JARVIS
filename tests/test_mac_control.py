@@ -325,6 +325,72 @@ def test_create_note_truncates_long_body(monkeypatch):
     assert "gekürzt" in result.lower() or "gekuerzt" in result.lower()
 
 
+# --- open_app (permissive) ------------------------------------------------- #
+
+def test_open_app_accepts_arbitrary_name(monkeypatch):
+    """No allowlist enforcement — any well-formed name reaches osascript."""
+    from server.mac_control import tier2_apps
+    seen = {}
+    monkeypatch.setattr(
+        tier2_apps, "_osa",
+        lambda script, *args, **_kw: seen.setdefault("args", args) and "",
+    )
+    result = tier2_apps._open_app(name="Photoshop")
+    assert "gestartet" in result.lower()
+    assert seen["args"] == ("Photoshop",)
+
+
+def test_open_app_rejects_injection_chars():
+    from server.mac_control import tier2_apps
+    for bad in ("../etc", "with/slash", "name\nwith\nnewline"):
+        result = tier2_apps._open_app(name=bad)
+        assert "unzulässige" in result.lower(), f"{bad} should be refused"
+
+
+# --- run_applescript (Tier 4) ---------------------------------------------- #
+
+def test_run_applescript_rejects_empty():
+    from server.mac_control import tier4_system
+    assert "fehlt" in tier4_system._run_applescript(script="").lower()
+    assert "fehlt" in tier4_system._run_applescript(script="   ").lower()
+
+
+def test_run_applescript_rejects_oversize():
+    from server.mac_control import tier4_system
+    huge = "tell me\n" * 1000
+    assert "zu lang" in tier4_system._run_applescript(script=huge).lower()
+
+
+def test_run_applescript_passes_script_via_stdin(monkeypatch):
+    """The LLM-produced script must arrive via stdin, never on argv."""
+    from server.mac_control import tier4_system
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = "result"
+        stderr = ""
+
+    def fake_run(argv, *, input=None, **_kw):
+        captured["argv"] = argv
+        captured["input"] = input
+        return FakeProc()
+
+    monkeypatch.setattr(tier4_system.subprocess, "run", fake_run)
+    out = tier4_system._run_applescript(script='tell application "Finder" to count windows')
+    # argv is fixed: just osascript and "-" (read from stdin)
+    assert captured["argv"] == ["/usr/bin/osascript", "-"]
+    assert captured["input"].startswith("tell application")
+    assert out == "result"
+
+
+def test_run_applescript_is_tier4():
+    """Hard-pin the tier so a future refactor can't silently demote it."""
+    from server.mac_control import permission_manager as pm
+    from server.mac_control.permission_manager import Tier
+    assert pm.get("run_applescript").tier == Tier.SYSTEM
+
+
 # --- create_reminder ------------------------------------------------------- #
 
 def test_create_reminder_rejects_empty_title():
