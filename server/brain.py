@@ -18,6 +18,7 @@ Design notes
 from __future__ import annotations
 
 import json
+import re
 import threading
 from typing import Any
 
@@ -349,8 +350,39 @@ class Brain:
         return (json.dumps(envelope, ensure_ascii=False), is_error)
 
 
+_PARAGRAPH_SPLIT = re.compile(r"\n\s*\n+")
+_WS = re.compile(r"\s+")
+
+
+def _dedupe_paragraphs(text: str) -> str:
+    """Drop consecutive identical paragraphs.
+
+    Haiku occasionally emits the same sentence twice when uncertain —
+    sometimes as two identical text blocks, sometimes as one block with
+    the content duplicated and separated by a blank line. The TTS then
+    reads it twice. This collapses adjacent paragraphs whose
+    whitespace-normalised form matches.
+    """
+    if not text:
+        return text
+    paras = _PARAGRAPH_SPLIT.split(text)
+    out: list[str] = []
+    last_norm: str | None = None
+    for p in paras:
+        norm = _WS.sub(" ", p).strip().lower()
+        if norm and norm == last_norm:
+            continue
+        out.append(p)
+        last_norm = norm
+    return "\n\n".join(out)
+
+
 def _join_text(resp: Message) -> str:
-    """Concatenate every text block in the response — ignore tool_use blocks."""
-    return "".join(
-        block.text for block in resp.content if block.type == "text"
-    ).strip()
+    """Concatenate every text block in the response — ignore tool_use blocks.
+
+    Multiple text blocks are joined with a paragraph break so the dedup
+    pass can recognise identical adjacent blocks (otherwise "X" + "X"
+    becomes "XX" and looks like a single weird sentence)."""
+    blocks = [b.text for b in resp.content if b.type == "text"]
+    joined = "\n\n".join(b.strip() for b in blocks if b.strip())
+    return _dedupe_paragraphs(joined).strip()

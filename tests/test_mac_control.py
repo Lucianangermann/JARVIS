@@ -391,6 +391,45 @@ def test_run_applescript_is_tier4():
     assert pm.get("run_applescript").tier == Tier.SYSTEM
 
 
+# --- brain reply dedup ----------------------------------------------------- #
+
+def test_dedupe_collapses_repeated_paragraphs():
+    from server.brain import _dedupe_paragraphs
+    twice = 'Ich brauche mehr Info.\n\nIch brauche mehr Info.'
+    assert _dedupe_paragraphs(twice) == 'Ich brauche mehr Info.'
+
+
+def test_dedupe_preserves_distinct_paragraphs():
+    from server.brain import _dedupe_paragraphs
+    t = "Erstens.\n\nZweitens.\n\nDrittens."
+    assert _dedupe_paragraphs(t) == t
+
+
+def test_dedupe_ignores_case_and_whitespace_only_differences():
+    from server.brain import _dedupe_paragraphs
+    t = "Hallo Welt.\n\n  HALLO  WELT. "
+    assert _dedupe_paragraphs(t) == "Hallo Welt."
+
+
+def test_join_text_collapses_duplicate_blocks():
+    """The real bug: Haiku returned the same text in two content blocks.
+    _join_text must dedupe them, not concatenate."""
+    from server.brain import _join_text
+
+    class FakeBlock:
+        def __init__(self, text):
+            self.type = "text"
+            self.text = text
+
+    class FakeResp:
+        content = [
+            FakeBlock("Ich benötige mehr Informationen."),
+            FakeBlock("Ich benötige mehr Informationen."),
+        ]
+
+    assert _join_text(FakeResp()) == "Ich benötige mehr Informationen."
+
+
 # --- create_reminder ------------------------------------------------------- #
 
 def test_create_reminder_rejects_empty_title():
