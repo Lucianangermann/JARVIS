@@ -133,6 +133,15 @@ FAST_INTERRUPT_MISS_TOLERANCE = 2   # allow 2 sub-threshold blocks (20ms dip)
 # transients) cannot, even when chained into a burst.
 FAST_INTERRUPT_MIN_RUN_BLOCKS = 3
 
+# Speex's adaptive echo filter needs ~200-300 ms to converge to a fresh
+# TTS output path. During that window the cleaned mic stream leaks 1000+
+# RMS echo and falsely trips the fast-interrupt (looks like a sustained
+# vowel from the AEC residual). We suspend fast-interrupt accumulation
+# for this many blocks after each idle → busy transition. Whisper-based
+# barge-in stays active (its hallucination filter handles echo).
+AEC_CONVERGENCE_GRACE_S = 0.35
+AEC_GRACE_BLOCKS = int(AEC_CONVERGENCE_GRACE_S / BLOCK_S)
+
 # Once the gate opens we hold it open for this long, even if the level
 # drops back below threshold. This captures full words — consonants
 # like the "st" in "Stop" are much quieter than vowels and would
@@ -331,6 +340,9 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     fast_int_misses = 0
     fast_int_run = 0
     fast_int_max_run = 0
+    # Countdown set on each idle→busy transition; while > 0 the
+    # fast-interrupt accumulator is paused to let AEC converge.
+    aec_grace_blocks = 0
 
     # Brain work runs in a worker thread so the main loop can keep
     # processing audio (and hear "Stop" / "Halt") while JARVIS thinks
@@ -455,13 +467,16 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
 
                 # idle → busy transition: clear the barge-in rolling buffer
                 # so audio captured *before* JARVIS started talking can't
-                # trigger a false barge-in. Common case this fixes: the user
-                # said "Jarvis, was kannst du …", the tail of that utterance
-                # is still in the rolling buffer when TTS starts replying,
-                # and the barge-in check sees "starts with wake word" → cancels
-                # the reply we just generated.
+                # trigger a false barge-in. Plus start the AEC convergence
+                # grace so the first ~350 ms of TTS playback doesn't trip
+                # fast-interrupt on echo residual.
                 if busy_now and not last_busy:
                     barge_in_buffer.clear()
+                    aec_grace_blocks = AEC_GRACE_BLOCKS
+                    fast_int_count = 0
+                    fast_int_misses = 0
+                    fast_int_run = 0
+                    fast_int_max_run = 0
                 last_busy = busy_now
 
                 if busy_now:
@@ -484,7 +499,13 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                     # run sat above the threshold. Keystrokes & mouse
                     # clicks have runs of 1-3 blocks, so even a burst of
                     # them won't satisfy the run requirement.
-                    if rms > FAST_INTERRUPT_RMS:
+                    #
+                    # While aec_grace_blocks > 0 we skip accumulation: AEC
+                    # hasn't converged to the new TTS path yet and the
+                    # cleaned signal contains residual echo at 1000+ RMS.
+                    if aec_grace_blocks > 0:
+                        aec_grace_blocks -= 1
+                    elif rms > FAST_INTERRUPT_RMS:
                         fast_int_count += 1
                         fast_int_misses = 0
                         fast_int_run += 1
