@@ -227,6 +227,18 @@
   #emergency.armed { background: var(--err); }
   #emergency.killed { background: var(--you); }
 
+  #voice-toggle {
+    margin-left: 8px;
+    background: transparent;
+    color: var(--fg-dim);
+    border: 1px solid #30363d;
+    padding: 4px 9px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  #voice-toggle.on { color: var(--you); border-color: rgba(46,160,67,0.45); }
+
   /* pending action cards */
   #pending-area {
     padding: 0 14px;
@@ -334,7 +346,8 @@
   <span class="badge" id="b-t3">T3</span>
   <span class="badge" id="b-t4">T4</span>
   <span class="badge" id="b-kill">armed</span>
-  <button id="emergency" class="armed">⏹ Stop</button>
+  <button id="voice-toggle" title="Browser-Sprachausgabe">🔊 off</button>
+  <button id="emergency" class="armed" title="Stop · Esc">⏹ Stop · Esc</button>
 </section>
 
 <section id="pending-area"></section>
@@ -393,6 +406,7 @@
   const bT3 = $("b-t3");
   const bT4 = $("b-t4");
   const bKill = $("b-kill");
+  const voiceToggleEl = $("voice-toggle");
 
   // Persist preferences locally — never sent anywhere we don't control.
   serverEl.value = localStorage.getItem("jarvis.url") || location.origin;
@@ -528,13 +542,58 @@
     speechSynthesis.onvoiceschanged = pick;
   }
 
+  // Browser-side TTS is opt-in via the macbar toggle (localStorage).
+  // Default OFF — when JARVIS runs as a local Mac server, the server's
+  // own `say` already speaks through the speakers and the browser would
+  // just double up. iPhone users (or anyone running the server on a
+  // headless box) flip the toggle on.
+  let speakInBrowser = localStorage.getItem("jarvis.speak") === "1";
+
+  function applyVoiceToggle() {
+    voiceToggleEl.textContent = speakInBrowser ? "🔊 on" : "🔊 off";
+    voiceToggleEl.classList.toggle("on", speakInBrowser);
+  }
+
   function speak(text) {
+    if (!speakInBrowser) return;
     if (!("speechSynthesis" in window) || !text) return;
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = "de-DE";
     if (speechVoice) u.voice = speechVoice;
     speechSynthesis.speak(u);
+  }
+
+  voiceToggleEl.addEventListener("click", () => {
+    speakInBrowser = !speakInBrowser;
+    localStorage.setItem("jarvis.speak", speakInBrowser ? "1" : "0");
+    applyVoiceToggle();
+  });
+  applyVoiceToggle();
+
+  // Global Escape → emergency stop. Catches the user's "make it stop"
+  // reflex without needing voice or aiming for the button. Works
+  // anywhere except inside text inputs / the password card (where Esc
+  // should still let them dismiss the field).
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    if (ev.target && ["INPUT", "TEXTAREA"].includes(ev.target.tagName)) return;
+    ev.preventDefault();
+    emergencyStop();
+  });
+
+  async function emergencyStop() {
+    try {
+      const res = await authedFetch("/emergency-stop", { method: "POST" });
+      const data = await res.json();
+      // Also cancel any in-flight browser speech so Esc feels instant.
+      try { speechSynthesis.cancel(); } catch {}
+      addMsg(`🛑 Kill switch: ${data.reason || "active"}`, "err");
+    } catch (exc) {
+      addMsg("Kill-Switch fehlgeschlagen: " + exc, "err");
+    } finally {
+      refreshMac();
+    }
   }
 
   async function ensureMic() {
@@ -909,19 +968,19 @@
   }
 
   emergencyEl.addEventListener("click", async () => {
-    const killed = emergencyEl.classList.contains("killed");
-    try {
-      const res = await authedFetch(killed ? "/resume" : "/emergency-stop",
-                                    { method: "POST" });
-      const data = await res.json();
-      addMsg(killed ? "Wieder aktiv." :
-                      `🛑 Kill switch: ${data.reason || "active"}`,
-             killed ? "jarvis" : "err");
-    } catch (exc) {
-      addMsg("Kill-Switch-Toggle fehlgeschlagen: " + exc, "err");
-    } finally {
-      refreshMac();
+    if (emergencyEl.classList.contains("killed")) {
+      // resume path
+      try {
+        await authedFetch("/resume", { method: "POST" });
+        addMsg("Wieder aktiv.", "jarvis");
+      } catch (exc) {
+        addMsg("Resume fehlgeschlagen: " + exc, "err");
+      } finally {
+        refreshMac();
+      }
+      return;
     }
+    emergencyStop();
   });
 
   connectEl.addEventListener("click", connect);

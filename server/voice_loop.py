@@ -74,6 +74,13 @@ MAX_SPEECH_S = 15.0                    # cap utterances so Whisper stays snappy
 PRE_ROLL_S = 0.4
 PRE_ROLL_BLOCKS = int(PRE_ROLL_S / BLOCK_S)
 
+# Speech-onset hardening: require N consecutive blocks above the speech
+# RMS threshold before we declare in_speech. A single 10 ms peak — which
+# is what a keyboard click looks like — won't pass; a real vowel onset
+# (40-80 ms of continuous energy) will. Keeps Whisper from hallucinating
+# random German words out of typing noise.
+SPEECH_SEED_BLOCKS = 3   # 30 ms of uninterrupted above-threshold audio
+
 # Barge-in: while JARVIS is currently speaking or thinking, the VAD's
 # silence-bounded segments don't fire (no silence — mic hears the
 # speakers). So we transcribe a rolling window every BARGE_IN_INTERVAL_S
@@ -297,6 +304,7 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     pre_roll: "collections.deque" = collections.deque(maxlen=PRE_ROLL_BLOCKS)
 
     in_speech = False
+    speech_seed = 0     # consecutive above-threshold blocks before in_speech latches
     buf: list = []
     silence_blocks = 0
     silence_blocks_to_end = int(SILENCE_HANG_S / BLOCK_S)
@@ -437,6 +445,7 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                     # JARVIS's own voice. Reset state so the moment we
                     # go idle we listen fresh.
                     in_speech = False
+                    speech_seed = 0
                     buf.clear()
                     silence_blocks = 0
                     pre_roll.clear()
@@ -510,11 +519,19 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 if not in_speech:
                     pre_roll.append(block)
                     if rms > SPEECH_RMS_THRESHOLD:
-                        in_speech = True
-                        buf = list(pre_roll)        # keep the pre-roll
-                        buf.append(block)
-                        silence_blocks = 0
-                        print("[MIC] speech started")
+                        speech_seed += 1
+                        if speech_seed >= SPEECH_SEED_BLOCKS:
+                            in_speech = True
+                            speech_seed = 0
+                            buf = list(pre_roll)        # keep the pre-roll
+                            buf.append(block)
+                            silence_blocks = 0
+                            print("[MIC] speech started")
+                    else:
+                        # A single quiet block resets the seed run — that's
+                        # what filters keyboard clicks (10-30 ms peaks with
+                        # long quiet gaps) from triggering speech onset.
+                        speech_seed = 0
                     continue
 
                 # In-speech: keep accumulating, watch for sustained silence.
