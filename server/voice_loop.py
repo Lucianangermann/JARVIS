@@ -339,6 +339,14 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     brain_thread: threading.Thread | None = None
     brain_cancel = threading.Event()
 
+    # When the user barges in mid-reply with a new "Jarvis <command>"
+    # utterance, the Whisper-based barge-in detector captures the
+    # command text but the audio queue has already been drained by
+    # fast-interrupt, so the idle VAD never gets a chance to rebuild a
+    # segment. We stash the transcribed command here and dispatch it
+    # the moment the old brain thread finishes.
+    pending_followup_cmd: str | None = None
+
     def _brain_work(cmd: str, cancel_evt: threading.Event) -> None:
         try:
             reply = brain.reply(session, cmd)
@@ -390,15 +398,27 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 stt.starts_with_wake_word(transcript)
                 and len(transcript.split()) >= 2
             )
-            if (
+            is_stop_like = (
                 stt.is_stop_phrase(transcript)
                 or stt.starts_with_stop_phrase(transcript)
-                or wake_with_continuation
-            ):
+            )
+            if is_stop_like or wake_with_continuation:
                 print(f"[JARVIS] BARGE-IN: {transcript!r}")
                 brain_cancel.set()
                 tts.stop()
                 barge_in_buffer.clear()
+                # If the user gave a *new command* (wake word + at least
+                # one follow-up word, and it's not just a stop phrase),
+                # capture it for re-dispatch once the old brain thread
+                # finishes. Without this, fast-interrupt cancels the old
+                # reply but the user's new command is lost because the
+                # audio queue gets drained.
+                if wake_with_continuation and not is_stop_like:
+                    nonlocal pending_followup_cmd
+                    cmd = stt.strip_wake_word(transcript).strip(" ,.!?:;-")
+                    if cmd:
+                        pending_followup_cmd = cmd
+                        print(f"[JARVIS] (captured follow-up: {cmd!r})")
             # Otherwise: most likely JARVIS-on-speakers, just ignore
             # without logging — keeps the console quiet.
         finally:
@@ -521,6 +541,25 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 fast_int_misses = 0
                 fast_int_run = 0
                 fast_int_max_run = 0
+
+                # Did the user barge in with a new command during the
+                # previous reply? If so, dispatch it now (old brain is
+                # confirmed dead because we're past `if busy_now: continue`).
+                if pending_followup_cmd is not None:
+                    cmd = pending_followup_cmd
+                    pending_followup_cmd = None
+                    print(f"[CLIENT: MacBook] [YOU·voice·barge] {cmd}")
+                    brain_cancel.clear()
+                    brain_thread = threading.Thread(
+                        target=_brain_work,
+                        args=(cmd, brain_cancel),
+                        name="jarvis-brain",
+                        daemon=True,
+                    )
+                    brain_thread.start()
+                    if followup_window > 0:
+                        followup_until = time.monotonic() + followup_window
+                    continue
 
                 if not in_speech:
                     pre_roll.append(block)
