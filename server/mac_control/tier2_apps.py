@@ -173,11 +173,26 @@ on run argv
 end run
 """
 
-_TR_OPEN_APP = """
-on run argv
-    tell application (item 1 of argv) to activate
-end run
-"""
+# Common German → AppleScript/bundle-name aliases. macOS AppleScript
+# only knows apps by their bundle name ("Notes"), not their localised
+# UI label ("Notizen") — and `tell application "Notizen" to activate`
+# hangs the script for ~8 s while macOS shows an internal "where is X?"
+# dialog. Mapping here so the user can speak naturally without us
+# guessing per call.
+_APP_ALIASES: dict[str, str] = {
+    "notizen":      "Notes",
+    "erinnerungen": "Reminders",
+    "kalender":     "Calendar",
+    "kontakte":     "Contacts",
+    "rechner":      "Calculator",
+    "vorschau":     "Preview",
+    "musik":        "Music",
+    "nachrichten":  "Messages",
+    "fotos":        "Photos",
+    "karten":       "Maps",
+    "einstellungen": "System Settings",
+    "systemeinstellungen": "System Settings",
+}
 
 # Notes treats `body` as HTML — newlines need to become <br>, and any
 # raw markup in user content must be escaped so it doesn't render as
@@ -401,14 +416,20 @@ def _create_note(*, title: str = "", body: str = "", **_kw) -> str:
 def _open_app(*, name: str = "", **_kw) -> str:
     """Open any installed macOS app by name.
 
-    No allowlist enforcement — the user explicitly opted into open access
-    ("alle Apps … keine Einschränkungen"). The validation here is only
-    structural: reject path separators / control chars to prevent shell
-    or AppleScript injection through a crafted name.
+    Uses ``/usr/bin/open -a`` rather than ``tell application … to
+    activate``. ``open`` returns immediately with a non-zero exit code
+    when the app isn't installed, whereas the AppleScript path hangs
+    for seconds while macOS shows an internal "where is this app?"
+    dialog — that's the timeout the user hit with "Notizen".
 
-    DEFAULT_ALLOWED_APPS and ``allowlist`` are kept for transparency
-    (``list_allowed_apps`` shows the curated set) but no longer gate
-    the call.
+    Localised German app names ("Notizen", "Erinnerungen") are mapped
+    to their AppleScript bundle names ("Notes", "Reminders") via
+    ``_APP_ALIASES`` so the user can speak naturally.
+
+    No allowlist enforcement — the user explicitly opted into open
+    access ("alle Apps … keine Einschränkungen"). The validation here
+    is only structural: reject path separators / control chars to
+    prevent injection through a crafted name.
     """
     if not isinstance(name, str) or not name:
         return "App-Name fehlt."
@@ -417,11 +438,27 @@ def _open_app(*, name: str = "", **_kw) -> str:
         return f"App-Name enthält unzulässige Zeichen: {name!r}"
     if len(name) > 80:
         return "App-Name zu lang."
+
+    # Map common German display names to their AppleScript-friendly form.
+    canonical = _APP_ALIASES.get(name.lower(), name)
+
     try:
-        _osa(_TR_OPEN_APP, name)
-    except _ASError as exc:
+        proc = subprocess.run(
+            ["/usr/bin/open", "-a", canonical],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         return f"App-Start fehlgeschlagen: {exc}"
-    return f"{name} gestartet."
+    if proc.returncode != 0:
+        # `open -a Foo` exits 1 with "Unable to find application…" on
+        # missing apps — surface that cleanly.
+        msg = proc.stderr.strip() or f"exit {proc.returncode}"
+        return f"App {canonical!r} nicht gefunden: {msg}"
+    display = canonical if canonical == name else f"{canonical} (für {name!r})"
+    return f"{display} gestartet."
 
 
 # --- registry -------------------------------------------------------------- #

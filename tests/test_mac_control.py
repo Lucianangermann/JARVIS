@@ -327,17 +327,63 @@ def test_create_note_truncates_long_body(monkeypatch):
 
 # --- open_app (permissive) ------------------------------------------------- #
 
-def test_open_app_accepts_arbitrary_name(monkeypatch):
-    """No allowlist enforcement — any well-formed name reaches osascript."""
+def test_open_app_uses_open_command(monkeypatch):
+    """open_app now shells out to /usr/bin/open -a, not osascript.
+    Verify the right argv is built (and not via shell=True)."""
     from server.mac_control import tier2_apps
-    seen = {}
-    monkeypatch.setattr(
-        tier2_apps, "_osa",
-        lambda script, *args, **_kw: seen.setdefault("args", args) and "",
-    )
+
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv, **_kw):
+        captured["argv"] = argv
+        return FakeProc()
+
+    monkeypatch.setattr(tier2_apps.subprocess, "run", fake_run)
     result = tier2_apps._open_app(name="Photoshop")
     assert "gestartet" in result.lower()
-    assert seen["args"] == ("Photoshop",)
+    assert captured["argv"] == ["/usr/bin/open", "-a", "Photoshop"]
+
+
+def test_open_app_maps_german_aliases(monkeypatch):
+    """Notizen → Notes, Erinnerungen → Reminders — so users can speak
+    the localised name without hitting macOS' 'where is X?' hang."""
+    from server.mac_control import tier2_apps
+
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv, **_kw):
+        captured["argv"] = argv
+        return FakeProc()
+
+    monkeypatch.setattr(tier2_apps.subprocess, "run", fake_run)
+    tier2_apps._open_app(name="Notizen")
+    assert captured["argv"] == ["/usr/bin/open", "-a", "Notes"]
+    tier2_apps._open_app(name="Erinnerungen")
+    assert captured["argv"] == ["/usr/bin/open", "-a", "Reminders"]
+
+
+def test_open_app_surfaces_not_found(monkeypatch):
+    """When /usr/bin/open returns non-zero, the error reaches the user."""
+    from server.mac_control import tier2_apps
+
+    class FakeProc:
+        returncode = 1
+        stdout = ""
+        stderr = "Unable to find application named 'NopeApp'"
+
+    monkeypatch.setattr(tier2_apps.subprocess, "run", lambda *a, **kw: FakeProc())
+    result = tier2_apps._open_app(name="NopeApp")
+    assert "nicht gefunden" in result.lower()
 
 
 def test_open_app_rejects_injection_chars():

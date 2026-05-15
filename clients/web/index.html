@@ -841,8 +841,19 @@
     }
   }
 
-  async function confirmTier3(id, approve, card) {
+  function lockCard(card) {
+    // Prevent double-submits: each pending can only be acted on once.
+    // A second click hits the already-consumed id and the server returns
+    // 404 "Pending action not found" which scared the user.
+    if (card.dataset.locked === "1") return false;
+    card.dataset.locked = "1";
     card.style.opacity = "0.5";
+    card.querySelectorAll("button, input").forEach(el => el.disabled = true);
+    return true;
+  }
+
+  async function confirmTier3(id, approve, card) {
+    if (!lockCard(card)) return;
     try {
       const res = await authedFetch("/confirm", {
         method: "POST",
@@ -866,7 +877,7 @@
       addMsg("Passwort eingeben.", "err");
       return;
     }
-    card.style.opacity = "0.5";
+    if (!lockCard(card)) return;
     try {
       const res = await authedFetch("/tier4-confirm", {
         method: "POST",
