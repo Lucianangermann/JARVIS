@@ -9,6 +9,9 @@
 logs/*
 !logs/.gitkeep
 
+# Runtime state (allowlist additions etc.)
+data/
+
 # Python
 __pycache__/
 *.py[cod]

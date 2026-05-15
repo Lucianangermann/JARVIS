@@ -262,6 +262,54 @@ def test_mac_control_disabled_rejects(monkeypatch):
     assert "MAC_CONTROL_ENABLED" in env["reason"]
 
 
+# --- runtime app allowlist ------------------------------------------------- #
+
+@pytest.fixture
+def temp_allowlist(monkeypatch, tmp_path):
+    """Redirect the JSON allowlist into a per-test temp dir so we can
+    add/remove without touching the real file."""
+    monkeypatch.setattr(settings, "LOG_DIR", tmp_path / "logs")
+    (tmp_path / "logs").mkdir()
+    yield tmp_path
+
+
+def test_allowlist_add_remove_roundtrip(temp_allowlist):
+    from server.mac_control import allowlist
+    ok, msg = allowlist.add("Notes")
+    assert ok and "Notes" in msg
+    assert "Notes" in allowlist.load_extras()
+    ok, msg = allowlist.add("Notes")  # duplicate
+    assert not ok
+    ok, _ = allowlist.remove("Notes")
+    assert ok and "Notes" not in allowlist.load_extras()
+
+
+def test_allowlist_rejects_blocked_apps(temp_allowlist):
+    """Even a Tier-4 password-authenticated add must respect the hard
+    BLOCKED_APPS list — this is the prompt-injection floor."""
+    from server.mac_control import allowlist
+    for evil in ("Mail", "Keychain Access", "1Password"):
+        ok, msg = allowlist.add(evil)
+        assert not ok, f"{evil} should have been refused"
+        assert "Blockliste" in msg
+
+
+def test_allowlist_rejects_path_injection(temp_allowlist):
+    from server.mac_control import allowlist
+    for bad in ("../etc", "name\nwith\nnewlines", "with/slash"):
+        ok, _ = allowlist.add(bad)
+        assert not ok, f"{bad} should have been refused"
+
+
+def test_open_app_sees_new_allowlist_entry(temp_allowlist):
+    """After adding via the allowlist module, current_allowed_apps()
+    must include the new entry without a restart."""
+    from server.mac_control import allowlist, tier2_apps
+    assert "Notes" not in tier2_apps.current_allowed_apps()
+    allowlist.add("Notes")
+    assert "Notes" in tier2_apps.current_allowed_apps()
+
+
 # --- voice phrase detectors ------------------------------------------------ #
 
 @pytest.mark.parametrize("text", [

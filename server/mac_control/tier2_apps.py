@@ -34,19 +34,33 @@ from urllib.parse import urlparse
 from . import permission_manager
 from .permission_manager import Tier
 
-# Apps we'll touch. Anything else: REJECTED.
-ALLOWED_APPS: frozenset[str] = frozenset({
+# Safe factory defaults. The user can extend the *effective* allowlist
+# at runtime via the Tier-4 ``add_allowed_app`` action — those additions
+# land in ``data/allowed_apps.json`` and are merged at call time by
+# ``current_allowed_apps()``. Defaults can't be removed at runtime; edit
+# this set by hand if you really need to.
+DEFAULT_ALLOWED_APPS: frozenset[str] = frozenset({
     "Music", "Spotify",
     "Safari", "Google Chrome",
     "Terminal", "Visual Studio Code",
     "Finder",
 })
-# Apps that are explicitly blocked even if someone adds them to ALLOWED_APPS
-# by mistake later — these handle secrets or have a huge automation surface.
+# Hard block. These handle secrets or expose a huge automation surface,
+# so they're refused regardless of what the persistent allowlist says.
+# This is the security floor — never relax it at runtime.
 BLOCKED_APPS: frozenset[str] = frozenset({
     "Keychain Access", "1Password", "Bitwarden", "Mail", "Messages",
     "System Settings", "System Preferences", "Console", "Activity Monitor",
 })
+
+
+def current_allowed_apps() -> set[str]:
+    """Effective allowlist at this moment: factory defaults plus any
+    persistent additions, minus anything on the hard block. Read on
+    every check so updates take effect without a restart."""
+    from . import allowlist as _al
+
+    return (set(DEFAULT_ALLOWED_APPS) | _al.load_extras()) - set(BLOCKED_APPS)
 
 # Music transport works for Music.app and Spotify.app — same vocabulary.
 ALLOWED_PLAYERS: frozenset[str] = frozenset({"Music", "Spotify"})
@@ -261,8 +275,11 @@ def _open_app(*, name: str = "", **_kw) -> str:
     name = name.strip()
     if name in BLOCKED_APPS:
         return f"{name!r} steht auf der Blockliste."
-    if name not in ALLOWED_APPS:
-        return f"{name!r} ist nicht in der Allowlist: {sorted(ALLOWED_APPS)}."
+    allowed = current_allowed_apps()
+    if name not in allowed:
+        return (f"{name!r} ist nicht in der Allowlist. "
+                f"Erlaubt: {sorted(allowed)}. "
+                "Mit 'add_allowed_app' kannst du Apps freigeben.")
     try:
         _osa(_TR_OPEN_APP, name)
     except _ASError as exc:

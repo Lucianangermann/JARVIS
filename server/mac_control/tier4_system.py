@@ -259,6 +259,18 @@ end isoToDate
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
 
 
+def _add_allowed_app(*, name: str = "", **_kw) -> str:
+    from . import allowlist as _al
+    ok, msg = _al.add(name)
+    return msg
+
+
+def _remove_allowed_app(*, name: str = "", **_kw) -> str:
+    from . import allowlist as _al
+    ok, msg = _al.remove(name)
+    return msg
+
+
 def _calendar_create(*, title: str = "", start: str = "", end: str = "", **_kw) -> str:
     if not title or not isinstance(title, str):
         return "title fehlt."
@@ -286,13 +298,15 @@ def _calendar_create(*, title: str = "", start: str = "", end: str = "", **_kw) 
 # --- registry -------------------------------------------------------------- #
 
 _TIER4: tuple[tuple[str, callable, callable], ...] = (
-    ("terminal",         _terminal,         lambda **p: f"Terminal: {p.get('command','')} {p.get('args',[])}"),
-    ("install_app",      _install_app,      lambda **p: f"App installieren (brew): {p.get('pkg','')}"),
-    ("uninstall_app",    _uninstall_app,    lambda **p: f"App entfernen (brew): {p.get('pkg','')}"),
-    ("open_prefs_pane",  _open_prefs_pane,  lambda **p: f"System Settings öffnen: {p.get('pane','')}"),
-    ("screenshot",       _screenshot,       lambda **_: "Screenshot vom gesamten Bildschirm"),
-    ("email_preview",    _email_preview,    lambda **p: f"Mail-Entwurf an {p.get('to','')}: {p.get('subject','')[:60]}"),
-    ("calendar_create",  _calendar_create,  lambda **p: f"Termin: {p.get('title','')[:60]} ({p.get('start','')}→{p.get('end','')})"),
+    ("terminal",           _terminal,           lambda **p: f"Terminal: {p.get('command','')} {p.get('args',[])}"),
+    ("install_app",        _install_app,        lambda **p: f"App installieren (brew): {p.get('pkg','')}"),
+    ("uninstall_app",      _uninstall_app,      lambda **p: f"App entfernen (brew): {p.get('pkg','')}"),
+    ("open_prefs_pane",    _open_prefs_pane,    lambda **p: f"System Settings öffnen: {p.get('pane','')}"),
+    ("screenshot",         _screenshot,         lambda **_: "Screenshot vom gesamten Bildschirm"),
+    ("email_preview",      _email_preview,      lambda **p: f"Mail-Entwurf an {p.get('to','')}: {p.get('subject','')[:60]}"),
+    ("calendar_create",    _calendar_create,    lambda **p: f"Termin: {p.get('title','')[:60]} ({p.get('start','')}→{p.get('end','')})"),
+    ("add_allowed_app",    _add_allowed_app,    lambda **p: f"App in Allowlist aufnehmen: {p.get('name','')}"),
+    ("remove_allowed_app", _remove_allowed_app, lambda **p: f"App aus Allowlist entfernen: {p.get('name','')}"),
 )
 
 

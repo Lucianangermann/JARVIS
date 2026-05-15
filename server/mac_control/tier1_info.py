@@ -134,6 +134,14 @@ def _get_volume(**_params: object) -> str:
     return f"Lautstärke {vol} ({flag})."
 
 
+def _list_allowed_apps(**_params: object) -> str:
+    from . import allowlist as _al
+    apps = _al.list_all()
+    if not apps:
+        return "Keine Apps in der Allowlist."
+    return "Erlaubte Apps: " + ", ".join(apps)
+
+
 def _read_clipboard(**_params: object) -> str:
     txt = _run("/usr/bin/pbpaste")
     if not txt:
@@ -205,13 +213,14 @@ def _get_weather(*, city: str = "Berlin", **_params: object) -> str:
 
 # Every Tier 1 action: (name, handler, summary).
 _TIER1: tuple[tuple[str, callable, callable], ...] = (
-    ("get_time",       _get_time,       lambda **_: "Uhrzeit lesen"),
-    ("get_date",       _get_date,       lambda **_: "Datum lesen"),
-    ("get_battery",    _get_battery,    lambda **_: "Akkustand lesen"),
-    ("get_wifi",       _get_wifi,       lambda **_: "WLAN-Status lesen"),
-    ("get_volume",     _get_volume,     lambda **_: "Lautstärke lesen"),
-    ("read_clipboard", _read_clipboard, lambda **_: "Zwischenablage lesen"),
-    ("get_weather",    _get_weather,    lambda **p: f"Wetter in {p.get('city', 'Berlin')} lesen"),
+    ("get_time",          _get_time,          lambda **_: "Uhrzeit lesen"),
+    ("get_date",          _get_date,          lambda **_: "Datum lesen"),
+    ("get_battery",       _get_battery,       lambda **_: "Akkustand lesen"),
+    ("get_wifi",          _get_wifi,          lambda **_: "WLAN-Status lesen"),
+    ("get_volume",        _get_volume,        lambda **_: "Lautstärke lesen"),
+    ("read_clipboard",    _read_clipboard,    lambda **_: "Zwischenablage lesen"),
+    ("get_weather",       _get_weather,       lambda **p: f"Wetter in {p.get('city', 'Berlin')} lesen"),
+    ("list_allowed_apps", _list_allowed_apps, lambda **_: "Allowlist anzeigen"),
 )
 
 

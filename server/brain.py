@@ -78,6 +78,10 @@ def _mac_action_tool() -> dict[str, Any]:
             "  install_app(pkg), uninstall_app(pkg)  # brew package names\n"
             "  open_prefs_pane(pane), screenshot(),\n"
             "  email_preview(to, subject, body), calendar_create(title, start, end)\n"
+            "  list_allowed_apps()                   # Tier 1, no params\n"
+            "  add_allowed_app(name), remove_allowed_app(name)\n"
+            "    — extend / shrink the persistent app allowlist. Tier 4.\n"
+            "    Cannot override the hard-coded BLOCKED_APPS list.\n"
         ),
         "input_schema": {
             "type": "object",
