@@ -1,0 +1,425 @@
+/* ============================================================ */
+/* JARVIS overlay — HUD elements                                */
+/*                                                              */
+/* Layout grid (HUD state):                                     */
+/*                                                              */
+/*   ┌───────────────────────────────────────────┐ <-- bg grid  */
+/*   │  ⌐                                       ¬│ <-- corners  */
+/*   │  STATUS BAR  | HH:MM:SS | ◌ T2 ◌◌        │              */
+/*   │                                           │ <-- scanline */
+/*   │       ╱─────╲       chat log              │              */
+/*   │      ⬡  ⬡⬡⬡  ⬡    (3 messages)            │              */
+/*   │       ╲─────╱                             │              */
+/*   │                                           │              */
+/*   │  [⬡] [⬡] [⬡] [⬡] [✕]   SPEAK OR TYPE _    │              */
+/*   │  ⌐                                       ¬│              */
+/*   └───────────────────────────────────────────┘              */
+/* ============================================================ */
+
+/* -- IDLE: just an orb ---------------------------------------- */
+
+#orb {
+  position: relative;
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 45%,
+    rgba(0, 255, 255, 0.55) 0%,
+    rgba(0, 102, 255, 0.35) 45%,
+    rgba(0, 30, 80, 0.85) 85%,
+    rgba(0, 10, 30, 1) 100%
+  );
+  border: 1px solid rgba(0, 212, 255, 0.7);
+  animation: orb-breathe 3s ease-in-out infinite;
+  -webkit-app-region: drag;
+  cursor: grab;
+}
+#orb::before {
+  /* Tiny hexagon at the orb's center hints at the full HUD it expands to. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 28px;
+  height: 32px;
+  background: var(--jarvis-glow);
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  opacity: 0.85;
+  filter: drop-shadow(0 0 8px var(--jarvis-glow));
+}
+#orb::after {
+  /* Thin rotating arc around the orb. */
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  border-top-color: rgba(0, 212, 255, 0.85);
+  border-right-color: rgba(0, 212, 255, 0.25);
+  animation: rotate-ring 6s linear infinite;
+}
+
+/* -- HUD: full overlay ---------------------------------------- */
+
+#hud {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 14px 16px;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  grid-template-columns: 1fr;
+  background:
+    /* faint perspective grid */
+    linear-gradient(var(--jarvis-grid) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, var(--jarvis-grid) 1px, transparent 1px) 0 0 / 24px 24px,
+    /* base tint */
+    var(--jarvis-bg);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  isolation: isolate;   /* so the scanline blend doesn't leak out */
+}
+
+/* Vignette + edge glow */
+#hud::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 60px rgba(0, 212, 255, 0.06),
+    inset 0 0 0 1px rgba(0, 212, 255, 0.35);
+}
+
+/* Scanline that sweeps top → bottom forever */
+#hud::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 212, 255, 0.0) 5%,
+    rgba(0, 212, 255, 0.55) 50%,
+    rgba(0, 212, 255, 0.0) 95%,
+    transparent 100%
+  );
+  filter: blur(0.5px);
+  animation: scanline 4s linear infinite;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  z-index: 10;
+}
+
+/* Corner brackets — pure CSS, four `.bracket` spans positioned absolutely. */
+.bracket {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--jarvis-primary);
+  filter: drop-shadow(0 0 4px var(--jarvis-primary));
+  pointer-events: none;
+}
+.bracket.tl { top: 8px;    left: 8px;    border-right: 0;  border-bottom: 0; }
+.bracket.tr { top: 8px;    right: 8px;   border-left: 0;   border-bottom: 0; }
+.bracket.bl { bottom: 8px; left: 8px;    border-right: 0;  border-top: 0; }
+.bracket.br { bottom: 8px; right: 8px;   border-left: 0;   border-top: 0; }
+body[data-state="speaking"] .bracket { animation: bracket-flicker 0.5s ease-in-out infinite; }
+
+/* -- Status bar (top row) ------------------------------------- */
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px 8px;
+  font-size: 10px;
+  color: var(--jarvis-primary);
+  -webkit-app-region: drag;
+  z-index: 4;
+}
+.status-bar .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  animation: glow-text 4s ease-in-out infinite;
+}
+.status-bar .status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--jarvis-ok);
+  box-shadow: 0 0 6px var(--jarvis-ok);
+  animation: dot-heartbeat 2.2s ease-out infinite;
+}
+.status-bar .status-dot.bad   { background: var(--jarvis-danger); box-shadow: 0 0 6px var(--jarvis-danger); }
+.status-bar .status-dot.warn  { background: var(--jarvis-warn);   box-shadow: 0 0 6px var(--jarvis-warn); }
+
+.status-bar .center {
+  flex: 1;
+  text-align: center;
+  letter-spacing: 0.4em;
+  color: rgba(0, 212, 255, 0.85);
+}
+
+.status-bar .right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Tier indicator: 4 small dots that fill based on data-tier */
+.tier-indicator { display: inline-flex; gap: 3px; -webkit-app-region: no-drag; }
+.tier-indicator .tier-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: rgba(0, 60, 120, 0.6);
+  border: 1px solid rgba(0, 212, 255, 0.4);
+}
+body[data-tier="1"] .tier-dot:nth-child(-n+1),
+body[data-tier="2"] .tier-dot:nth-child(-n+2),
+body[data-tier="3"] .tier-dot:nth-child(-n+3),
+body[data-tier="4"] .tier-dot:nth-child(-n+4) {
+  background: var(--jarvis-primary);
+  box-shadow: 0 0 6px var(--jarvis-primary);
+}
+body[data-tier="3"] .tier-dot:nth-child(-n+3) { background: var(--jarvis-warn); box-shadow: 0 0 6px var(--jarvis-warn); }
+body[data-tier="4"] .tier-dot:nth-child(-n+4) { background: var(--jarvis-danger); box-shadow: 0 0 6px var(--jarvis-danger); }
+
+/* -- Centre stage: visualizer + hexagon ----------------------- */
+
+.stage-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 14px;
+  align-items: center;
+  padding: 0 4px;
+  z-index: 3;
+}
+
+.core-wrap {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  margin: 0 auto;
+}
+
+/* Outer rotating ring(s) — two SVG-free ::before / ::after layers */
+.core-wrap::before,
+.core-wrap::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  pointer-events: none;
+}
+.core-wrap::before {
+  border-top-color: rgba(0, 212, 255, 0.9);
+  border-right-color: rgba(0, 212, 255, 0.3);
+  filter: drop-shadow(0 0 6px rgba(0, 212, 255, 0.7));
+  animation: rotate-ring 8s linear infinite;
+}
+.core-wrap::after {
+  inset: 12px;
+  border-bottom-color: rgba(0, 102, 255, 0.7);
+  border-left-color: rgba(0, 102, 255, 0.2);
+  animation: rotate-ring-reverse 14s linear infinite;
+}
+/* Faster spin while thinking */
+body[data-state="processing"] .core-wrap::before { animation-duration: 1.6s; }
+body[data-state="processing"] .core-wrap::after  { animation-duration: 2.4s; }
+/* Sync hexagon pulse rate with the state */
+body[data-state="speaking"] .core-hex { animation-duration: 0.8s; }
+body[data-state="processing"] .core-hex { animation-duration: 1.2s; }
+
+/* Visualizer canvas sits between the rings and the hexagon. */
+#visualizer {
+  position: absolute;
+  inset: 8px;
+  width: calc(100% - 16px);
+  height: calc(100% - 16px);
+  border-radius: 50%;
+}
+
+/* Inner hexagon core */
+.core-hex {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 46px;
+  height: 52px;
+  background: linear-gradient(
+    180deg,
+    var(--jarvis-glow) 0%,
+    var(--jarvis-primary) 50%,
+    var(--jarvis-secondary) 100%
+  );
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  animation: pulse-core 2s ease-in-out infinite;
+}
+.core-hex::after {
+  /* Hollow centre ring drawn on top */
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 14px;
+  height: 16px;
+  background: rgba(0, 10, 30, 0.85);
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+}
+
+/* -- Chat side ------------------------------------------------ */
+
+.chat-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 6px;
+  min-height: 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: none;
+  overflow: hidden;
+}
+.chat-msg {
+  padding: 4px 8px;
+  border-radius: 6px;
+  animation: fade-in-up 0.3s ease-out both;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.chat-msg.you    {
+  background: rgba(0, 102, 255, 0.10);
+  border: 1px solid rgba(0, 102, 255, 0.35);
+  color: rgba(0, 212, 255, 0.85);
+}
+.chat-msg.jarvis {
+  background: rgba(0, 255, 255, 0.07);
+  border: 1px solid rgba(0, 255, 255, 0.35);
+  color: var(--jarvis-glow);
+  text-shadow: 0 0 6px rgba(0, 255, 255, 0.4);
+}
+.chat-msg .who {
+  display: block;
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  color: rgba(0, 212, 255, 0.5);
+  margin-bottom: 2px;
+}
+.cursor::after {
+  content: "▌";
+  margin-left: 2px;
+  color: var(--jarvis-primary);
+  animation: blink-cursor 0.8s step-end infinite;
+}
+
+/* -- Bottom row: hex buttons + input -------------------------- */
+
+.bottom-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 4px 0;
+  z-index: 3;
+}
+
+.hex-buttons {
+  display: inline-flex;
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+.hex-btn {
+  width: 30px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 30, 80, 0.6);
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  border: 0;
+  color: var(--jarvis-primary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.15s ease, background 0.15s ease;
+  filter: drop-shadow(0 0 4px rgba(0, 212, 255, 0.4));
+}
+.hex-btn:hover {
+  background: rgba(0, 102, 255, 0.5);
+  filter: drop-shadow(0 0 8px var(--jarvis-glow));
+  transform: translateY(-1px);
+}
+.hex-btn.kill {
+  color: var(--jarvis-danger);
+  filter: drop-shadow(0 0 4px rgba(255, 42, 74, 0.4));
+}
+.hex-btn.kill:hover {
+  background: rgba(255, 42, 74, 0.35);
+  filter: drop-shadow(0 0 8px var(--jarvis-danger));
+}
+
+.input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+.input-wrap::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(0, 212, 255, 0.6),
+    transparent
+  );
+  box-shadow: 0 0 6px rgba(0, 212, 255, 0.5);
+}
+#cmd-input {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--jarvis-primary);
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 10px;
+  padding: 6px 8px;
+  caret-color: var(--jarvis-glow);
+}
+#cmd-input::placeholder {
+  color: rgba(0, 212, 255, 0.45);
+}
+
+/* -- Particle layer ------------------------------------------- */
+
+.particles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 1;
+}
+.particle {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--jarvis-glow);
+  box-shadow: 0 0 6px var(--jarvis-glow);
+  opacity: 0;
+  animation: particle-float linear infinite;
+}

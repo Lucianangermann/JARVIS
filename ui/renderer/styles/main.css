@@ -1,0 +1,66 @@
+/* ============================================================ */
+/* JARVIS overlay — core design system                          */
+/* ============================================================ */
+
+:root {
+  /* Color palette — Iron Man HUD */
+  --jarvis-primary:   #00D4FF;
+  --jarvis-secondary: #0066FF;
+  --jarvis-glow:      #00FFFF;
+  --jarvis-dim:       #003366;
+  --jarvis-warn:      #FF6600;
+  --jarvis-danger:    #FF2A4A;
+  --jarvis-ok:        #00FFAA;
+  --jarvis-bg:        rgba(0, 10, 30, 0.85);
+  --jarvis-grid:      rgba(0, 212, 255, 0.08);
+  --jarvis-grid-strong: rgba(0, 212, 255, 0.18);
+
+  /* Typography */
+  --font-display: "Orbitron", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Sizing */
+  --radius-md: 10px;
+  --radius-lg: 18px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--jarvis-primary);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+  overflow: hidden;
+}
+
+/* The whole overlay sits in #stage. We swap which child is visible via
+ * the body[data-state] attribute — orb when idle, hud panel otherwise. */
+#stage {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+body[data-state="idle"] #hud  { display: none; }
+body[data-state="idle"] #orb  { display: grid; }
+body:not([data-state="idle"]) #orb { display: none; }
+body:not([data-state="idle"]) #hud { display: grid; }
+
+/* Native macOS title-bar drag area: the whole status bar is draggable
+ * EXCEPT the buttons inside it (they opt back out below). */
+.drag       { -webkit-app-region: drag; }
+.no-drag    { -webkit-app-region: no-drag; }
+
+/* Number formatting throughout — clock, RMS readouts, tier dots etc. */
+.tabular { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }

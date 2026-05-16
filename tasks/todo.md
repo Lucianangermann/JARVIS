@@ -50,3 +50,35 @@ Per user spec (4 tiers, kill switch, action logger, full Tier 4 with password). 
 - Kill switch state blocks all Tier 2+ actions until explicit resume
 
 ---
+
+## JARVIS Electron Overlay — Phase 1 (static)
+
+Goal: build the complete static overlay with all visuals + state
+transitions working in `ui/`. No WebSocket, no mic, no sounds — those
+come in Phase 2 once you've eyeballed the visuals.
+
+### Architecture decision
+- Visualizer is **state-driven** in Phase 1 (no real mic input). The
+  server's voice_loop owns the only mic capture; the overlay is a
+  status reflector + controls surface.
+- WebSocket integration deferred to Phase 2 so we don't waste cycles
+  on auth/retry plumbing before the visuals are confirmed-good.
+
+### Checkpoints
+- [ ] UI-A: Electron skeleton (package.json, main.js, preload.js, blank window)
+- [ ] UI-B: Design system + animation library (CSS only)
+- [ ] UI-C: Static HUD — rotating ring, hexagon core, corner brackets,
+        grid, scanline, particles
+- [ ] UI-D: State machine — IDLE orb / ACTIVE / SPEAKING / PROCESSING
+        with click + keyboard switching for manual testing
+- [ ] UI-E: Canvas visualizer — circular bars around hexagon, idle pulse,
+        speaking-state animation
+- [ ] UI-F: Chat display + status bar + hex buttons + input field
+
+### Phase 2 (after user confirms visuals)
+- WebSocket /ws integration
+- /permissions polling for tier indicator
+- Sound effects (need user-provided MP3s)
+- Global keyboard shortcuts (Cmd+Shift+J, etc.)
+- Optional mic visualizer
+- electron-builder packaging

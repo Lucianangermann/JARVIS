@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+                 font-src https://fonts.gstatic.com; img-src 'self' data:; script-src 'self';" />
+  <title>JARVIS</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
+
+  <link rel="stylesheet" href="styles/main.css" />
+  <link rel="stylesheet" href="styles/animations.css" />
+  <link rel="stylesheet" href="styles/hud.css" />
+</head>
+<body data-state="idle" data-tier="2">
+
+  <div id="stage">
+    <!-- IDLE: small glowing orb -->
+    <div id="orb" title="Click to expand"></div>
+
+    <!-- ACTIVE / SPEAKING / PROCESSING: full HUD -->
+    <div id="hud">
+      <!-- Corner brackets (drawn with CSS, see hud.css) -->
+      <span class="bracket tl"></span>
+      <span class="bracket tr"></span>
+      <span class="bracket bl"></span>
+      <span class="bracket br"></span>
+
+      <!-- Floating particle layer (populated by hud.js) -->
+      <div class="particles" aria-hidden="true"></div>
+
+      <!-- Top status bar -->
+      <div class="status-bar drag">
+        <span class="brand">
+          <span class="status-dot" id="conn-dot"></span>
+          J.A.R.V.I.S. v1.0
+        </span>
+        <span class="center tabular" id="clock">00:00:00</span>
+        <span class="right">
+          <span id="conn-label">OFFLINE</span>
+          <span class="tier-indicator no-drag" title="Permission tier">
+            <span class="tier-dot"></span>
+            <span class="tier-dot"></span>
+            <span class="tier-dot"></span>
+            <span class="tier-dot"></span>
+          </span>
+        </span>
+      </div>
+
+      <!-- Centre row: visualizer + chat -->
+      <div class="stage-row">
+        <div class="core-wrap" id="core-wrap">
+          <canvas id="visualizer" width="280" height="280"></canvas>
+          <div class="core-hex" aria-hidden="true"></div>
+        </div>
+
+        <div class="chat-pane" id="chat-pane">
+          <!-- Populated by app.js -->
+        </div>
+      </div>
+
+      <!-- Bottom row: action buttons + input -->
+      <div class="bottom-row">
+        <div class="hex-buttons no-drag">
+          <button class="hex-btn" data-action="music"   title="Music">♪</button>
+          <button class="hex-btn" data-action="search"  title="Search">⌕</button>
+          <button class="hex-btn" data-action="home"    title="Smart Home">⌂</button>
+          <button class="hex-btn" data-action="cycle"   title="Cycle state (dev)">↻</button>
+          <button class="hex-btn kill" data-action="minimize" title="Minimize to orb">✕</button>
+        </div>
+        <div class="input-wrap">
+          <input id="cmd-input" type="text"
+                 placeholder="SPEAK OR TYPE A COMMAND…"
+                 autocomplete="off" spellcheck="false" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="scripts/hud.js"></script>
+  <script type="module" src="scripts/visualizer.js"></script>
+  <script type="module" src="scripts/app.js"></script>
+</body>
+</html>

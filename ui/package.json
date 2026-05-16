@@ -1,0 +1,14 @@
+{
+  "name": "jarvis-overlay",
+  "version": "0.1.0",
+  "description": "Iron Man-style floating HUD overlay for JARVIS",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0"
+  }
+}
