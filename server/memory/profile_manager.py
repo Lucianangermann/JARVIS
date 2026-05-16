@@ -132,6 +132,8 @@ _FACT_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)\bich\s+arbeite\s+(?:bei|als)\s+([A-ZÄÖÜ][\wäöüß -]{1,40})"), "occupation"),
     (re.compile(r"(?i)\bmein(?:e)?\s+lieblings(?:musik|genre|stil)\s+ist\s+([^.!?\n]{2,40})"),
      "music_genre"),
+    (re.compile(r"(?i)\bich\s+(?:höre|hoere)\s+(?:gerne\s+|gern\s+)?([^.!?\n]{2,40})"),
+     "music_genre"),
     (re.compile(r"(?i)\bich\s+mag\s+(?:gerne\s+)?([^.!?\n]{2,40})"), "preference"),
     # English
     (re.compile(r"(?i)\bmy\s+name\s+is\s+([A-Z][\w-]{1,40})"), "name"),
