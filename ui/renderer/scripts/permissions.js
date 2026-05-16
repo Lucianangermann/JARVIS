@@ -129,6 +129,20 @@ export async function emergencyStop() {
   return res.json();
 }
 
+/** Cut JARVIS off mid-reply via POST /interrupt. Doesn't arm the
+ *  kill switch — Tier 2+ actions stay enabled. Mapped to the
+ *  Cmd+Shift+J global hotkey in the Electron HUD. */
+export async function interrupt() {
+  if (!baseUrl || !token) throw new Error("permissions not initialised");
+  const res = await fetch(`${baseUrl}/interrupt`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  // No re-poll needed; /interrupt doesn't change /permissions state.
+  return res.json();
+}
+
 /** Clear the kill switch via POST /resume. */
 export async function resume() {
   if (!baseUrl || !token) throw new Error("permissions not initialised");

@@ -420,6 +420,23 @@ def pending_clear(token: str = Depends(require_token)) -> dict[str, Any]:
     return mac_dispatcher.cancel_all()
 
 
+@app.post("/interrupt")
+def interrupt(token: str = Depends(require_token)) -> dict[str, Any]:
+    """Cut JARVIS off mid-reply WITHOUT arming the kill switch.
+
+    Cancels any in-flight brain reply (so the response gets discarded)
+    and stops TTS playback immediately, then drains the mic queue so
+    the speaker tail doesn't get re-ingested. Tier 2+ actions stay
+    enabled — use /emergency-stop for the harder cut. Mapped to
+    Cmd+Shift+J in the Electron HUD.
+    """
+    try:
+        from . import voice_loop as _vl
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail=f"voice loop unavailable: {exc}") from exc
+    return _vl.interrupt(reason="API request")
+
+
 @app.post("/emergency-stop")
 def emergency_stop(token: str = Depends(require_token)) -> dict[str, Any]:
     """Trigger the kill switch — all Tier 2+ actions refuse until /resume."""

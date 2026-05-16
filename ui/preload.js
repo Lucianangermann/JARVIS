@@ -22,6 +22,14 @@ contextBridge.exposeInMainWorld("jarvis", {
     return () => ipcRenderer.off("jarvis:toggle", handler);
   },
 
+  /** Subscribe to "interrupt" pings from Cmd+Shift+J — fired when the
+   *  user wants to cut JARVIS off mid-reply. Returns an unsubscribe fn. */
+  onInterrupt: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("jarvis:interrupt", handler);
+    return () => ipcRenderer.off("jarvis:interrupt", handler);
+  },
+
   /** Fetch server connection config (token + host + port) once on boot.
    *  Returns { token, host, port }. The token comes from the project's
    *  .env so the user rotates it in one place. */

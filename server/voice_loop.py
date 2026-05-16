@@ -73,6 +73,49 @@ def _emit_jarvis_reply(text: str) -> None:
     if text:
         events.publish({"type": "jarvis_reply", "text": text})
 
+
+# ---- mid-reply interrupt (from HTTP /interrupt or hotkey) ---------------- #
+# These refs are populated by run() once the loop is initialised. interrupt()
+# uses them to cancel an in-flight brain reply and silence TTS without
+# arming the kill switch (which would block all Tier 2+ actions until a
+# manual resume). The lock keeps a rapid double-hotkey press from racing.
+
+_interrupt_lock = threading.Lock()
+_brain_cancel_ref: threading.Event | None = None
+_tts_ref = None                                       # the tts module
+_audio_q_ref: "queue.Queue | None" = None             # mic block queue
+
+
+def interrupt(reason: str = "user request") -> dict:
+    """Cut JARVIS off mid-reply. Sets brain_cancel so the worker
+    thread drops its pending reply, calls tts.stop() to silence the
+    speakers immediately, and drains the mic queue so the residual
+    JARVIS audio doesn't get re-ingested. Safe to call when nothing's
+    happening — returns ``{brain: False, tts: False, ok: True}`` and
+    is a no-op. Returns ``ok: False`` only if voice_loop isn't
+    running yet (server still booting / JARVIS_LOCAL_VOICE=0)."""
+    with _interrupt_lock:
+        if _brain_cancel_ref is None:
+            return {"ok": False, "reason": "voice loop not running"}
+
+        stopped = {"ok": True, "brain": False, "tts": False}
+
+        if not _brain_cancel_ref.is_set():
+            _brain_cancel_ref.set()
+            stopped["brain"] = True
+
+        if _tts_ref is not None and not _tts_ref.is_idle():
+            _tts_ref.stop()
+            stopped["tts"] = True
+
+        if _audio_q_ref is not None:
+            _drain(_audio_q_ref)
+
+        if stopped["brain"] or stopped["tts"]:
+            print(f"[JARVIS] interrupted: {reason}")
+            events.publish({"type": "voice_state", "state": "listening"})
+        return stopped
+
 if TYPE_CHECKING:
     from .brain import Brain
 
@@ -153,6 +196,11 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     from . import aec as aec_mod
     from . import stt, tts
 
+    # Expose tts for the cross-thread interrupt() helper above. Cleared
+    # in the finally block when the loop exits.
+    global _tts_ref
+    _tts_ref = tts
+
     session = session_id or settings.JARVIS_AUTH_TOKEN
 
     print(f"[JARVIS] streaming voice loop ready — wake word: {settings.WAKE_WORD!r}")
@@ -177,6 +225,8 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
               "use headphones for a clean signal.")
 
     audio_q: queue.Queue = queue.Queue()
+    global _audio_q_ref
+    _audio_q_ref = audio_q
 
     # Diagnostics: every ~1 s log mean RMS for input / output / cleaned.
     # If AEC is actually cancelling, cleaned RMS during TTS should be
@@ -310,13 +360,14 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     followup_window = settings.FOLLOWUP_TIMEOUT_S
 
     # Brain work runs in a worker thread so the main loop can keep
-    # pumping audio while JARVIS thinks. brain_cancel is wired but
-    # currently unreachable from a user gesture (barge-in was removed
-    # — both fast-interrupt and Whisper-rolling false-fired on TTS
-    # echo). Kept defensive in case a future cancellation path needs
-    # it (e.g. kill-switch arriving mid-reply via /emergency-stop).
+    # pumping audio while JARVIS thinks. brain_cancel is set by the
+    # module-level interrupt() helper (POST /interrupt or the
+    # Cmd+Shift+J hotkey) — the worker thread checks it after
+    # brain.reply() returns and discards the reply if requested.
     brain_thread: threading.Thread | None = None
     brain_cancel = threading.Event()
+    global _brain_cancel_ref
+    _brain_cancel_ref = brain_cancel
 
     def _brain_work(cmd: str, cancel_evt: threading.Event) -> None:
         t_brain = time.monotonic()
@@ -572,6 +623,13 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
             brain_cancel.set()
             tts.stop()
             brain_thread.join(timeout=2.0)
+        # Clear the module-level refs so a stale interrupt() call after
+        # shutdown can't dereference garbage state. The lock prevents a
+        # race with a concurrent /interrupt request mid-shutdown.
+        with _interrupt_lock:
+            globals()["_brain_cancel_ref"] = None
+            globals()["_tts_ref"] = None
+            globals()["_audio_q_ref"] = None
         print("[JARVIS] streaming voice loop stopped.")
 
 

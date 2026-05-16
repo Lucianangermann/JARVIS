@@ -270,16 +270,15 @@ function killServer() {
   }, 4000);
 }
 
-// ---- global hotkey: Cmd/Ctrl+J toggles HUD ↔ orb ---- //
-// Main owns the OS-level shortcut registration; the actual state
-// machine lives in the renderer. We just ping the renderer over IPC
-// and let its setState() drive both the DOM update and the window
-// resize (via the existing "jarvis:set-state" handler above) — no
-// duplicated state tracking, one source of truth.
-const TOGGLE_ACCELERATOR = "CommandOrControl+J";
+// ---- global hotkeys ---- //
+// Main owns the OS-level shortcut registrations; the renderer owns
+// state and the network roundtrip to the server. Both hotkeys are
+// system-wide so the user can summon / interrupt JARVIS from any app.
+const TOGGLE_ACCELERATOR    = "CommandOrControl+J";       // open/close HUD
+const INTERRUPT_ACCELERATOR = "CommandOrControl+Shift+J"; // cut JARVIS off
 
-function registerGlobalHotkey() {
-  const ok = globalShortcut.register(TOGGLE_ACCELERATOR, () => {
+function registerGlobalHotkeys() {
+  const okToggle = globalShortcut.register(TOGGLE_ACCELERATOR, () => {
     if (!mainWindow) return;
     mainWindow.webContents.send("jarvis:toggle");
     // Surface the window when summoning so the user can interact
@@ -288,15 +287,28 @@ function registerGlobalHotkey() {
     mainWindow.showInactive();
     mainWindow.focus();
   });
-  if (!ok) {
-    console.warn(`[JARVIS] Could not register global hotkey ${TOGGLE_ACCELERATOR} — likely already taken by another app.`);
+  if (!okToggle) {
+    console.warn(`[JARVIS] Could not register ${TOGGLE_ACCELERATOR} — already taken.`);
+  }
+
+  const okInterrupt = globalShortcut.register(INTERRUPT_ACCELERATOR, () => {
+    if (!mainWindow) return;
+    // Renderer fires POST /interrupt — it already holds the auth
+    // token via getConfig() and has the http client wired up in
+    // permissions.js. No focus / window flip here: the user usually
+    // hits Cmd+Shift+J while JARVIS is mid-speech and they want it
+    // silenced, not bumped to the front.
+    mainWindow.webContents.send("jarvis:interrupt");
+  });
+  if (!okInterrupt) {
+    console.warn(`[JARVIS] Could not register ${INTERRUPT_ACCELERATOR} — already taken.`);
   }
 }
 
 app.whenReady().then(() => {
   spawnServer();
   createWindow();
-  registerGlobalHotkey();
+  registerGlobalHotkeys();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

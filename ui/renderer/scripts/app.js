@@ -343,6 +343,18 @@ window.jarvis?.onToggle?.(() => {
   setState(currentState === "idle" ? "active" : "idle");
 });
 
+// ---- global hotkey interrupt (Cmd/Ctrl+Shift+J) ----
+// Fires POST /interrupt — cancels the in-flight brain reply + stops
+// TTS without arming the kill switch. The server's voice_loop emits
+// a "listening" voice_state event right after, which our existing
+// event subscriber maps back to setState("active"); no DOM update
+// needed here.
+window.jarvis?.onInterrupt?.(() => {
+  perms.interrupt().catch((err) => {
+    console.warn("[JARVIS UI] interrupt failed:", err);
+  });
+});
+
 // ---- seed the UI with some content so first paint isn't empty ----
 
 (function seed() {
