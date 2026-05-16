@@ -40,7 +40,38 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
+from . import events
 from .config import settings
+
+
+# ---- HUD event publishing ------------------------------------------------ #
+# Voice transitions get broadcast to every connected WS client (Electron
+# HUD, iPhone web, etc.) so they can mirror what the mic loop is doing.
+# `_last_state` dedupes repeats so the bus doesn't flood with the same
+# value during quiet stretches of the main loop.
+
+_last_state: str | None = None
+_state_lock = threading.Lock()
+
+
+def _emit_state(name: str) -> None:
+    """Publish a voice_state event iff the state actually changed."""
+    global _last_state
+    with _state_lock:
+        if _last_state == name:
+            return
+        _last_state = name
+    events.publish({"type": "voice_state", "state": name})
+
+
+def _emit_user_message(text: str) -> None:
+    if text:
+        events.publish({"type": "user_message", "text": text})
+
+
+def _emit_jarvis_reply(text: str) -> None:
+    if text:
+        events.publish({"type": "jarvis_reply", "text": text})
 
 if TYPE_CHECKING:
     from .brain import Brain
@@ -393,6 +424,8 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
             print(f"[JARVIS] (cancelled; discarding reply: {reply[:60]!r}…)")
             return
         print(f"[JARVIS] {reply}")
+        _emit_jarvis_reply(reply)
+        _emit_state("speaking")
         tts.speak(reply)
 
     # Barge-in monitor: while JARVIS is busy, periodically transcribe a
@@ -500,6 +533,21 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                     fast_int_run = 0
                     fast_int_max_run = 0
                 last_busy = busy_now
+
+                # Per-tick state heartbeat for the HUD. _emit_state dedups
+                # so this only actually publishes on a real transition,
+                # but emitting every iteration means we cover paths that
+                # don't have explicit emit calls (e.g. the canned
+                # "Ja?" / "Alles klar" / kill-switch TTS responses,
+                # or a transcribe that didn't match the wake word).
+                if in_speech:
+                    pass                        # user is mid-utterance
+                elif brain_alive_now:
+                    _emit_state("thinking")
+                elif tts_busy_now:
+                    _emit_state("speaking")
+                else:
+                    _emit_state("listening")
 
                 # AEC convergence grace: when speakers JUST started
                 # playing a fresh TTS burst, the cleaned signal has
@@ -671,6 +719,7 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                     continue
 
                 print(f"[MIC] segment closed ({BLOCK_S * len(buf):.1f}s) — transcribing…")
+                _emit_state("transcribing")
                 pcm = np.concatenate(buf).tobytes()
                 wav = stt._pcm_to_wav(pcm, sample_rate=SAMPLE_RATE)  # noqa: SLF001
                 buf = []
@@ -787,6 +836,8 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 # We do NOT block here — the main loop keeps pumping audio
                 # so the user can say "Stop" mid-reply.
                 print(f"[CLIENT: MacBook] [YOU·voice] {command}")
+                _emit_user_message(command)
+                _emit_state("thinking")
                 brain_cancel.clear()
                 brain_thread = threading.Thread(
                     target=_brain_work,

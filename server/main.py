@@ -20,6 +20,7 @@ We tag every line so a single terminal can host the whole demo:
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import threading
@@ -42,6 +43,7 @@ from pydantic import BaseModel, Field
 from .auth import authorize_websocket, require_token
 from .brain import Brain
 from .config import settings
+from . import events
 from .mac_control import dispatcher as mac_dispatcher
 from .mac_control import kill_switch as mac_kill_switch
 
@@ -72,6 +74,11 @@ async def lifespan(app: FastAPI):
         print(f"[JARVIS] voice stack NOT loaded ({_VOICE_ERR}) — /audio disabled,")
         print("[JARVIS] text endpoints still work. Install requirements-voice.txt to enable.")
     app.state.brain = Brain()
+
+    # Capture the running asyncio loop for cross-thread event publishes
+    # from voice_loop's thread. Must happen BEFORE the voice thread
+    # starts, otherwise its first publish() lands a no-op.
+    events.set_loop(asyncio.get_running_loop())
 
     # Optional: run the local wake-word loop on the MacBook in a background
     # thread. Enabled with JARVIS_LOCAL_VOICE=1 in the environment / .env.
@@ -224,11 +231,19 @@ async def audio(
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
-    """Long-lived text chat over a single WS.
+    """Long-lived text chat + server-pushed events over a single WS.
 
-    Wire format (both directions): one JSON message per turn,
-        client → server  {"text": "..."}
-        server → client  {"reply": "..."}    or   {"error": "..."}
+    Wire format:
+        client → server  {"text": "..."}                     # chat turn
+        server → client  {"reply": "..."}                    # chat answer
+                         {"error": "..."}                    # chat failure
+                         {"type": "voice_state", ...}        # voice activity
+                         {"type": "user_message", ...}       # transcribed speech
+                         {"type": "jarvis_reply", ...}       # voice-path reply
+
+    Concurrency: receive_json() and the fan-out task both write to the
+    same socket, so all sends are serialised through `send_lock` — the
+    underlying ASGI sender isn't safe to call from two tasks at once.
     """
     await websocket.accept()
     token = await authorize_websocket(websocket)
@@ -245,30 +260,60 @@ async def ws(websocket: WebSocket) -> None:
     )
     print(f"[JARVIS] ws connected client={tag}")
 
+    send_lock = asyncio.Lock()
+
+    async def send_json(payload: dict[str, Any]) -> None:
+        async with send_lock:
+            await websocket.send_json(payload)
+
+    # Subscribe to the server-side event bus and stream entries out to
+    # this client. Cancelled in the finally block so the queue is
+    # unsubscribed even on abrupt disconnects.
+    event_queue = events.subscribe()
+
+    async def fanout() -> None:
+        try:
+            while True:
+                ev = await event_queue.get()
+                await send_json(ev)
+        except asyncio.CancelledError:
+            raise
+        except WebSocketDisconnect:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"[JARVIS] ws fanout error: {exc}")
+
+    fanout_task = asyncio.create_task(fanout(), name=f"ws-fanout-{tag}")
+
     try:
         while True:
             payload = await websocket.receive_json()
             user_text = _sanitize(str(payload.get("text", "")))
             if not user_text:
-                await websocket.send_json({"error": "empty message"})
+                await send_json({"error": "empty message"})
                 continue
 
             print(f"[CLIENT: {tag}] [YOU] {user_text}")
             try:
                 reply = brain.reply(token, user_text)
             except HTTPException as exc:
-                await websocket.send_json({"error": exc.detail})
+                await send_json({"error": exc.detail})
                 continue
 
             print(f"[JARVIS] {reply}")
-            await websocket.send_json({"reply": reply})
+            await send_json({"reply": reply})
     except WebSocketDisconnect:
         print(f"[JARVIS] ws disconnected client={tag}")
     except Exception as exc:  # noqa: BLE001
         print(f"[JARVIS] ws error: {exc}")
         with contextlib.suppress(Exception):
-            await websocket.send_json({"error": str(exc)})
+            await send_json({"error": str(exc)})
             await websocket.close()
+    finally:
+        fanout_task.cancel()
+        events.unsubscribe(event_queue)
+        with contextlib.suppress(asyncio.CancelledError):
+            await fanout_task
 
 
 # --- mac_control routes --------------------------------------------------- #

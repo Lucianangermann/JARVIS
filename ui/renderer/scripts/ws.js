@@ -37,7 +37,8 @@ let pending = null;             // { resolve, reject } for in-flight send
 let reconnectTimer = null;
 let backoffMs = BACKOFF_START_MS;
 
-const listeners = new Set();
+const listeners = new Set();          // connection-state listeners
+const eventListeners = new Map();     // type → Set<callback> for server-pushed events
 
 function setState(next) {
   if (state === next) return;
@@ -51,6 +52,36 @@ export function onConnectionChange(cb) {
   listeners.add(cb);
   cb(state);     // sync seed so callers don't miss the current value
   return () => listeners.delete(cb);
+}
+
+/** Subscribe to server-pushed typed events. Messages whose JSON has a
+ *  "type" string field are dispatched here instead of resolving the
+ *  in-flight send() promise — they're independent from the
+ *  request/response chat flow.
+ *
+ *    onEvent("voice_state",   ({state}) => …)
+ *    onEvent("user_message",  ({text})  => …)
+ *    onEvent("jarvis_reply",  ({text})  => …)
+ *
+ *  Returns an unsubscribe fn. */
+export function onEvent(type, cb) {
+  let set = eventListeners.get(type);
+  if (!set) { set = new Set(); eventListeners.set(type, set); }
+  set.add(cb);
+  return () => set.delete(cb);
+}
+
+function dispatchEvent(data) {
+  const set = eventListeners.get(data.type);
+  if (!set || set.size === 0) {
+    // Not fatal — server may push event kinds the renderer doesn't
+    // care about yet. Log once at warn so we can spot mismatches.
+    console.debug("[ws] no listener for event:", data);
+    return;
+  }
+  for (const cb of set) {
+    try { cb(data); } catch (e) { console.error("[ws] event listener threw:", e); }
+  }
 }
 
 async function buildUrl() {
@@ -106,8 +137,15 @@ export async function connect() {
       console.warn("[ws] non-JSON message ignored:", ev.data);
       return;
     }
+    // Server-pushed typed events (voice_state, user_message, jarvis_reply)
+    // are independent of the request/response chat flow.
+    if (typeof data.type === "string") {
+      dispatchEvent(data);
+      return;
+    }
+    // Otherwise it's a reply/error for the in-flight send().
     if (!pending) {
-      console.warn("[ws] unsolicited message:", data);
+      console.warn("[ws] unsolicited reply/error:", data);
       return;
     }
     const p = pending;

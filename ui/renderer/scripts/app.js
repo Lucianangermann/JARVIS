@@ -131,6 +131,46 @@ export function setConnection(state) {
 // is called synchronously with the current state so the dot starts
 // correctly even before the first transition.
 ws.onConnectionChange(setConnection);
+
+// ---- voice events from the server's local mic loop ----------------
+// When JARVIS_LOCAL_VOICE=1 is set on the server, voice_loop publishes
+// state transitions over /ws as it works through the wake-word →
+// transcribe → think → speak pipeline. We mirror those onto the HUD
+// state machine so what the user sees matches what the assistant is
+// doing in real time. Text-input chat still drives setState itself
+// (runTurn below); voice and text share the same visual states.
+ws.onEvent("voice_state", ({ state }) => {
+  switch (state) {
+    case "transcribing":
+    case "thinking":
+      // Auto-open the HUD: the user is interacting, even if they
+      // last left it collapsed to the orb.
+      setState("processing");
+      break;
+    case "speaking":
+      setState("speaking");
+      break;
+    case "listening":
+      // Server is back to passive wake-word listening. If the user
+      // already collapsed to the orb, don't pull it back open — just
+      // park us in "active" otherwise so the HUD stays usable for
+      // typed follow-ups.
+      if (currentState !== "idle") setState("active");
+      break;
+  }
+});
+
+ws.onEvent("user_message", ({ text }) => {
+  if (text) addMessage("you", text);
+});
+
+ws.onEvent("jarvis_reply", ({ text }) => {
+  // Mirrors the text path's chat line. TTS plays the audio in parallel
+  // on the server side; the typewriter visual matches the spoken pace
+  // closely enough that they don't feel out of sync.
+  if (text) addMessage("jarvis", text);
+});
+
 ws.connect();
 
 // ---- permission status (tier dots + kill-switch badge) ------------
