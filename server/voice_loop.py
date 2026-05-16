@@ -138,49 +138,6 @@ USER_VOICE_RMS_GATE = 400
 # laptop speakers. 0.1× still gives the AEC some headroom for residual.
 USER_VOICE_GATE_OUT_FACTOR = 0.1
 
-# Fast interrupt: while JARVIS is busy, the user's voice (already
-# AEC'd + gated) must stay above FAST_INTERRUPT_RMS for at least
-# FAST_INTERRUPT_MIN_S of *consecutive* 10 ms blocks AND contain a
-# sub-run of FAST_INTERRUPT_MIN_RUN_BLOCKS uninterrupted hits.
-#
-# - The streak length rejects isolated keyboard clicks (each keystroke
-#   is a 10-30 ms RMS spike followed by a quiet gap).
-# - The uninterrupted-run requirement rejects *bursts* of clicks (fast
-#   typing or a double-click can chain enough hits + tolerated misses
-#   to fake a long streak, but no single click sustains 40 ms+ of
-#   continuous energy the way a vowel does).
-# - The miss-tolerance handles natural vocal RMS dips inside a single
-#   sustained vowel (otherwise pitch fluctuations could reset the run
-#   half-way through a clean "Stop").
-# - The threshold sits clearly above typical AEC residual (~50-300
-#   during pure JARVIS) and below user voice mid-vowel (~700-1500).
-FAST_INTERRUPT_RMS = 500
-FAST_INTERRUPT_MIN_S = 0.13
-FAST_INTERRUPT_MIN_BLOCKS = int(FAST_INTERRUPT_MIN_S / BLOCK_S)
-FAST_INTERRUPT_MISS_TOLERANCE = 2   # allow 2 sub-threshold blocks (20ms dip)
-# Minimum uninterrupted run of above-threshold blocks anywhere in the
-# streak. 30 ms is the lower bound for a steady-state vowel — quiet
-# voices still cross it easily, while keyboard/mouse clicks (1-2 block
-# transients) cannot, even when chained into a burst.
-FAST_INTERRUPT_MIN_RUN_BLOCKS = 3
-# During TTS playback, AEC residual can peak at 20-25% of speaker
-# output. We scale the fast-interrupt threshold by this factor so loud
-# TTS doesn't trip false interrupts. User voice during loud TTS has to
-# be proportionally louder — but that's the natural barge-in volume
-# anyway (people speak up to talk over their assistant).
-FAST_INTERRUPT_OUT_FACTOR = 0.30
-
-# Speex's adaptive echo filter needs ~200-300 ms to converge to a fresh
-# TTS output path. During that window the cleaned mic stream leaks 1000+
-# RMS echo and falsely trips the fast-interrupt (looks like a sustained
-# vowel from the AEC residual). Grace is counted in AUDIBLE-TTS blocks
-# (out_rms > 300), measured by the audio callback — so the window is
-# tied to actual speaker output, not to the speak() call (which fires
-# 100-300 ms before audio reaches the speakers). Whisper-based barge-in
-# stays active (its hallucination filter handles echo).
-AEC_CONVERGENCE_GRACE_S = 0.40
-AEC_GRACE_BLOCKS = int(AEC_CONVERGENCE_GRACE_S / BLOCK_S)
-
 # Once the gate opens we hold it open for this long, even if the level
 # drops back below threshold. This captures full words — consonants
 # like the "st" in "Stop" are much quieter than vowels and would
@@ -248,15 +205,6 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
         # Hangover countdown: while > 0, the gate stays open even if the
         # mic falls below USER_VOICE_RMS_GATE for a few blocks.
         "gate_open_left": 0,
-        # Consecutive audible-TTS blocks (out_rms_block > 300). Reset to
-        # 0 when speakers go quiet. The main loop reads this to know
-        # when AEC is still converging on a fresh TTS playback path —
-        # any value in [1, AEC_GRACE_BLOCKS] means "grace active".
-        "speaker_audible_blocks": 0,
-        # Most recent TTS output RMS (per audio tick). Used by the main
-        # loop to scale the fast-interrupt threshold so AEC residual
-        # during loud TTS doesn't trip a false interrupt.
-        "last_out_rms": 0.0,
     }
     diag_every = 100  # 100 × 10 ms = 1 s
 
@@ -307,17 +255,6 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
         out_rms_block = float(
             np.sqrt(np.mean(tts_samples.astype(np.int32) ** 2))
         )
-        # Audible-TTS counter for AEC grace. Increments while speakers
-        # are active, resets when they go quiet — so each new TTS burst
-        # gets a fresh convergence window. Single-key dict write is
-        # atomic under the GIL; main-loop reads see consistent values.
-        if out_rms_block > 300:
-            diag_state["speaker_audible_blocks"] += 1
-        else:
-            diag_state["speaker_audible_blocks"] = 0
-        # Latest speaker RMS, shared with main loop for the adaptive
-        # fast-interrupt threshold (echo residual scales with TTS volume).
-        diag_state["last_out_rms"] = out_rms_block
         if out_rms_block > 300:  # speakers actively playing
             clean_rms_block = float(
                 np.sqrt(np.mean(cleaned.astype(np.int32) ** 2))
@@ -385,20 +322,6 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     # the user says one of the end phrases or the timer lapses.
     followup_until = 0.0  # monotonic deadline; 0 = inactive
     followup_window = settings.FOLLOWUP_TIMEOUT_S
-
-    # Fast-interrupt streak tracker.
-    #   `count`      — blocks since the streak started (hits + tolerated misses)
-    #   `misses`     — consecutive sub-threshold blocks in the current dip
-    #   `run`        — current uninterrupted hit run (resets on any miss)
-    #   `max_run`    — longest uninterrupted hit run seen in this streak
-    # The streak fires only when `count >= MIN_BLOCKS` AND
-    # `max_run >= MIN_RUN_BLOCKS`. That combination passes a clean vowel
-    # but rejects keyboard/mouse bursts (whose runs stay at 1-3 blocks
-    # even if the overall streak length looks long enough).
-    fast_int_count = 0
-    fast_int_misses = 0
-    fast_int_run = 0
-    fast_int_max_run = 0
 
     # Brain work runs in a worker thread so the main loop can keep
     # processing audio (and hear "Stop" / "Halt") while JARVIS thinks
@@ -528,10 +451,6 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 # trigger a false barge-in.
                 if busy_now and not last_busy:
                     barge_in_buffer.clear()
-                    fast_int_count = 0
-                    fast_int_misses = 0
-                    fast_int_run = 0
-                    fast_int_max_run = 0
                 last_busy = busy_now
 
                 # Per-tick state heartbeat for the HUD. _emit_state dedups
@@ -549,17 +468,6 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 else:
                     _emit_state("listening")
 
-                # AEC convergence grace: when speakers JUST started
-                # playing a fresh TTS burst, the cleaned signal has
-                # ~1000+ RMS echo residual for ~150-300 ms. We read the
-                # callback's audible-block counter and treat the first
-                # AEC_GRACE_BLOCKS of audible TTS as a "don't trust the
-                # fast-interrupt" window. This is tied to actual
-                # speaker output, not to tts.speak() call time (which
-                # fires ~200 ms before audio reaches the speakers).
-                audible_blocks = diag_state["speaker_audible_blocks"]
-                in_aec_grace = 0 < audible_blocks <= AEC_GRACE_BLOCKS
-
                 if busy_now:
                     # While JARVIS is talking or thinking, completely
                     # ignore the regular VAD: the mic hears the speakers
@@ -572,71 +480,13 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                     silence_blocks = 0
                     pre_roll.clear()
 
-                    # FAST INTERRUPT: count blocks above threshold,
-                    # tolerating up to FAST_INTERRUPT_MISS_TOLERANCE
-                    # short dips in a row. We also track the longest
-                    # uninterrupted hit run — fires only when *both* the
-                    # total streak is long enough AND a single vowel-like
-                    # run sat above the threshold. Keystrokes & mouse
-                    # clicks have runs of 1-3 blocks, so even a burst of
-                    # them won't satisfy the run requirement.
-                    #
-                    # in_aec_grace covers the first ~400 ms of audible
-                    # TTS — AEC hasn't converged yet and the cleaned
-                    # signal carries echo residual that looks identical
-                    # to a sustained vowel.
-                    # Adaptive threshold: during loud TTS, the cleaned
-                    # mic stream carries echo residual proportional to
-                    # speaker output. We require user voice to clear
-                    # that floor — 30% of speaker RMS, or the static
-                    # 500 floor when speakers are quieter.
-                    fi_threshold = max(
-                        FAST_INTERRUPT_RMS,
-                        FAST_INTERRUPT_OUT_FACTOR * diag_state.get("last_out_rms", 0.0),
-                    )
-                    if in_aec_grace:
-                        # Don't accumulate; also actively reset so we
-                        # exit grace with a clean slate.
-                        fast_int_count = 0
-                        fast_int_misses = 0
-                        fast_int_run = 0
-                        fast_int_max_run = 0
-                    elif rms > fi_threshold:
-                        fast_int_count += 1
-                        fast_int_misses = 0
-                        fast_int_run += 1
-                        if fast_int_run > fast_int_max_run:
-                            fast_int_max_run = fast_int_run
-                    elif fast_int_count > 0:
-                        fast_int_misses += 1
-                        fast_int_run = 0
-                        if fast_int_misses > FAST_INTERRUPT_MISS_TOLERANCE:
-                            fast_int_count = 0
-                            fast_int_misses = 0
-                            fast_int_max_run = 0
-                        else:
-                            fast_int_count += 1  # still inside the streak
-                    if (
-                        fast_int_count >= FAST_INTERRUPT_MIN_BLOCKS
-                        and fast_int_max_run >= FAST_INTERRUPT_MIN_RUN_BLOCKS
-                    ):
-                        print(f"[JARVIS] FAST INTERRUPT (energy burst, "
-                              f"rms~{rms:.0f}, "
-                              f"~{fast_int_count * BLOCK_S * 1000:.0f}ms, "
-                              f"run={fast_int_max_run * BLOCK_S * 1000:.0f}ms)")
-                        brain_cancel.set()
-                        tts.stop()
-                        fast_int_count = 0
-                        fast_int_misses = 0
-                        fast_int_run = 0
-                        fast_int_max_run = 0
-                        barge_in_buffer.clear()
-                        _drain(audio_q)
-                        continue
-
-                    # Slower Whisper-based barge-in for quieter
-                    # utterances that don't trigger the fast path
-                    # (e.g. whispered "stop", or "Jarvis, …" prefix).
+                    # Whisper-based barge-in: every BARGE_IN_INTERVAL_S
+                    # we run a rolling-window transcription of the last
+                    # ~1.5 s of cleaned mic audio looking for an actual
+                    # stop phrase or wake word. Slower than the
+                    # discarded fast-interrupt energy detector, but
+                    # immune to TTS-echo / keyboard clicks because it
+                    # requires real recognised speech.
                     now_t = time.monotonic()
                     if (
                         len(barge_in_buffer) == BARGE_IN_WINDOW_BLOCKS
@@ -651,13 +501,6 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                             daemon=True,
                         ).start()
                     continue
-
-                # Idle: reset fast-interrupt counters so a stale streak
-                # doesn't carry into the next TTS session.
-                fast_int_count = 0
-                fast_int_misses = 0
-                fast_int_run = 0
-                fast_int_max_run = 0
 
                 # Did the user barge in with a new command during the
                 # previous reply? If so, dispatch it now (old brain is
