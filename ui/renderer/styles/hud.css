@@ -74,29 +74,30 @@
 }
 #orb::before {
   /* The four bright bracket-arcs, faked with a conic-gradient + a
-   * radial mask. Four 30° glow arcs at the cardinal compass points
-   * (12/3/6/9), separated by four 60° transparent gaps — totals 360°
-   * with perfectly even spacing. The `from -15deg` start rotates the
-   * pattern so the first arc is centred on 12 o'clock (the arc spans
-   * -15°..+15° in compass terms, i.e. 0°..30° in gradient-local
-   * coords after the offset). */
+   * radial mask. Four 30° glow arcs at the DIAGONAL points
+   * (NE/SE/SW/NW — i.e. 1:30, 4:30, 7:30, 10:30) separated by four
+   * 60° transparent gaps. Diagonals (not cardinals) so the arcs sit
+   * clear of the horizontal JARVIS wordmark running across the
+   * centre of the orb; the empty gaps line up with top/right/
+   * bottom/left, which is exactly where the wordmark and any future
+   * status glyphs read most clearly. */
   content: "";
   position: absolute;
   inset: 12px;
   border-radius: 50%;
   background:
     conic-gradient(
-      from -15deg,
-      /* arc 1 — top    (compass -15°..15°) */
+      from 30deg,
+      /* arc 1 — NE (compass 30°..60°) */
       var(--jarvis-glow) 0deg,   var(--jarvis-glow) 30deg,
       transparent        30deg,  transparent        90deg,
-      /* arc 2 — right  (compass 75°..105°) */
+      /* arc 2 — SE (compass 120°..150°) */
       var(--jarvis-glow) 90deg,  var(--jarvis-glow) 120deg,
       transparent        120deg, transparent        180deg,
-      /* arc 3 — bottom (compass 165°..195°) */
+      /* arc 3 — SW (compass 210°..240°) */
       var(--jarvis-glow) 180deg, var(--jarvis-glow) 210deg,
       transparent        210deg, transparent        270deg,
-      /* arc 4 — left   (compass 255°..285°) */
+      /* arc 4 — NW (compass 300°..330°) */
       var(--jarvis-glow) 270deg, var(--jarvis-glow) 300deg,
       transparent        300deg, transparent        360deg
     );
