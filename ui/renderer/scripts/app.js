@@ -195,6 +195,16 @@ document.addEventListener("keydown", (ev) => {
   }
 });
 
+// ---- global hotkey toggle (Cmd/Ctrl+J) ----
+// Main process owns the OS-level shortcut registration and pings us
+// here. We map "toggle" onto the existing state machine: if we're
+// idle, expand to the HUD; otherwise collapse back to idle. setState
+// already drives both the DOM and the window resize via IPC, so this
+// stays a one-liner.
+window.jarvis?.onToggle?.(() => {
+  setState(currentState === "idle" ? "active" : "idle");
+});
+
 // ---- seed the UI with some content so first paint isn't empty ----
 
 (function seed() {

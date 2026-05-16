@@ -13,4 +13,12 @@ contextBridge.exposeInMainWorld("jarvis", {
 
   /** Quit the overlay app (Cmd+Q equivalent, called from the X button). */
   quit: () => ipcRenderer.invoke("jarvis:quit"),
+
+  /** Subscribe to "toggle" pings from the global hotkey (Cmd+J).
+   *  Returns an unsubscribe function. */
+  onToggle: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on("jarvis:toggle", handler);
+    return () => ipcRenderer.off("jarvis:toggle", handler);
+  },
 });

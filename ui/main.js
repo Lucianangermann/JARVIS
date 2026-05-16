@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, ipcMain, screen } = require("electron");
+const { app, BrowserWindow, globalShortcut, ipcMain, screen } = require("electron");
 const path = require("node:path");
 
 // Suppress the Chromium ANGLE/EGL error spam on Intel macOS:
@@ -141,11 +141,41 @@ ipcMain.handle("jarvis:quit", () => {
   app.quit();
 });
 
+// ---- global hotkey: Cmd/Ctrl+J toggles HUD ↔ orb ---- //
+// Main owns the OS-level shortcut registration; the actual state
+// machine lives in the renderer. We just ping the renderer over IPC
+// and let its setState() drive both the DOM update and the window
+// resize (via the existing "jarvis:set-state" handler above) — no
+// duplicated state tracking, one source of truth.
+const TOGGLE_ACCELERATOR = "CommandOrControl+J";
+
+function registerGlobalHotkey() {
+  const ok = globalShortcut.register(TOGGLE_ACCELERATOR, () => {
+    if (!mainWindow) return;
+    mainWindow.webContents.send("jarvis:toggle");
+    // Surface the window when summoning so the user can interact
+    // immediately. focus() is a no-op when we're already focused, so
+    // pressing the hotkey to dismiss doesn't have a side-effect.
+    mainWindow.showInactive();
+    mainWindow.focus();
+  });
+  if (!ok) {
+    console.warn(`[JARVIS] Could not register global hotkey ${TOGGLE_ACCELERATOR} — likely already taken by another app.`);
+  }
+}
+
 app.whenReady().then(() => {
   createWindow();
+  registerGlobalHotkey();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+// globalShortcut keeps a process-wide registration; releasing on quit
+// is required to free the accelerator for other apps / a fresh launch.
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
 });
 
 app.on("window-all-closed", () => {
