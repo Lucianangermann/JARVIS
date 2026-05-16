@@ -10,9 +10,15 @@ the registry is the only source of truth.
 
 Tier semantics
 --------------
-1. INFO     — read-only. Always permitted (no confirmation, no unlock).
+1. INFO     — no-confirmation tier. Covers read-only system info AND
+              app lifecycle (open_app / close_app) — the user opted
+              into auto-launching/quitting any app since neither
+              touches the app's internal state.
 2. APPS     — single per-process unlock. After startup confirmation,
-              subsequent Tier 2 actions run without re-prompting.
+              subsequent Tier 2 actions run without re-prompting. Every
+              action that *changes* something inside a running app
+              lives here: open_url, music_transport, set_volume,
+              create_note, edit_note, create_reminder, send_notification.
 3. FILES    — per-action confirmation. Sandboxed to ALLOWED_*_DIRS only.
 4. SYSTEM   — per-action confirmation AND password match. The Tier-4
               password lives in ``settings.JARVIS_SUDO_PASSWORD`` and is

@@ -594,8 +594,31 @@ def _open_app(*, name: str = "", **_kw) -> str:
 
 
 # --- registry -------------------------------------------------------------- #
+#
+# Tier classification per user spec ("volle Kontrolle Apps zu öffnen
+# und wieder zu schließen, nur wenn ich etwas in den Apps ändern will,
+# soll ich das bestätigen müssen"):
+#
+#   _TIER1_APP_LIFECYCLE  — open / close. Launching or quitting an app
+#       changes nothing INSIDE the app, so we put these in Tier INFO
+#       (run inline, no confirmation gate). Kill-switch still applies
+#       only to non-INFO tiers, so these stay reachable in emergencies
+#       which is actually useful (eg. kill a misbehaving app while
+#       Tier 2 is locked).
+#
+#   _TIER2_APP_ACTIONS    — everything that mutates state INSIDE a
+#       running app (open a URL, play music, change volume, write a
+#       note, create a reminder, send a notification). All Tier APPS —
+#       confirmation per action via /confirm.
 
-_TIER2: tuple[tuple[str, callable, callable], ...] = (
+_TIER1_APP_LIFECYCLE: tuple[tuple[str, callable, callable], ...] = (
+    ("open_app",  _open_app,  lambda **p: f"App öffnen: {p.get('name','?')}"),
+    ("close_app", _close_app, lambda **p: (
+        f"App schließen: {p.get('name','?')}{' (force)' if p.get('force') else ''}"
+    )),
+)
+
+_TIER2_APP_ACTIONS: tuple[tuple[str, callable, callable], ...] = (
     ("music_transport",   _music_transport,   lambda **p: f"{p.get('player','Spotify')}: {p.get('action','play')}"),
     ("open_url",          _open_url,          lambda **p: f"URL öffnen in Safari: {p.get('url','')}"),
     ("set_volume",        _set_volume,        lambda **p: f"Lautstärke auf {p.get('level','?')}"),
@@ -613,15 +636,13 @@ _TIER2: tuple[tuple[str, callable, callable], ...] = (
         + (f" (fällig {p.get('due','')})" if p.get('due') else "")
         + (f" in {p.get('list','')!r}" if p.get('list') else "")
     )),
-    ("open_app",          _open_app,          lambda **p: f"App öffnen: {p.get('name','?')}"),
-    ("close_app",         _close_app,         lambda **p: (
-        f"App schließen: {p.get('name','?')}{' (force)' if p.get('force') else ''}"
-    )),
 )
 
 
 def register_all() -> None:
-    for name, handler, summary in _TIER2:
+    for name, handler, summary in _TIER1_APP_LIFECYCLE:
+        permission_manager.register(name, Tier.INFO, handler, summary)
+    for name, handler, summary in _TIER2_APP_ACTIONS:
         permission_manager.register(name, Tier.APPS, handler, summary)
 
 
