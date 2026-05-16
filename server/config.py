@@ -80,6 +80,16 @@ class Settings:
     # for). Raise to 5 for the original quality target, 8 for the most
     # accuracy on long-form transcription.
     WHISPER_BEAM_SIZE: int = int(os.getenv("WHISPER_BEAM_SIZE", "1"))
+    # STT backend selection:
+    #   "auto"     — macOS Speech.framework when available + authorised,
+    #                else fall through to Whisper. Default. Sub-second
+    #                latency on Apple hardware.
+    #   "macos"    — Speech.framework only; refuses to start if the
+    #                framework or its permission is missing.
+    #   "whisper"  — skip Speech.framework; always use faster-whisper /
+    #                openai-whisper. Use this on Linux, or when you
+    #                explicitly want Whisper's accuracy profile.
+    STT_BACKEND: str = os.getenv("STT_BACKEND", "auto")
     # Substring or full id of the TTS voice. Empty = autoselect based on
     # TTS_LANGUAGE. Example values: "Anna", "Markus", "Samantha", or a
     # full id like "com.apple.voice.compact.de-DE.Anna".

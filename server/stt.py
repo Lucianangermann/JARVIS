@@ -116,21 +116,75 @@ _RESUME_PHRASES: frozenset[str] = frozenset({
 })
 
 
-def _load_model():
-    """Load Whisper once and cache it. Prefer faster-whisper if installed.
+# Map short WHISPER_LANGUAGE codes to the BCP-47 locales Apple's
+# Speech.framework expects. Whisper accepts both forms; Apple is strict.
+_LOCALE_FALLBACKS = {
+    "de": "de-DE",
+    "en": "en-US",
+    "fr": "fr-FR",
+    "es": "es-ES",
+    "it": "it-IT",
+}
 
-    Returns a ``(backend, model_obj)`` tuple where backend is either
-    ``"faster"`` (CTranslate2-based, 2-3× faster, same models) or
-    ``"vanilla"`` (the openai-whisper reference impl). transcribe()
-    handles the call-site differences.
+
+def _resolved_locale() -> str:
+    raw = (settings.WHISPER_LANGUAGE or "de").strip()
+    if "-" in raw:
+        return raw
+    return _LOCALE_FALLBACKS.get(raw.lower(), raw)
+
+
+def _load_model():
+    """Pick an STT backend and cache it. Returns ``(backend, model_obj)``.
+
+    Backend selection order based on settings.STT_BACKEND:
+        "auto" (default) — macOS Speech.framework if available + authorised,
+                            else faster-whisper, else vanilla openai-whisper
+        "macos"          — Speech.framework only; raise if unavailable
+        "whisper"        — skip Speech.framework, force Whisper path
+
+    Why macOS first when available: on Intel Macs it runs through the
+    OS speech daemon, beats faster-whisper by ~10-20×, and keeps audio
+    on-device. Whisper is the durable cross-platform fallback.
     """
     global _model
     if _model is not None:
         return _model
 
+    backend_pref = (getattr(settings, "STT_BACKEND", "auto") or "auto").lower()
+
+    # ---- macOS Speech.framework -----------------------------------
+    if backend_pref in ("auto", "macos"):
+        try:
+            from . import stt_macos
+        except Exception as exc:  # noqa: BLE001
+            stt_macos = None  # type: ignore[assignment]
+            if backend_pref == "macos":
+                raise RuntimeError(
+                    f"STT_BACKEND=macos but Speech.framework import failed: {exc}"
+                ) from exc
+
+        if stt_macos is not None and stt_macos.is_available():
+            t_init = time.monotonic()
+            locale = _resolved_locale()
+            print(f"[JARVIS] initialising macOS Speech.framework (locale={locale!r})…")
+            status = stt_macos.request_permission()
+            if status == 3:  # _STATUS_AUTHORIZED
+                _model = ("macos", stt_macos)
+                print(f"[TIMING] model init (macos Speech, {locale}): "
+                      f"{(time.monotonic() - t_init)*1000:.0f}ms")
+                return _model
+            if backend_pref == "macos":
+                raise RuntimeError(
+                    "STT_BACKEND=macos but Speech.framework permission denied "
+                    f"(status={stt_macos.authorization_status_name()}); "
+                    "grant via System Settings → Privacy & Security → Speech Recognition."
+                )
+            print(f"[JARVIS] macOS Speech permission status="
+                  f"{stt_macos.authorization_status_name()}, falling back to Whisper")
+
+    # ---- Whisper backends -----------------------------------------
     name = settings.WHISPER_MODEL
-    # Try faster-whisper first — same model names, much better latency
-    # especially for medium/large.
     t_load = time.monotonic()
     try:
         from faster_whisper import WhisperModel  # type: ignore[import-not-found]
@@ -188,6 +242,24 @@ def transcribe(audio_bytes: bytes, *, sample_rate: int = 16_000) -> str:
     try:
         lang = settings.WHISPER_LANGUAGE or None
         prompt = settings.WHISPER_INITIAL_PROMPT or None
+        # ---- macOS Speech.framework -----------------------------------
+        if backend == "macos":
+            locale = _resolved_locale()
+            t_call = time.monotonic()
+            try:
+                text = model.transcribe_wav(str(tmp), locale=locale)
+            except Exception as exc:  # noqa: BLE001
+                # Soft-fail — return empty so voice_loop treats it as
+                # silence rather than crashing. The error log is visible
+                # in the server console for diagnosis.
+                print(f"[JARVIS] macos transcribe error: {exc}")
+                return ""
+            audio_s = (len(raw) / 2) / sample_rate if len(raw) >= 2 else 0.0
+            elapsed_ms = (time.monotonic() - t_call) * 1000
+            rtf = (elapsed_ms / 1000) / audio_s if audio_s > 0 else 0.0
+            print(f"[TIMING] macos transcribe: {elapsed_ms:.0f}ms "
+                  f"(audio={audio_s:.1f}s, rtf={rtf:.2f}x, locale={locale})")
+            return " ".join(text.lower().split())
         if backend == "faster":
             # faster-whisper streams segment objects; collect into one string.
             # vad_filter=True runs Silero VAD up-front to trim leading /
