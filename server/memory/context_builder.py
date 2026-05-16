@@ -86,33 +86,64 @@ class ContextBuilder:
     def build_system_prompt(self, current_query: str = "",
                             *, session_count: int = 0,
                             base_prompt: str | None = None) -> str:
-        """Compose the system message for one Claude API call.
+        """Compose the system message as a single string. Convenience
+        wrapper over :meth:`build_system_blocks` — pass-through when
+        you don't care about the prompt-cache split."""
+        blocks = self.build_system_blocks(
+            current_query, session_count=session_count, base_prompt=base_prompt,
+        )
+        return "\n\n".join(b["text"] for b in blocks)
 
-        ``current_query`` is the user's latest text — drives the
-        semantic search for the "Relevant Past Context" section.
-        Empty query (session_start) skips that section."""
-        parts: list[str] = [base_prompt or _BASE]
+    def build_system_blocks(self, current_query: str = "",
+                            *, session_count: int = 0,
+                            base_prompt: str | None = None
+                            ) -> list[dict[str, Any]]:
+        """Two-block system message keyed for Anthropic's prompt cache.
 
-        prof_block = self._profile_block()
-        if prof_block:
-            parts.append(prof_block)
+        Block 1 is the **stable prefix** (base + profile + known
+        issues + instructions). Within a session these change rarely,
+        so we mark it ``cache_control: ephemeral`` — first call this
+        session pays the full prompt token cost, every following call
+        amortises against the 5-minute cache window.
 
-        issues_block = self._issues_block()
-        if issues_block:
-            parts.append(issues_block)
+        Block 2 is the **per-turn suffix** (recent activity + relevant
+        past context + current date/time/session#). Always fresh, no
+        cache flag.
 
-        recent_block = self._recent_block()
-        if recent_block:
-            parts.append(recent_block)
+        Order matters: the cache key is the exact byte prefix up to
+        and including the cache_control breakpoint, so the static
+        block has to come first."""
+        # ---- stable prefix ---- #
+        stable: list[str] = [base_prompt or _BASE]
+        prof = self._profile_block()
+        if prof:
+            stable.append(prof)
+        issues = self._issues_block()
+        if issues:
+            stable.append(issues)
+        stable.append(_INSTRUCTIONS)
 
+        # ---- per-turn suffix ---- #
+        dynamic: list[str] = []
+        recent = self._recent_block()
+        if recent:
+            dynamic.append(recent)
         if current_query:
-            past_block = self._past_context_block(current_query)
-            if past_block:
-                parts.append(past_block)
+            past = self._past_context_block(current_query)
+            if past:
+                dynamic.append(past)
+        dynamic.append(self._current_context_block(session_count))
 
-        parts.append(self._current_context_block(session_count))
-        parts.append(_INSTRUCTIONS)
-        return "\n\n".join(parts)
+        blocks: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": "\n\n".join(stable),
+                "cache_control": {"type": "ephemeral"},
+            },
+        ]
+        if dynamic:
+            blocks.append({"type": "text", "text": "\n\n".join(dynamic)})
+        return blocks
 
     # ---- per-section builders -------------------------------------------
 

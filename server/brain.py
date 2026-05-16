@@ -30,6 +30,7 @@ from .config import settings
 from .mac_control import dispatcher as mac_dispatcher
 from .mac_control import permission_manager as mac_pm
 from .mac_control.permission_manager import Tier as MacTier
+from .memory import MemoryManager
 
 
 def _mac_action_tool() -> dict[str, Any]:
@@ -216,6 +217,13 @@ class Brain:
         if settings.MAC_CONTROL_ENABLED:
             self._tools.extend([_mac_action_tool(), _confirm_action_tool()])
 
+        # Long-term memory + self-learning. Owns short-term history (was
+        # _histories), error history, profile, and the dynamic system-
+        # prompt builder. Falls back to in-memory only if storage can't
+        # be opened — the brain keeps working either way.
+        self.memory = MemoryManager()
+        self._started_sessions: set[str] = set()
+
     # -- Public API -------------------------------------------------------- #
 
     def reply(self, session_id: str, user_text: str) -> str:
@@ -225,10 +233,24 @@ class Brain:
             return "I didn't catch that."
 
         with self._lock:
+            # First message of a session triggers the memory warmup
+            # (bumps session counter, semantic-searches the user's
+            # query against past sessions, primes the prompt cache).
+            if session_id not in self._started_sessions:
+                self.memory.session_start(session_id, warmup_query=user_text)
+                self._started_sessions.add(session_id)
+            # Append to short-term + rebuild the system blocks. The
+            # returned prompt isn't actually used here (we re-fetch
+            # blocks inside the tool loop), but the side-effect of
+            # short-term.add is required so the next iteration sees
+            # the user turn.
+            self.memory.before_message(session_id, user_text)
+
             history = self._histories.setdefault(session_id, [])
             history.append({"role": "user", "content": user_text})
             try:
-                final_text = self._run_tool_loop(history)
+                final_text = self._run_tool_loop(history, session_id=session_id,
+                                                  user_text=user_text)
             except Exception as exc:  # noqa: BLE001 — surface to user
                 # Roll back the user turn so a retry doesn't double it up.
                 history.pop()
@@ -236,11 +258,26 @@ class Brain:
 
             history.append({"role": "assistant", "content": final_text})
             self._trim(history)
+            # Fact-extraction + learning hooks. Done outside the model
+            # call's critical path so memory writes can't block latency.
+            try:
+                self.memory.after_message(session_id, user_text, final_text)
+            except Exception:  # noqa: BLE001
+                pass  # memory layer already logs its own failures
             return final_text
 
     def reset(self, session_id: str) -> None:
         with self._lock:
             self._histories.pop(session_id, None)
+            # Flush short-term + summary so the session_end hooks
+            # actually persist the conversation to long-term memory
+            # instead of being silently dropped. memory.session_end
+            # is best-effort + logged on failure.
+            try:
+                self.memory.session_end(session_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._started_sessions.discard(session_id)
 
     # -- Internals --------------------------------------------------------- #
 
@@ -250,23 +287,26 @@ class Brain:
         if len(history) > max_messages:
             del history[: len(history) - max_messages]
 
-    def _run_tool_loop(self, history: list[dict[str, Any]]) -> str:
-        """Manual agentic loop: call Claude, run any tools, feed results back."""
+    def _run_tool_loop(self, history: list[dict[str, Any]],
+                       *, session_id: str = "",
+                       user_text: str = "") -> str:
+        """Manual agentic loop: call Claude, run any tools, feed results back.
+
+        ``user_text`` is the current user turn — drives the memory
+        layer's semantic search for the per-turn "Relevant Past
+        Context" block in the system prompt."""
         for _ in range(8):  # generous bound; tools are cheap
+            # Build a fresh system message each iteration. The cached
+            # prefix (base + profile + known issues + instructions)
+            # stays byte-stable so Anthropic's prompt cache hits;
+            # only the dynamic suffix (recent activity + relevant past
+            # + current date/time) is regenerated per call.
+            system_blocks = self.memory.build_system_blocks(user_text)
+
             resp: Message = self.client.messages.create(
                 model=settings.MODEL,
                 max_tokens=1024,
-                system=[
-                    {
-                        "type": "text",
-                        "text": settings.SYSTEM_PROMPT,
-                        # Cache the (static) system prompt + tool list. Tools
-                        # render before messages, so this breakpoint covers
-                        # both. Saves ~90% on prompt tokens after the first
-                        # call in a session.
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
+                system=system_blocks,
                 tools=self._tools,
                 messages=history,
             )
@@ -305,6 +345,13 @@ class Brain:
                             "is_error": is_error,
                         }
                     )
+                    # Persist the outcome to memory so future turns
+                    # can semantic-search past attempts + the error
+                    # memory can promote a working fix. We log a
+                    # human-readable command string (tool name +
+                    # input summary) rather than the raw block so
+                    # ChromaDB embeddings stay meaningful.
+                    self._record_tool_result(block, result, is_error)
                 history.append({"role": "user", "content": tool_results})
                 continue
 
@@ -313,6 +360,46 @@ class Brain:
             return _join_text(resp) or "I can't help with that."
 
         return "I'm spinning on tool calls — try rephrasing."
+
+    def _record_tool_result(self, block: Any, result: str, is_error: bool) -> None:
+        """Forward a tool execution outcome to the memory layer.
+
+        We don't want this in the hot path of the loop, so failures
+        are caught + ignored. The recorded "command" is a stable
+        text key (tool name + main parameter) — readable enough that
+        semantic search can later match similar requests."""
+        try:
+            tool_name = block.name
+            inp = getattr(block, "input", None) or {}
+            # Compose a stable string key for memory. The most
+            # informative parameter depends on the tool — fall back
+            # to the tool name alone if we don't know the shape.
+            if tool_name == "mac_action":
+                action = inp.get("action", "?")
+                command = f"mac_action:{action}"
+                category = action.split("_", 1)[0]
+            elif tool_name == "system_command":
+                cmd = inp.get("command", "?")
+                command = f"system_command:{cmd}"
+                category = "system"
+            elif tool_name == "confirm_action":
+                command = "confirm_action"
+                category = "confirm"
+            else:
+                command = tool_name or "tool"
+                category = "other"
+            if is_error:
+                self.memory.record_command_result(
+                    command, success=False,
+                    error=result if isinstance(result, str) else str(result),
+                    category=category,
+                )
+            else:
+                self.memory.record_command_result(
+                    command, success=True, category=category,
+                )
+        except Exception:  # noqa: BLE001 — memory must never break the brain
+            pass
 
     def _exec_system_command(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
         """Dispatch a `system_command` tool_use to the whitelist."""

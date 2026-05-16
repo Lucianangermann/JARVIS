@@ -190,6 +190,20 @@ class MemoryManager:
             self._mem_log.warning("before_message failed: %s", exc)
             return self.context_builder.build_system_prompt("", session_count=0)
 
+    def build_system_blocks(self, user_text: str = "") -> list[dict[str, Any]]:
+        """Return the two-block system message for Anthropic's API
+        call (cached-prefix + dynamic suffix). Use this from the
+        brain instead of build_system_prompt + cache_control gymnastics."""
+        try:
+            session_count = (self.profile.stats().get("session_count", 0)
+                             if self.profile.available else 0)
+            return self.context_builder.build_system_blocks(
+                user_text, session_count=session_count,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._mem_log.warning("build_system_blocks failed: %s", exc)
+            return [{"type": "text", "text": "You are JARVIS."}]
+
     def after_message(self, session_id: str, user_text: str,
                       response: str) -> None:
         """Called AFTER the Claude reply lands. Adds the assistant

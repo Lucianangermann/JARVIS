@@ -444,6 +444,137 @@ def emergency_stop(token: str = Depends(require_token)) -> dict[str, Any]:
     return mac_kill_switch.status()
 
 
+# --- memory routes ---------------------------------------------------- #
+# Routes onto the MemoryManager carried by the brain. All require the
+# bearer token like the rest of the API. Read-only routes are
+# tolerant of degraded subsystems; write routes (forget / wipe)
+# refuse if the layer they need is unavailable.
+
+def _memory(request: Request):
+    """Pull the live MemoryManager off the brain. None-safe so the
+    server still starts even if memory init failed."""
+    brain = getattr(request.app.state, "brain", None)
+    return getattr(brain, "memory", None) if brain else None
+
+
+@app.get("/memory/profile")
+def memory_profile(request: Request,
+                   token: str = Depends(require_token)) -> dict[str, Any]:
+    """User profile as JSON. Sensitive fields are never stored
+    (redaction runs on every write path) so this is safe to return
+    in full."""
+    mem = _memory(request)
+    if mem is None:
+        raise HTTPException(status_code=503, detail="memory unavailable")
+    return mem.get_profile()
+
+
+@app.get("/memory/recent")
+def memory_recent(request: Request,
+                  days: int = 7, limit: int = 10,
+                  token: str = Depends(require_token)) -> dict[str, Any]:
+    """Up to ``limit`` most-recent session summaries from the last
+    ``days`` days. Used by the HUD's history pane / a future
+    /memory inspector."""
+    mem = _memory(request)
+    if mem is None:
+        raise HTTPException(status_code=503, detail="memory unavailable")
+    days = max(1, min(int(days), 365))
+    limit = max(1, min(int(limit), 50))
+    return {"sessions": mem.recent_sessions(days=days, limit=limit)}
+
+
+@app.get("/memory/errors")
+def memory_errors(request: Request,
+                  token: str = Depends(require_token)) -> dict[str, Any]:
+    """Commands with at least one recorded failure. Includes the
+    success rate so the HUD can flag chronic flakes."""
+    mem = _memory(request)
+    if mem is None:
+        raise HTTPException(status_code=503, detail="memory unavailable")
+    return {"problematic": mem.known_errors()}
+
+
+@app.get("/memory/stats")
+def memory_stats(request: Request,
+                 token: str = Depends(require_token)) -> dict[str, Any]:
+    """Aggregated memory state across every layer — what's available,
+    how many rows / vectors / facts. Drives a future /memory dashboard."""
+    mem = _memory(request)
+    if mem is None:
+        raise HTTPException(status_code=503, detail="memory unavailable")
+    return mem.stats()
+
+
+@app.get("/memory/search")
+def memory_search(request: Request, q: str = "", n: int = 5,
+                  token: str = Depends(require_token)) -> dict[str, Any]:
+    """Semantic search across past conversations. ``q`` is the query
+    text, ``n`` is the result cap (1..20)."""
+    mem = _memory(request)
+    if mem is None:
+        raise HTTPException(status_code=503, detail="memory unavailable")
+    q = (q or "").strip()
+    if not q:
+        return {"query": q, "results": []}
+    n = max(1, min(int(n), 20))
+    return {"query": q, "results": mem.search(q, n_results=n)}
+
+
+class _ForgetRequest(BaseModel):
+    """A single entry id to drop from the vector store. The actual
+    semantic equivalent — forgetting a single conversation — runs
+    through chromadb directly; the brain exposes it via the manager."""
+    id: str = Field(..., min_length=1, max_length=64)
+
+
+@app.post("/memory/forget")
+def memory_forget(payload: _ForgetRequest, request: Request,
+                  token: str = Depends(require_token)) -> dict[str, Any]:
+    """Remove one specific memory entry by id. Used by the future
+    HUD inspector to let the user prune individual sessions / facts
+    without nuking everything."""
+    mem = _memory(request)
+    if mem is None:
+        raise HTTPException(status_code=503, detail="memory unavailable")
+    # Delete from the three collections opportunistically — we don't
+    # know up-front which one holds the id, but Chroma's delete is a
+    # cheap no-op when the id is absent.
+    ltm = mem.long_term
+    if not ltm.available:
+        raise HTTPException(status_code=503, detail="long-term memory unavailable")
+    removed: list[str] = []
+    for coll, key in ((ltm._conv, "conversations"),
+                      (ltm._cmd, "commands"),
+                      (ltm._kn, "knowledge")):
+        try:
+            coll.delete(ids=[payload.id])
+            removed.append(key)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": True, "id": payload.id, "checked": removed}
+
+
+class _WipeRequest(BaseModel):
+    """Required ``confirm`` field is a literal string the caller must
+    type — the API layer's contribution to the spec's "double
+    confirmation" rule (the HUD provides the second confirm step)."""
+    confirm: str = Field(..., description="must equal 'I UNDERSTAND'")
+
+
+@app.delete("/memory/all")
+def memory_wipe_all(payload: _WipeRequest, request: Request,
+                    token: str = Depends(require_token)) -> dict[str, Any]:
+    """Full GDPR-style wipe: every conversation, command, knowledge
+    entry, error row, fix, command-stat, profile field. Requires
+    ``confirm == "I UNDERSTAND"`` in the request body. The action is
+    logged (with timestamp) but the content is not."""
+    mem = _memory(request)
+    if mem is None:
+        raise HTTPException(status_code=503, detail="memory unavailable")
+    return mem.forget_everything(confirmation_token=payload.confirm)
+
+
 @app.post("/resume")
 def resume(token: str = Depends(require_token)) -> dict[str, Any]:
     """Clear the kill switch. Tier 2 stays locked — explicit reconfirm needed."""
