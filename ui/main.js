@@ -21,10 +21,19 @@ app.commandLine.appendSwitch("log-level", "3"); // 0=info 1=warn 2=err 3=fatal
 // IDLE shows the small orb in the bottom-right corner; ACTIVE/SPEAKING/
 // PROCESSING expand to the full HUD. Resizing is done programmatically
 // — the user can't drag a resize handle (no frame).
-// Orb window is sized to fit the 110px circle + room for its drop-
-// shadow glow + the rotating outer accent ring. Anything past the
-// orb's edge is genuinely transparent — no rectangle to mask.
-const ORB = { width: 170, height: 170 };
+//
+// Orb window MUST be much larger than the 110px circle itself, because
+// the orb-breathe animation paints a box-shadow with up to ~72px blur
+// at peak. If the window is tight to the circle, that glow gets
+// CLIPPED to the window's rectangular bounds — which is exactly the
+// "rectangle around the orb" people kept seeing. With a generous
+// padding, the glow has room to fall off naturally and everything
+// past it is true desktop-transparent.
+//   circle  = 110
+//   glow    = ~72 per side at peak
+//   safety  = 30
+//   total   = 110 + 2*(72+30) = 314 → round up to 320
+const ORB = { width: 320, height: 320 };
 const HUD = { width: 520, height: 360 };
 // Margin from the screen edges when sized.
 const EDGE_MARGIN = 24;
@@ -46,11 +55,21 @@ function createWindow() {
     width: ORB.width,
     height: ORB.height,
     transparent: true,
+    // Explicit fully-transparent background. Without this, some
+    // Electron versions on macOS fall back to the default opaque
+    // window color before the renderer paints, which can show as a
+    // brief rectangle flash and (more annoyingly) as a faint constant
+    // rectangle if the GPU compositor decides the layer needs a base.
+    backgroundColor: "#00000000",
     frame: false,
     resizable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
     hasShadow: false,
+    // Kill macOS's default rounded-corner window mask too — we draw
+    // our own circle, and a rounded-rect mask on top of a transparent
+    // window can show its corners as faint arcs against bright wallpapers.
+    roundedCorners: false,
     // No system-level vibrancy: it paints the WHOLE window rectangle
     // with a dark blur, which was visible as a rounded-rect around the
     // orb in idle state. We do glass effects per-element via CSS
