@@ -21,22 +21,55 @@
 /* IDLE orb: same design language as the emblem, just smaller.
  * Built from four bright bracket-arcs + a thin outer ring + a tiny
  * inner disc that you can later put a wordmark or just a dot in.
- * Uses pure CSS conic-gradient + clip-paths so it's animation-cheap. */
+ * Uses pure CSS conic-gradient + clip-paths so it's animation-cheap.
+ *
+ * The glass effect comes from element-level backdrop-filter — it only
+ * blurs the desktop behind the CIRCLE, so nothing outside the orb is
+ * ever visible. No window-level vibrancy rectangle. */
 #orb {
   position: relative;
   width: 110px;
   height: 110px;
   border-radius: 50%;
+  display: grid;
+  place-items: center;
   background: radial-gradient(
     circle at 50%,
-    rgba(0, 30, 80, 0.55) 0%,
-    rgba(0, 10, 30, 0.95) 70%
+    rgba(0, 30, 80, 0.45) 0%,
+    rgba(0, 10, 30, 0.82) 65%,
+    rgba(0, 5, 18, 0.92) 100%
   );
-  border: 1px solid rgba(0, 212, 255, 0.45);
+  /* Real glass effect, masked to the circle by border-radius */
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid rgba(0, 212, 255, 0.55);
   -webkit-app-region: drag;
   cursor: grab;
   animation: orb-breathe 3s ease-in-out infinite;
-  filter: drop-shadow(0 0 8px rgba(0, 212, 255, 0.5));
+  /* Drop-shadow ring around the orb — this is the soft cyan halo that
+   * sells the "floating hologram" look. Two layers so it's both crisp
+   * and broad. */
+  filter:
+    drop-shadow(0 0 6px rgba(0, 255, 255, 0.55))
+    drop-shadow(0 0 18px rgba(0, 212, 255, 0.35));
+}
+
+/* "JARVIS" across the centre of the orb. Lives on top of the bracket
+ * arcs (::before) and inside the rotating outer ring (::after). */
+.orb-wordmark {
+  position: relative;
+  z-index: 3;
+  font-family: "Orbitron", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.30em;
+  color: var(--jarvis-glow);
+  text-shadow:
+    0 0 6px var(--jarvis-glow),
+    0 0 14px rgba(0, 255, 255, 0.55);
+  pointer-events: none;
+  /* Hairline letter outline mimics the etched-into-glass look. */
+  -webkit-text-stroke: 0.25px rgba(0, 255, 255, 0.65);
 }
 #orb::before {
   /* The four bright bracket-arcs, faked with a conic-gradient + a
@@ -93,6 +126,11 @@
     /* base tint */
     var(--jarvis-bg);
   border-radius: var(--radius-lg);
+  /* Real glass: blur whatever is behind the HUD panel, scoped to the
+   * rounded-rect shape. Replaces the window-level vibrancy that was
+   * leaking a visible rectangle around the orb in idle state. */
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
   overflow: hidden;
   isolation: isolate;   /* so the scanline blend doesn't leak out */
 }

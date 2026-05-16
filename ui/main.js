@@ -16,7 +16,10 @@ app.disableHardwareAcceleration();
 // IDLE shows the small orb in the bottom-right corner; ACTIVE/SPEAKING/
 // PROCESSING expand to the full HUD. Resizing is done programmatically
 // — the user can't drag a resize handle (no frame).
-const ORB = { width: 140, height: 140 };
+// Orb window is sized to fit the 110px circle + room for its drop-
+// shadow glow + the rotating outer accent ring. Anything past the
+// orb's edge is genuinely transparent — no rectangle to mask.
+const ORB = { width: 170, height: 170 };
 const HUD = { width: 520, height: 360 };
 // Margin from the screen edges when sized.
 const EDGE_MARGIN = 24;
@@ -43,11 +46,12 @@ function createWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     hasShadow: false,
-    // macOS-only: use the system ultra-dark vibrancy so the glass effect
-    // is real, not a faked rgba background. The renderer keeps its own
-    // semi-transparent dark layer on top of this for the HUD contrast.
-    vibrancy: process.platform === "darwin" ? "ultra-dark" : undefined,
-    visualEffectState: "active",
+    // No system-level vibrancy: it paints the WHOLE window rectangle
+    // with a dark blur, which was visible as a rounded-rect around the
+    // orb in idle state. We do glass effects per-element via CSS
+    // backdrop-filter instead, so only the orb / HUD shape blurs the
+    // content behind it. Everything outside those shapes is genuinely
+    // transparent.
     // Don't steal focus from whatever the user is doing in other apps.
     // Important so keyboard input keeps going to the foreground app
     // when our overlay is just a status reflector.
