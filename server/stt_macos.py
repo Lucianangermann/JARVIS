@@ -160,13 +160,19 @@ def _ensure_recognizer(locale: str):
 
 
 def transcribe_wav(wav_path: str, locale: str = "de-DE",
-                   timeout_s: float = 15.0,
-                   on_device_only: bool = True) -> str:
+                   timeout_s: float = 10.0,
+                   on_device_only: bool = False) -> str:
     """Transcribe a WAV file via Speech.framework. Synchronous.
 
     Returns lowercase whitespace-collapsed text. Empty string if the
     framework reports a final result with no transcription (silence /
     unintelligible audio).
+
+    on_device_only=False (the default) lets Apple use server fallback
+    when the on-device DE model isn't installed — without that fallback
+    the recognition silently hangs on machines that haven't downloaded
+    the locale pack. Set True for strict-privacy setups where you've
+    verified the language pack is present.
     """
     if not _IMPORT_OK:
         raise RuntimeError(f"Speech.framework unavailable: {_IMPORT_ERR}")
@@ -180,12 +186,26 @@ def transcribe_wav(wav_path: str, locale: str = "de-DE",
 
     recognizer = _ensure_recognizer(locale)
 
+    # One-time diagnostic. Logs only on the first call per (locale, recognizer)
+    # so we can see in the server console what mode the daemon picked.
+    if not getattr(recognizer, "_jarvis_logged", False):
+        try:
+            on_dev = bool(recognizer.supportsOnDeviceRecognition())
+        except Exception:  # noqa: BLE001 — older OS
+            on_dev = False
+        print(f"[JARVIS] Speech recognizer ready: locale={locale} "
+              f"available={bool(recognizer.isAvailable())} "
+              f"on_device_supported={on_dev} "
+              f"on_device_forced={on_device_only}")
+        # Stash a flag right on the recognizer object so we only log once.
+        try:
+            recognizer._jarvis_logged = True  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
+
     url = NSURL.fileURLWithPath_(wav_path)
     request = SFSpeechURLRecognitionRequest.alloc().initWithURL_(url)
     request.setShouldReportPartialResults_(False)
-    # Keep audio on-device when supported. supportsOnDeviceRecognition
-    # is a recognizer property on recent macOS; older versions throw —
-    # treat that as "leave the default" instead of crashing.
     if on_device_only:
         try:
             if recognizer.supportsOnDeviceRecognition():
@@ -198,10 +218,6 @@ def transcribe_wav(wav_path: str, locale: str = "de-DE",
     error_holder: list[Any] = [None]
 
     def _handler(result, error):
-        # Apple delivers partial+final results as separate callbacks;
-        # we asked for finals only above, but still gate on isFinal()
-        # because the framework occasionally yields a sentinel "nil
-        # result, nil error" first.
         if error is not None:
             error_holder[0] = error
             event.set()
@@ -219,12 +235,12 @@ def transcribe_wav(wav_path: str, locale: str = "de-DE",
         request, _handler,
     )
 
-    # The task runs on a private GCD queue — we just wait. No runloop
-    # pump needed here (unlike requestAuthorization). The threading
-    # event is enough to bridge the async callback back to us.
-    if not event.wait(timeout=timeout_s):
-        # Best-effort cancel so the daemon stops working on a result
-        # nobody will read.
+    # Pump the local NSRunLoop while waiting. PyObjC's bridge can deliver
+    # GCD-scheduled blocks via the runloop on the calling thread; without
+    # an active runloop, Python may never see the completion. Costs
+    # nothing if the block arrives on a real dispatch queue — we just
+    # idle a fraction of a millisecond per pump.
+    if not _pump_runloop_until(event, timeout_s):
         try:
             task.cancel()
         except Exception:  # noqa: BLE001
@@ -233,7 +249,6 @@ def transcribe_wav(wav_path: str, locale: str = "de-DE",
 
     if error_holder[0] is not None:
         err = error_holder[0]
-        # Apple uses NSError; .localizedDescription is the readable bit.
         try:
             msg = str(err.localizedDescription())
         except Exception:  # noqa: BLE001
