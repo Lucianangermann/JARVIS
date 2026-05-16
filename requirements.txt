@@ -16,3 +16,15 @@ websockets>=12.0
 # Voice (STT + TTS) is optional — install separately if needed:
 #     pip install -r requirements-voice.txt
 # It pulls torch + llvmlite which can fail to build on some macOS setups.
+
+# --- Memory + self-learning ---
+# Local vector store + embedding model. ChromaDB persists under
+# data/chromadb/, sentence-transformers caches model weights under
+# ~/.cache/huggingface. transformers is pinned because the newest
+# (5.x) requires PyTorch ≥ 2.4 — Intel macOS wheels stopped at 2.2,
+# so we pin to 4.x to stay compatible.
+chromadb>=0.5
+sentence-transformers>=2.7
+transformers<4.50
+scikit-learn>=1.4
+numpy>=1.26
