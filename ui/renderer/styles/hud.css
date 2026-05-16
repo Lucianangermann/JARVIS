@@ -118,6 +118,43 @@
   animation: rotate-ring 8s linear infinite;
 }
 
+/* Perimeter particles ringing the idle orb. The container fills the
+ * stage so each particle's top:50%/left:50% anchor maps to the orb's
+ * centre. Particles then transform out to a fixed radius and twinkle
+ * out of phase with each other so the orb feels surrounded by
+ * ambient field energy without anything jumping around. The slow
+ * rotation on the container adds a barely-perceptible orbit. */
+#orb-aura {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  animation: rotate-ring 40s linear infinite;
+}
+body:not([data-state="idle"]) #orb-aura { display: none; }
+
+.orb-particle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  margin: -1.5px 0 0 -1.5px;   /* recentre on the parent's centre */
+  border-radius: 50%;
+  background: var(--jarvis-glow);
+  box-shadow:
+    0 0 4px var(--jarvis-glow),
+    0 0 10px rgba(0, 212, 255, 0.55);
+  /* Place at --a around the centre, 78px out. Orb radius is 55, so
+   * particles sit ~23px clear of the orb edge — inside the breathing
+   * halo so they read as "of" the orb, not separate. */
+  transform: rotate(var(--a, 0deg)) translateY(-78px);
+  animation: orb-particle-twinkle 4s ease-in-out infinite;
+  /* Phase the twinkle by angle so brightness sweeps around the ring
+   * rather than all 12 particles blinking together. */
+  animation-delay: calc(var(--a, 0deg) / 360deg * -4s);
+}
+
 /* -- HUD: full overlay ---------------------------------------- */
 
 #hud {

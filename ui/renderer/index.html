@@ -24,6 +24,25 @@
       <span class="orb-wordmark">JARVIS</span>
     </div>
 
+    <!-- IDLE: ambient particle aura ringing the orb. Sibling of #orb
+         (NOT a child) so the orb-breathe scale animation doesn't
+         pull the particles in and out with it. Hidden in HUD states
+         via the body[data-state] selector in hud.css. -->
+    <div id="orb-aura" aria-hidden="true">
+      <span class="orb-particle" style="--a:   0deg;"></span>
+      <span class="orb-particle" style="--a:  30deg;"></span>
+      <span class="orb-particle" style="--a:  60deg;"></span>
+      <span class="orb-particle" style="--a:  90deg;"></span>
+      <span class="orb-particle" style="--a: 120deg;"></span>
+      <span class="orb-particle" style="--a: 150deg;"></span>
+      <span class="orb-particle" style="--a: 180deg;"></span>
+      <span class="orb-particle" style="--a: 210deg;"></span>
+      <span class="orb-particle" style="--a: 240deg;"></span>
+      <span class="orb-particle" style="--a: 270deg;"></span>
+      <span class="orb-particle" style="--a: 300deg;"></span>
+      <span class="orb-particle" style="--a: 330deg;"></span>
+    </div>
+
     <!-- ACTIVE / SPEAKING / PROCESSING: full HUD -->
     <div id="hud">
       <!-- Corner brackets (drawn with CSS, see hud.css) -->

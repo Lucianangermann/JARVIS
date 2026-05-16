@@ -92,6 +92,22 @@
   30%           { transform: scale(1.6); opacity: 0.6; }
 }
 
+/* ---- idle-orb perimeter particle twinkle ----
+ * Animates opacity + a brightness filter only — never the transform,
+ * because each particle's transform encodes its position around the
+ * ring (rotate + translateY) and stomping that would teleport them
+ * back to the centre on every cycle. */
+@keyframes orb-particle-twinkle {
+  0%, 100% {
+    opacity: 0.15;
+    filter: brightness(0.7);
+  }
+  50% {
+    opacity: 1;
+    filter: brightness(1.5);
+  }
+}
+
 /* ---- idle orb breathing (only used in IDLE state) ---- */
 @keyframes orb-breathe {
   0%, 100% {
