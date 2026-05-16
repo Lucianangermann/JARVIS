@@ -53,10 +53,33 @@ async function setState(next) {
 
 // ---- typewriter chat ---------------------------------------------
 
+/** Max chat messages kept in the DOM. Older ones get dropped from
+ *  the top so the pane doesn't grow unbounded over a long session.
+ *  100 is plenty to scroll back through a few conversations. */
+const CHAT_HISTORY_LIMIT = 100;
+
+/** Distance (px) from the bottom within which we still treat the
+ *  scrollbar as "at the bottom". Picks up tiny rounding errors after
+ *  the typewriter ticks. */
+const STICKY_BOTTOM_PX = 40;
+
+function isPinnedToBottom() {
+  return chatPane.scrollHeight - chatPane.scrollTop - chatPane.clientHeight
+         <= STICKY_BOTTOM_PX;
+}
+
 /** Append a message to the chat pane with a typewriter effect.
  *  who: "you" | "jarvis"
- *  Returns a promise that resolves when typing finishes. */
+ *  Returns a promise that resolves when typing finishes.
+ *
+ *  Scroll behaviour: if the user was already reading the most recent
+ *  messages (within STICKY_BOTTOM_PX of the bottom), we follow new
+ *  output to the bottom on every typewriter tick. If they've scrolled
+ *  up to re-read older context, we leave their position alone so a
+ *  new message doesn't yank them away. */
 function addMessage(who, text) {
+  const stick = isPinnedToBottom();
+
   const msg = document.createElement("div");
   msg.className = `chat-msg ${who}`;
   const whoEl = document.createElement("span");
@@ -67,18 +90,27 @@ function addMessage(who, text) {
   msg.append(whoEl, body);
   chatPane.appendChild(msg);
 
-  // Trim chat to the last 3 messages so the pane never overflows.
-  while (chatPane.children.length > 3) chatPane.firstChild.remove();
+  // Trim old history off the top — keeps DOM size bounded.
+  while (chatPane.children.length > CHAT_HISTORY_LIMIT) {
+    chatPane.firstChild.remove();
+  }
+
+  if (stick) chatPane.scrollTop = chatPane.scrollHeight;
 
   // Typewriter — JS-driven so we can vary speed per char if we ever
   // want to (e.g. slow down at punctuation). For now, flat 22 ms/char.
+  // Per-tick we re-check isPinnedToBottom so the auto-follow yields
+  // the moment the user manually scrolls up mid-typewriter to re-read
+  // earlier context.
   const myId = ++typewriterId;
   return new Promise((resolve) => {
     let i = 0;
     const tick = () => {
       if (myId !== typewriterId) return;            // a newer message replaced us
-      body.firstChild?.remove?.();                  // (no-op; placeholder for future)
       body.textContent = text.slice(0, i);
+      if (stick && isPinnedToBottom()) {
+        chatPane.scrollTop = chatPane.scrollHeight;
+      }
       if (i >= text.length) {
         body.classList.remove("cursor");
         return resolve();

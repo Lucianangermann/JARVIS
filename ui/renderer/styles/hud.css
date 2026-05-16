@@ -460,9 +460,16 @@ body[data-tier="4"] .tier-dot:nth-child(-n+4) { background: var(--jarvis-danger)
   display: grid;
   grid-template-columns: 210px 1fr;
   gap: 12px;
-  align-items: center;
+  /* stretch (not center) so the chat-pane can fill the row height
+   * and scroll. The emblem keeps its 200×200 footprint via its
+   * own .core-wrap dimensions; centring it back within the stretched
+   * cell happens with align-self in .core-wrap below. */
+  align-items: stretch;
   padding: 0 4px;
   z-index: 3;
+  min-height: 0;       /* let the row shrink below its content size
+                          so the chat's overflow:auto actually triggers
+                          inside a parent grid track. */
 }
 
 .core-wrap {
@@ -470,6 +477,8 @@ body[data-tier="4"] .tier-dot:nth-child(-n+4) { background: var(--jarvis-danger)
   width: 200px;
   height: 200px;
   margin: 0 auto;
+  /* keep the emblem visually centred in its (now stretched) grid cell */
+  align-self: center;
 }
 
 /* Subtle state-reactive backdrop — the canvas visualizer's spokes show
@@ -528,13 +537,37 @@ body[data-state="speaking"] .emblem .wordmark       { animation-duration: 1s; }
   position: relative;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
   gap: 6px;
   min-height: 0;
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: none;
-  overflow: hidden;
+  /* Scrollable when content > available height. The first child gets
+   * margin-top:auto (below) so short chats stay anchored to the
+   * bottom of the pane — the old justify-content:flex-end trick
+   * doesn't survive overflow:auto, this does. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Thin cyan scrollbar to match the HUD palette. Firefox uses
+   * scrollbar-color; WebKit/Blink (Electron) uses the ::-webkit-*
+   * rules below. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 212, 255, 0.4) transparent;
+  padding-right: 4px;     /* leave room for the scrollbar */
+}
+.chat-pane > :first-child { margin-top: auto; }
+.chat-pane::-webkit-scrollbar {
+  width: 4px;
+}
+.chat-pane::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-pane::-webkit-scrollbar-thumb {
+  background: rgba(0, 212, 255, 0.35);
+  border-radius: 2px;
+}
+.chat-pane::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 212, 255, 0.65);
 }
 .chat-msg {
   padding: 4px 8px;
