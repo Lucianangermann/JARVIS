@@ -6,11 +6,16 @@ const path = require("node:path");
 // Suppress the Chromium ANGLE/EGL error spam on Intel macOS:
 //   "EGL Driver message (Error) eglQueryDeviceAttribEXT: Bad attribute"
 // fires every frame because the Intel iGPU doesn't expose the
-// attributes Chromium's GPU process queries. Software rendering is
-// perfectly fast enough for a small overlay with one Canvas — the
-// trade-off is invisible at 480x340 and removes the log flood that
-// makes the terminal unusable. Must be called BEFORE app.whenReady().
-app.disableHardwareAcceleration();
+// attributes Chromium's GPU process queries.
+//
+// We CAN'T fix this by disabling hardware acceleration — on macOS,
+// transparent BrowserWindows require HW accel to actually be see-
+// through (otherwise Chromium paints the window's bounding rectangle
+// as a solid layer, which is the visible "rectangle around the orb"
+// bug). So instead we raise Chromium's log threshold to FATAL only,
+// which silences the per-frame EGL noise without touching the GPU
+// pipeline. Must be set BEFORE app.whenReady().
+app.commandLine.appendSwitch("log-level", "3"); // 0=info 1=warn 2=err 3=fatal
 
 // ---- window sizing per state ---- //
 // IDLE shows the small orb in the bottom-right corner; ACTIVE/SPEAKING/
