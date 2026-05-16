@@ -120,6 +120,89 @@ python clients\windows\client.py --ws
   `server/command_guard.py`. The brain picks it up automatically because
   `system_command`'s `command` enum is generated from the registry.
 
+## Long-term memory + self-learning
+
+JARVIS has a four-layer durable memory system. Every layer degrades
+gracefully — if one fails to load (missing dep, corrupt file) the
+brain keeps working without it.
+
+| Layer | Storage | What it remembers |
+|---|---|---|
+| **Short-term** | RAM | The last ~20 messages of the active session. Refactor of the old `Brain._histories` dict. |
+| **Long-term** | `data/chromadb/` (ChromaDB + sentence-transformers) | Session summaries, executed commands, and facts about the user — all semantically searchable. |
+| **Error** | `data/jarvis.db` (SQLite) | Every failed command, the workaround that fixed it, and per-command success/fail counters. |
+| **Profile** | `data/profile.json` + SQLite audit | Name, language, preferences, habits, known facts. Updated automatically from conversation. |
+
+### How it plugs into a turn
+
+```
+user message
+  ↓
+memory.session_start()   # first turn of session — semantic warmup
+memory.before_message()  # adds to short-term, refreshes prompt
+  ↓
+brain.reply():
+    ┌───────────────────────────────────────────────────────┐
+    │ system block 1 (cached): base + profile + known issues│
+    │ system block 2 (fresh):  recent + relevant past + ctx │
+    │ messages: short-term turns                            │
+    └───────────────────────────────────────────────────────┘
+       ↓
+    Claude → tool calls → memory.record_command_result() per call
+       ↓
+    final text
+  ↓
+memory.after_message()   # fact-extract, persist learnings
+```
+
+### Privacy
+
+- **Everything stays local.** No cloud sync, ever.
+- **Redaction runs before every write.** Credit cards (Luhn-checked),
+  Anthropic / OpenAI / GitHub / AWS / Slack keys, Bearer tokens,
+  inline `password=` / `passwort=` / `secret=` strings, URL-embedded
+  credentials, SSN-style patterns. See
+  `server/memory/profile_manager.py::redact_secrets`.
+- **Forbidden categories never get stored** even if extraction
+  proposes them: `password`, `credentials`, `credit_card`, `ssn`,
+  `bank`, `medical`, `health`, `financial`, `api_key`, `token`.
+- **Inspect at any time:** `GET /memory/profile`,
+  `GET /memory/recent`, `GET /memory/stats`, `GET /memory/search?q=…`.
+- **Wipe at any time:**
+  `curl -X DELETE -H 'Authorization: Bearer …' …/memory/all -d '{"confirm":"I UNDERSTAND"}'`.
+  Re-confirmation token is required; the wipe action is logged but
+  the content isn't.
+
+### HTTP routes
+
+| Method | Path | What |
+|---|---|---|
+| GET | `/memory/profile` | Live user-profile JSON |
+| GET | `/memory/recent?days=7&limit=10` | Recent session summaries |
+| GET | `/memory/errors` | Commands with recorded failures + success rate |
+| GET | `/memory/stats` | Per-layer availability + counts |
+| GET | `/memory/search?q=...&n=5` | Semantic search across past conversations |
+| POST | `/memory/forget` | Drop one entry by id |
+| DELETE | `/memory/all` | Full GDPR-style wipe (requires `confirm: "I UNDERSTAND"`) |
+
+### Logs
+
+- `logs/memory.log` — storage-layer operations (boot, save, search, errors)
+- `logs/learning.log` — what JARVIS learned (facts, fixes, session summaries)
+
+Both are timed-rotating (daily, 14-day retention).
+
+### Setup notes
+
+- First boot loads sentence-transformers `all-MiniLM-L6-v2` (~80 MB
+  download cached under `~/.cache/huggingface`). Subsequent boots
+  are instant.
+- On Intel macOS, `transformers` is pinned to `<4.50` because the
+  5.x line requires PyTorch ≥ 2.4 and Intel macOS wheels stopped at
+  2.2. See `requirements.txt`.
+- ChromaDB writes to `data/chromadb/` — back up that folder if you
+  want to preserve memory across reinstalls.
+
 ## Notes
 
 - Conversation memory is per-auth-token, kept in process memory only. Trimmed
