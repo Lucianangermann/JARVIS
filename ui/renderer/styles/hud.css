@@ -23,9 +23,13 @@
  * inner disc that you can later put a wordmark or just a dot in.
  * Uses pure CSS conic-gradient + clip-paths so it's animation-cheap.
  *
- * The glass effect comes from element-level backdrop-filter — it only
- * blurs the desktop behind the CIRCLE, so nothing outside the orb is
- * ever visible. No window-level vibrancy rectangle. */
+ * NO backdrop-filter here: app.disableHardwareAcceleration() is on
+ * (for the Intel iGPU log-spam fix), which means Chromium has no GPU
+ * compositor to read the desktop pixels from — backdrop-filter then
+ * paints the element's RECTANGULAR bounding box as a fallback layer,
+ * which is exactly the visible rectangle around the orb we were
+ * trying to kill. The radial gradient + drop-shadow halo carry the
+ * "glowing glass orb" look just fine without it. */
 #orb {
   position: relative;
   width: 110px;
@@ -35,13 +39,10 @@
   place-items: center;
   background: radial-gradient(
     circle at 50%,
-    rgba(0, 30, 80, 0.45) 0%,
-    rgba(0, 10, 30, 0.82) 65%,
-    rgba(0, 5, 18, 0.92) 100%
+    rgba(0, 30, 80, 0.55) 0%,
+    rgba(0, 10, 30, 0.88) 65%,
+    rgba(0, 5, 18, 0.95) 100%
   );
-  /* Real glass effect, masked to the circle by border-radius */
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
   border: 1px solid rgba(0, 212, 255, 0.55);
   -webkit-app-region: drag;
   cursor: grab;
@@ -126,11 +127,10 @@
     /* base tint */
     var(--jarvis-bg);
   border-radius: var(--radius-lg);
-  /* Real glass: blur whatever is behind the HUD panel, scoped to the
-   * rounded-rect shape. Replaces the window-level vibrancy that was
-   * leaking a visible rectangle around the orb in idle state. */
-  backdrop-filter: blur(18px) saturate(135%);
-  -webkit-backdrop-filter: blur(18px) saturate(135%);
+  /* No backdrop-filter: see #orb above. HW accel is off, so it would
+   * paint a square fallback layer instead of a real blur. The base
+   * tint above is bumped to 0.85 alpha so the HUD reads as opaque
+   * glass without needing a compositor blur. */
   overflow: hidden;
   isolation: isolate;   /* so the scanline blend doesn't leak out */
 }
