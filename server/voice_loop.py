@@ -112,20 +112,6 @@ PRE_ROLL_BLOCKS = int(PRE_ROLL_S / BLOCK_S)
 # random German words out of typing noise.
 SPEECH_SEED_BLOCKS = 3   # 30 ms of uninterrupted above-threshold audio
 
-# Barge-in: while JARVIS is currently speaking or thinking, the VAD's
-# silence-bounded segments don't fire (no silence — mic hears the
-# speakers). So we transcribe a rolling window every BARGE_IN_INTERVAL_S
-# and check for stop phrases. The rolling buffer is BARGE_IN_WINDOW_S
-# long; we only trigger Whisper if the last bit looks like user speech
-# (RMS over BARGE_IN_RMS_FLOOR) to avoid wasting CPU on idle background.
-# Shorter window + faster cadence = more chances to catch a brief "Stop"
-# uttered between TTS sentences.
-BARGE_IN_WINDOW_S = 1.0
-BARGE_IN_INTERVAL_S = 0.35
-BARGE_IN_RMS_FLOOR = 500        # last-300ms RMS gate (relaxed)
-BARGE_IN_RMS_TAIL_S = 0.3
-BARGE_IN_WINDOW_BLOCKS = int(BARGE_IN_WINDOW_S / BLOCK_S)
-
 # Minimum mic RMS we'll consider "user voice" while the speakers are
 # actively playing. Calibrated for a soft-spoken user at laptop-mic
 # distance with Markus playing through built-in speakers — AEC residual
@@ -181,14 +167,14 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
         return
 
     # Try to start the echo canceller. If speexdsp isn't installed, we
-    # fall back to plain mic capture (no barge-in over speakers).
+    # fall back to plain mic capture (no echo cancellation).
     aec = aec_mod.try_create()
     if aec is not None:
         print(f"[JARVIS] AEC enabled — Speex echo canceller "
               f"(frame={aec.frame_size}, sr={SAMPLE_RATE})")
     else:
-        print("[JARVIS] AEC OFF — barge-in won't work over laptop speakers; "
-              "use headphones for reliable interrupt.")
+        print("[JARVIS] AEC OFF — mic will hear the speakers; "
+              "use headphones for a clean signal.")
 
     audio_q: queue.Queue = queue.Queue()
 
@@ -227,10 +213,10 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
         # 2) AEC: subtract speaker echo from mic input — but ONLY when
         # the speakers are actually emitting something. Running AEC on a
         # zero "far" signal causes Speex's adaptive filter to drift, so
-        # the first 1-2 seconds AFTER a BARGE-IN (when JARVIS was just
-        # cut off and far has gone to zero but mic still has reverb
-        # tail) come back distorted. Skipping AEC on silent far blocks
-        # keeps the filter state stable.
+        # the first 1-2 seconds after the far signal stops (eg. an
+        # abrupt tts.stop() from the kill switch, while the mic still
+        # has reverb tail) come back distorted. Skipping AEC on silent
+        # far blocks keeps the filter state stable.
         mic_samples = indata[:, 0]
         far_block_rms = float(
             np.sqrt(np.mean(tts_samples.astype(np.int32) ** 2))
@@ -324,19 +310,13 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     followup_window = settings.FOLLOWUP_TIMEOUT_S
 
     # Brain work runs in a worker thread so the main loop can keep
-    # processing audio (and hear "Stop" / "Halt") while JARVIS thinks
-    # and speaks. brain_cancel is set when the user barges in — the
-    # thread will then discard its reply instead of sending it to TTS.
+    # pumping audio while JARVIS thinks. brain_cancel is wired but
+    # currently unreachable from a user gesture (barge-in was removed
+    # — both fast-interrupt and Whisper-rolling false-fired on TTS
+    # echo). Kept defensive in case a future cancellation path needs
+    # it (e.g. kill-switch arriving mid-reply via /emergency-stop).
     brain_thread: threading.Thread | None = None
     brain_cancel = threading.Event()
-
-    # When the user barges in mid-reply with a new "Jarvis <command>"
-    # utterance, the Whisper-based barge-in detector captures the
-    # command text but the audio queue has already been drained by
-    # fast-interrupt, so the idle VAD never gets a chance to rebuild a
-    # segment. We stash the transcribed command here and dispatch it
-    # the moment the old brain thread finishes.
-    pending_followup_cmd: str | None = None
 
     def _brain_work(cmd: str, cancel_evt: threading.Event) -> None:
         try:
@@ -351,74 +331,8 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
         _emit_state("speaking")
         tts.speak(reply)
 
-    # Barge-in monitor: while JARVIS is busy, periodically transcribe a
-    # rolling 1.5 s buffer and look for stop phrases. Runs in a daemon
-    # thread so it doesn't slow the main loop down. A single global
-    # transcribe_lock prevents *any* two Whisper calls from overlapping
-    # (avoids the macOS OMP "forking while parallel region is active"
-    # warning and the silent failures it can mask).
-    barge_in_buffer: "collections.deque" = collections.deque(
-        maxlen=BARGE_IN_WINDOW_BLOCKS
-    )
-    transcribe_lock = threading.Lock()
-    last_barge_check_t = 0.0
-
-    def _barge_in_check(blocks_snapshot: list) -> None:
-        if not transcribe_lock.acquire(blocking=False):
-            return  # main loop is mid-transcription — skip this round
-        try:
-            pcm = np.concatenate(blocks_snapshot).tobytes()
-            wav = stt._pcm_to_wav(pcm, sample_rate=SAMPLE_RATE)  # noqa: SLF001
-            try:
-                transcript = stt.transcribe(wav, sample_rate=SAMPLE_RATE)
-            except Exception as exc:  # noqa: BLE001
-                print(f"[JARVIS] barge-in transcribe error: {exc}")
-                return
-            if not transcript:
-                return
-
-            # Three ways to interrupt JARVIS mid-flight:
-            #   1. A standalone stop phrase exactly ("Stop", "Halt", …)
-            #   2. An utterance *starting* with a stop word — catches
-            #      Whisper variants like "stoppt", "stop hör auf",
-            #      "okay stop", "halt mal", …
-            #   3. The wake word at the START of the transcript — user
-            #      is talking *over* JARVIS — BUT require at least one
-            #      additional word ("Jarvis halt", "Jarvis was machst
-            #      du") so that a hallucinated lone "Jarvis." from TTS
-            #      echo can't cancel the reply.
-            wake_with_continuation = (
-                stt.starts_with_wake_word(transcript)
-                and len(transcript.split()) >= 2
-            )
-            is_stop_like = (
-                stt.is_stop_phrase(transcript)
-                or stt.starts_with_stop_phrase(transcript)
-            )
-            if is_stop_like or wake_with_continuation:
-                print(f"[JARVIS] BARGE-IN: {transcript!r}")
-                brain_cancel.set()
-                tts.stop()
-                barge_in_buffer.clear()
-                # If the user gave a *new command* (wake word + at least
-                # one follow-up word, and it's not just a stop phrase),
-                # capture it for re-dispatch once the old brain thread
-                # finishes. Without this, fast-interrupt cancels the old
-                # reply but the user's new command is lost because the
-                # audio queue gets drained.
-                if wake_with_continuation and not is_stop_like:
-                    nonlocal pending_followup_cmd
-                    cmd = stt.strip_wake_word(transcript).strip(" ,.!?:;-")
-                    if cmd:
-                        pending_followup_cmd = cmd
-                        print(f"[JARVIS] (captured follow-up: {cmd!r})")
-            # Otherwise: most likely JARVIS-on-speakers, just ignore
-            # without logging — keeps the console quiet.
-        finally:
-            transcribe_lock.release()
-
     # Track the previous tick's busy state so we can react to the idle→busy
-    # transition (the moment TTS starts). See the buffer-clear below.
+    # transition (the moment TTS starts) for buffer hygiene.
     last_busy = False
 
     try:
@@ -439,18 +353,9 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 samples = block.astype(np.int32)
                 rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
 
-                # Feed the barge-in rolling buffer regardless of state.
-                barge_in_buffer.append(block)
-
                 brain_alive_now = brain_thread is not None and brain_thread.is_alive()
                 tts_busy_now = not tts.is_idle()
                 busy_now = brain_alive_now or tts_busy_now
-
-                # idle → busy transition: clear the barge-in rolling buffer
-                # so audio captured *before* JARVIS started talking can't
-                # trigger a false barge-in.
-                if busy_now and not last_busy:
-                    barge_in_buffer.clear()
                 last_busy = busy_now
 
                 # Per-tick state heartbeat for the HUD. _emit_state dedups
@@ -470,55 +375,20 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
 
                 if busy_now:
                     # While JARVIS is talking or thinking, completely
-                    # ignore the regular VAD: the mic hears the speakers
-                    # and would otherwise build up 15-second segments of
-                    # JARVIS's own voice. Reset state so the moment we
-                    # go idle we listen fresh.
+                    # ignore the mic: the speakers leak into it and
+                    # would otherwise build up 15-second segments of
+                    # JARVIS's own voice. No barge-in — both the
+                    # energy-burst and Whisper-rolling paths were
+                    # cancelling replies on TTS echo, so the user has
+                    # to wait for JARVIS to finish before speaking
+                    # again. (Kill-switch and stop phrases still
+                    # work — they go through the normal segment-closed
+                    # transcribe path as soon as JARVIS goes idle.)
                     in_speech = False
                     speech_seed = 0
                     buf.clear()
                     silence_blocks = 0
                     pre_roll.clear()
-
-                    # Whisper-based barge-in: every BARGE_IN_INTERVAL_S
-                    # we run a rolling-window transcription of the last
-                    # ~1.5 s of cleaned mic audio looking for an actual
-                    # stop phrase or wake word. Slower than the
-                    # discarded fast-interrupt energy detector, but
-                    # immune to TTS-echo / keyboard clicks because it
-                    # requires real recognised speech.
-                    now_t = time.monotonic()
-                    if (
-                        len(barge_in_buffer) == BARGE_IN_WINDOW_BLOCKS
-                        and (now_t - last_barge_check_t) >= BARGE_IN_INTERVAL_S
-                    ):
-                        last_barge_check_t = now_t
-                        snapshot = list(barge_in_buffer)
-                        threading.Thread(
-                            target=_barge_in_check,
-                            args=(snapshot,),
-                            name="jarvis-barge",
-                            daemon=True,
-                        ).start()
-                    continue
-
-                # Did the user barge in with a new command during the
-                # previous reply? If so, dispatch it now (old brain is
-                # confirmed dead because we're past `if busy_now: continue`).
-                if pending_followup_cmd is not None:
-                    cmd = pending_followup_cmd
-                    pending_followup_cmd = None
-                    print(f"[CLIENT: MacBook] [YOU·voice·barge] {cmd}")
-                    brain_cancel.clear()
-                    brain_thread = threading.Thread(
-                        target=_brain_work,
-                        args=(cmd, brain_cancel),
-                        name="jarvis-brain",
-                        daemon=True,
-                    )
-                    brain_thread.start()
-                    if followup_window > 0:
-                        followup_until = time.monotonic() + followup_window
                     continue
 
                 if not in_speech:
@@ -569,15 +439,11 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 silence_blocks = 0
                 pre_roll.clear()
 
-                # Serialise with any in-flight barge-in transcription to
-                # avoid the OMP "forking while parallel region is active"
-                # warning + the silent transcription failures it masks.
-                with transcribe_lock:
-                    try:
-                        transcript = stt.transcribe(wav, sample_rate=SAMPLE_RATE)
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[JARVIS] transcribe error: {exc}")
-                        transcript = ""
+                try:
+                    transcript = stt.transcribe(wav, sample_rate=SAMPLE_RATE)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[JARVIS] transcribe error: {exc}")
+                    transcript = ""
 
                 if not transcript:
                     continue
@@ -629,10 +495,12 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                     _drain(audio_q)
                     continue
 
-                # ─── BUSY: ignore everything except stop phrases ───────────
-                # While brain is thinking or JARVIS is speaking, the only
-                # accepted utterance is a barge-in stop. New commands are
-                # ignored so we don't stack work.
+                # ─── BUSY safety net ───────────────────────────────────────
+                # The top-of-loop busy_now guard already drops audio
+                # while JARVIS is talking/thinking, so reaching this
+                # check usually means the brain became busy *during*
+                # transcription (eg. a parallel /chat HTTP request).
+                # Drop the transcript so we don't stack work.
                 if busy:
                     print(f"[JARVIS] busy — ignoring: {transcript!r}")
                     continue
