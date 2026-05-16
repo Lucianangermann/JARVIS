@@ -38,16 +38,39 @@ const HUD = { width: 520, height: 360 };
 // Margin from the screen edges when sized.
 const EDGE_MARGIN = 24;
 
+// Visual radius of the orb circle inside its window (px). Used to
+// anchor the CIRCLE (not the window) to the screen corner in idle.
+const ORB_VISUAL_RADIUS = 55;
+
 let mainWindow = null;
 
-function placeBottomRight(win, { width, height }) {
+// State-aware positioning. The HUD wants its panel-rectangle inset
+// from the screen corner by EDGE_MARGIN — straightforward. The ORB
+// state is different: the window is intentionally much bigger than
+// the orb circle (so the breathing glow doesn't get clipped to a
+// rectangle), so anchoring the WINDOW corner would push the orb far
+// from the screen corner. Instead we anchor the orb's CIRCLE to the
+// corner and let the window extend past the screen edge — macOS just
+// clips the off-screen padding, which is empty glow space anyway.
+function placeForState(win, state) {
   const { workArea } = screen.getPrimaryDisplay();
-  win.setBounds({
-    width,
-    height,
-    x: workArea.x + workArea.width - width - EDGE_MARGIN,
-    y: workArea.y + workArea.height - height - EDGE_MARGIN,
-  });
+  if (state === "idle") {
+    const orbCenterX = workArea.x + workArea.width  - EDGE_MARGIN - ORB_VISUAL_RADIUS;
+    const orbCenterY = workArea.y + workArea.height - EDGE_MARGIN - ORB_VISUAL_RADIUS;
+    win.setBounds({
+      width:  ORB.width,
+      height: ORB.height,
+      x: Math.round(orbCenterX - ORB.width  / 2),
+      y: Math.round(orbCenterY - ORB.height / 2),
+    });
+  } else {
+    win.setBounds({
+      width:  HUD.width,
+      height: HUD.height,
+      x: workArea.x + workArea.width  - HUD.width  - EDGE_MARGIN,
+      y: workArea.y + workArea.height - HUD.height - EDGE_MARGIN,
+    });
+  }
 }
 
 function createWindow() {
@@ -93,7 +116,7 @@ function createWindow() {
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   mainWindow.setAlwaysOnTop(true, "screen-saver");
 
-  placeBottomRight(mainWindow, ORB);
+  placeForState(mainWindow, "idle");
 
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 
@@ -109,8 +132,8 @@ function createWindow() {
 // it to the matching dimensions and re-anchors to the bottom-right.
 ipcMain.handle("jarvis:set-state", (_event, state) => {
   if (!mainWindow) return;
+  placeForState(mainWindow, state);
   const target = state === "idle" ? ORB : HUD;
-  placeBottomRight(mainWindow, target);
   return { width: target.width, height: target.height };
 });
 
