@@ -2,6 +2,55 @@
 
 const { app, BrowserWindow, globalShortcut, ipcMain, screen } = require("electron");
 const path = require("node:path");
+const fs   = require("node:fs");
+const { spawn } = require("node:child_process");
+
+// Project root = parent of ui/. Used to locate .env and the python
+// server module, both of which live one directory up from this file.
+const PROJECT_ROOT = path.resolve(__dirname, "..");
+
+// ---- .env parsing ---- //
+// The Python server already owns its .env via python-dotenv; we read
+// the same file here so the Electron client can talk to it with the
+// same auth token and host/port without the user duplicating config.
+// Bespoke parser instead of pulling in `dotenv` as an npm dep — the
+// format is trivial (KEY=VALUE per line, # comments) and we only
+// need three keys.
+function loadDotEnv(envPath) {
+  if (!fs.existsSync(envPath)) {
+    console.warn(`[JARVIS] .env not found at ${envPath} — chat will refuse to connect.`);
+    return {};
+  }
+  const out = {};
+  for (const raw of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq < 0) continue;
+    const key = line.slice(0, eq).trim();
+    let val = line.slice(eq + 1).trim();
+    // Strip matched surrounding quotes — common .env style.
+    if ((val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    out[key] = val;
+  }
+  return out;
+}
+
+const dotenv = loadDotEnv(path.join(PROJECT_ROOT, ".env"));
+const SERVER_CONFIG = {
+  token: dotenv.JARVIS_AUTH_TOKEN || "",
+  // Server binds to 127.0.0.1 by default; we always connect to
+  // localhost regardless of HOST=0.0.0.0 (which is for LAN exposure,
+  // not for the local client).
+  host: "127.0.0.1",
+  port: parseInt(dotenv.PORT || "8000", 10),
+};
+if (!SERVER_CONFIG.token) {
+  console.warn("[JARVIS] JARVIS_AUTH_TOKEN missing from .env — the renderer will report OFFLINE.");
+}
 
 // Suppress the Chromium ANGLE/EGL error spam on Intel macOS:
 //   "EGL Driver message (Error) eglQueryDeviceAttribEXT: Bad attribute"
@@ -141,6 +190,86 @@ ipcMain.handle("jarvis:quit", () => {
   app.quit();
 });
 
+// Renderer asks for the WS URL + auth token on boot. Shipped over IPC
+// rather than baked into the renderer at build time so the user can
+// rotate the token in .env without rebuilding anything.
+ipcMain.handle("jarvis:get-config", () => ({
+  token: SERVER_CONFIG.token,
+  host:  SERVER_CONFIG.host,
+  port:  SERVER_CONFIG.port,
+}));
+
+// ---- server child process ---- //
+// Electron spawns `python -m server.main` from PROJECT_ROOT and owns
+// its lifecycle. The user opted into this in setup — they get a
+// single "double-click the app" UX without manually starting uvicorn.
+// Skippable via JARVIS_NO_SPAWN=1 if you want to run the server in a
+// separate terminal during dev (e.g. for cleaner backend logs).
+let serverProcess = null;
+
+function pythonBinary() {
+  // Prefer the project's .venv — that's where the deps live. Falls
+  // back to whatever `python3` resolves to on PATH (works if the user
+  // installed deps system-wide, will fail noisily otherwise).
+  const venvPy = path.join(PROJECT_ROOT, ".venv", "bin", "python");
+  return fs.existsSync(venvPy) ? venvPy : "python3";
+}
+
+function spawnServer() {
+  if (process.env.JARVIS_NO_SPAWN === "1") {
+    console.log("[JARVIS] JARVIS_NO_SPAWN=1 — assuming the server is already running.");
+    return;
+  }
+  const py = pythonBinary();
+  console.log(`[JARVIS] spawning server: ${py} -m server.main  (cwd=${PROJECT_ROOT})`);
+  serverProcess = spawn(py, ["-m", "server.main"], {
+    cwd: PROJECT_ROOT,
+    env: process.env,
+    // Pipe so we can prefix each line with [server] in our terminal.
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const prefix = (stream, tag) => {
+    let buf = "";
+    stream.on("data", (chunk) => {
+      buf += chunk.toString("utf8");
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (line) console.log(`[${tag}] ${line}`);
+      }
+    });
+  };
+  prefix(serverProcess.stdout, "server");
+  prefix(serverProcess.stderr, "server!");
+
+  serverProcess.on("exit", (code, signal) => {
+    console.log(`[JARVIS] server exited code=${code} signal=${signal}`);
+    serverProcess = null;
+  });
+  serverProcess.on("error", (err) => {
+    console.error(`[JARVIS] server spawn error: ${err.message}`);
+    serverProcess = null;
+  });
+}
+
+function killServer() {
+  if (!serverProcess) return;
+  console.log("[JARVIS] stopping server child process");
+  // SIGTERM first — uvicorn's lifespan handler runs a clean shutdown
+  // (joins the voice thread, closes the TTS engine). SIGKILL as a
+  // last resort if it ignores us for 4 s.
+  serverProcess.kill("SIGTERM");
+  const proc = serverProcess;
+  setTimeout(() => {
+    if (proc && !proc.killed) {
+      console.warn("[JARVIS] server didn't exit on SIGTERM — sending SIGKILL");
+      proc.kill("SIGKILL");
+    }
+  }, 4000);
+}
+
 // ---- global hotkey: Cmd/Ctrl+J toggles HUD ↔ orb ---- //
 // Main owns the OS-level shortcut registration; the actual state
 // machine lives in the renderer. We just ping the renderer over IPC
@@ -165,6 +294,7 @@ function registerGlobalHotkey() {
 }
 
 app.whenReady().then(() => {
+  spawnServer();
   createWindow();
   registerGlobalHotkey();
   app.on("activate", () => {
@@ -174,8 +304,12 @@ app.whenReady().then(() => {
 
 // globalShortcut keeps a process-wide registration; releasing on quit
 // is required to free the accelerator for other apps / a fresh launch.
+// killServer() sends SIGTERM first so uvicorn's lifespan runs a clean
+// shutdown — joining the voice thread and closing TTS — before the
+// process actually disappears.
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
+  killServer();
 });
 
 app.on("window-all-closed", () => {

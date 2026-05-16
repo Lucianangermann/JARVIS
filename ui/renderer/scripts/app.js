@@ -3,17 +3,18 @@
 //
 // Owns:
 //   • State machine (IDLE / ACTIVE / SPEAKING / PROCESSING)
-//   • Mock chat history (typewriter effect)
+//   • Chat history rendering (typewriter effect)
 //   • Status-bar clock + connection label
 //   • Hex button handlers + state cycling
-//   • Keyboard shortcuts (renderer scope; main-process global
-//     shortcuts are a Phase-2 add)
+//   • Keyboard shortcuts (renderer scope) + Cmd+J toggle from main
+//   • Server roundtrip via ws.js (real Claude reply over /ws)
 //
 // The renderer never touches Node directly — `window.jarvis` (from
 // preload.js via contextBridge) is the only privileged surface.
 // ============================================================
 
 import { setVisualizerState } from "./visualizer.js";
+import * as ws from "./ws.js";
 
 const STATES = ["idle", "active", "speaking", "processing"];
 
@@ -96,23 +97,38 @@ function tickClock() {
 tickClock();
 setInterval(tickClock, 1000);
 
-/** Public for Phase 2 / WebSocket: flip the connection indicator. */
+/** Reflect the WS connection state in the status-bar indicator.
+ *  Mapped from ws.STATE — green for ONLINE, amber for CONNECTING/
+ *  OFFLINE (transient, reconnect loop is running), red for ERROR
+ *  (misconfig / auth fail — won't fix itself). */
 export function setConnection(state) {
-  // state ∈ {"online", "offline", "error"}
   connDot.classList.remove("bad", "warn");
-  if (state === "online") {
-    connLabel.textContent = "ONLINE";
-  } else if (state === "offline") {
-    connDot.classList.add("warn");
-    connLabel.textContent = "OFFLINE";
-  } else {
-    connDot.classList.add("bad");
-    connLabel.textContent = "ERROR";
+  switch (state) {
+    case ws.STATE.ONLINE:
+      connLabel.textContent = "ONLINE";
+      break;
+    case ws.STATE.CONNECTING:
+      connDot.classList.add("warn");
+      connLabel.textContent = "CONNECTING";
+      break;
+    case ws.STATE.OFFLINE:
+    case ws.STATE.IDLE:
+      connDot.classList.add("warn");
+      connLabel.textContent = "OFFLINE";
+      break;
+    case ws.STATE.ERROR:
+    default:
+      connDot.classList.add("bad");
+      connLabel.textContent = "ERROR";
+      break;
   }
 }
 
-// Phase-1 defaults: pretend we're offline. Phase 2 will wire to /ws.
-setConnection("offline");
+// Wire the connection indicator + kick off the socket. The listener
+// is called synchronously with the current state so the dot starts
+// correctly even before the first transition.
+ws.onConnectionChange(setConnection);
+ws.connect();
 
 // ---- hex buttons --------------------------------------------------
 
@@ -155,29 +171,28 @@ cmdInput.addEventListener("keydown", async (ev) => {
     const text = cmdInput.value.trim();
     if (!text) return;
     cmdInput.value = "";
-    addMessage("you", text);
-    // Phase-1: simulate a thinking → speaking → idle cycle so we can
-    // see all four states in action. Phase 2 replaces this with a
-    // real WebSocket round-trip.
-    setState("processing");
-    setTimeout(async () => {
-      setState("speaking");
-      await addMessage("jarvis", mockReply(text));
-      setTimeout(() => setState("active"), 600);
-    }, 900);
+    await runTurn(text);
   } else if (ev.key === "Escape") {
     setState("idle");
   }
 });
 
-function mockReply(userText) {
-  const t = userText.toLowerCase();
-  if (t.includes("hallo") || t.includes("hi")) return "Guten Abend. Wobei darf ich helfen?";
-  if (t.includes("wie spät") || t.includes("zeit")) {
-    return `Es ist ${clockEl.textContent} Uhr.`;
+/** One full chat turn: echo the user line, drop into PROCESSING,
+ *  await the server, then SPEAKING (with the typewriter) → ACTIVE.
+ *  Errors get rendered as a chat line tagged [ERROR] so the user
+ *  always sees what happened, instead of a silent stuck state. */
+async function runTurn(text) {
+  addMessage("you", text);
+  setState("processing");
+  let reply;
+  try {
+    reply = await ws.send(text);
+  } catch (err) {
+    reply = `[ERROR] ${err?.message || err}`;
   }
-  if (t.includes("status")) return "Alle Systeme nominal. T2 unlocked, Kill-Switch armed.";
-  return `Verstanden. Ich verarbeite »${userText}«…`;
+  setState("speaking");
+  await addMessage("jarvis", reply);
+  setState("active");
 }
 
 // ---- keyboard shortcuts (renderer scope, only while we have focus) ----

@@ -21,4 +21,9 @@ contextBridge.exposeInMainWorld("jarvis", {
     ipcRenderer.on("jarvis:toggle", handler);
     return () => ipcRenderer.off("jarvis:toggle", handler);
   },
+
+  /** Fetch server connection config (token + host + port) once on boot.
+   *  Returns { token, host, port }. The token comes from the project's
+   *  .env so the user rotates it in one place. */
+  getConfig: () => ipcRenderer.invoke("jarvis:get-config"),
 });
