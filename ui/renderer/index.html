@@ -141,15 +141,25 @@
                     fill="rgba(0,10,30,0.6)"
                     stroke="rgba(0,212,255,0.4)" stroke-width="0.6"/>
 
-            <!-- 8. Wordmark — letter-spacing widens "J.A.R.V.I.S" so the
-                 dots between letters visually align with the spacing -->
-            <text class="wordmark" x="0" y="5"
+            <!-- 8. Wordmark.
+                 Two lines: the big "J.A.R.V.I.S" plus a dim tagline.
+                 Drawn directly in the SVG so it sits in-emblem, scales
+                 with everything else, and benefits from the same drop-
+                 shadow glow filter on the parent. -->
+            <text class="wordmark" x="0" y="-2"
                   text-anchor="middle"
                   font-family="Orbitron, sans-serif"
-                  font-size="15"
-                  letter-spacing="3"
-                  font-weight="600"
+                  font-size="22"
+                  letter-spacing="2"
+                  font-weight="700"
                   fill="var(--jarvis-glow)">J.A.R.V.I.S</text>
+            <text class="wordmark-sub" x="0" y="16"
+                  text-anchor="middle"
+                  font-family="Orbitron, sans-serif"
+                  font-size="5.5"
+                  letter-spacing="2.4"
+                  font-weight="500"
+                  fill="rgba(0, 212, 255, 0.65)">Just A Rather Very Intelligent System</text>
           </svg>
         </div>
 

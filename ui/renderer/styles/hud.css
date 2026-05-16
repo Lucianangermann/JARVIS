@@ -257,6 +257,7 @@ body[data-tier="4"] .tier-dot:nth-child(-n+4) { background: var(--jarvis-danger)
 .emblem .dots-ring       { transform-origin: 50% 50%; animation: rotate-ring         120s linear infinite; }
 .emblem .bracket-arcs    { transform-origin: 50% 50%; animation: rotate-ring-reverse 40s linear infinite; }
 .emblem .wordmark        { animation: glow-text 3s ease-in-out infinite; }
+.emblem .wordmark-sub    { opacity: 0.7; }
 
 /* Bracket arcs are the visual feature — they pulse with the core state. */
 .emblem .bracket-arcs path {
