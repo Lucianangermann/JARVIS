@@ -3,6 +3,15 @@
 const { app, BrowserWindow, ipcMain, screen } = require("electron");
 const path = require("node:path");
 
+// Suppress the Chromium ANGLE/EGL error spam on Intel macOS:
+//   "EGL Driver message (Error) eglQueryDeviceAttribEXT: Bad attribute"
+// fires every frame because the Intel iGPU doesn't expose the
+// attributes Chromium's GPU process queries. Software rendering is
+// perfectly fast enough for a small overlay with one Canvas — the
+// trade-off is invisible at 480x340 and removes the log flood that
+// makes the terminal unusable. Must be called BEFORE app.whenReady().
+app.disableHardwareAcceleration();
+
 // ---- window sizing per state ---- //
 // IDLE shows the small orb in the bottom-right corner; ACTIVE/SPEAKING/
 // PROCESSING expand to the full HUD. Resizing is done programmatically
