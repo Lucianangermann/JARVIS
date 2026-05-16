@@ -80,6 +80,35 @@ async def lifespan(app: FastAPI):
     # starts, otherwise its first publish() lands a no-op.
     events.set_loop(asyncio.get_running_loop())
 
+    # On macOS, periodically drain the main-thread NSRunLoop so Cocoa
+    # framework callbacks (Speech.framework's SFSpeechRecognizer in
+    # particular) actually get delivered. Apple posts those completions
+    # onto the main runloop; uvicorn's asyncio owns the main thread but
+    # never pumps NSRunLoop, so without this task the callbacks queue
+    # up forever and recognition tasks time out. runUntilDate_ with a
+    # zero-second date is non-blocking — it just processes whatever's
+    # already pending and returns immediately, so the ~20 ms sleep is
+    # the cost ceiling.
+    runloop_pump_task: asyncio.Task | None = None
+    if os.uname().sysname == "Darwin":
+        try:
+            from Foundation import NSDate, NSRunLoop  # type: ignore[import-not-found]
+
+            async def _pump_main_runloop() -> None:
+                while True:
+                    NSRunLoop.mainRunLoop().runUntilDate_(
+                        NSDate.dateWithTimeIntervalSinceNow_(0.0)
+                    )
+                    await asyncio.sleep(0.02)
+
+            runloop_pump_task = asyncio.create_task(
+                _pump_main_runloop(), name="cocoa-runloop-pump"
+            )
+            print("[JARVIS] Cocoa main-runloop pump active "
+                  "(needed for Speech.framework callbacks)")
+        except Exception as exc:  # noqa: BLE001 — PyObjC missing, fine
+            print(f"[JARVIS] runloop pump skipped: {exc}")
+
     # Optional: run the local wake-word loop on the MacBook in a background
     # thread. Enabled with JARVIS_LOCAL_VOICE=1 in the environment / .env.
     voice_thread: threading.Thread | None = None
@@ -105,6 +134,10 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if runloop_pump_task is not None:
+            runloop_pump_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await runloop_pump_task
         if voice_thread is not None:
             from . import voice_loop
 
