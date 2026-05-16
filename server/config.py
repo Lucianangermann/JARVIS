@@ -75,9 +75,11 @@ class Settings:
         "Kurzbefehle: Stop, Halt, Weiter, Notaus.",
     )
     # Beam size for the faster-whisper backend (ignored by openai-whisper).
-    # 5 is a good accuracy/latency trade-off; raise to 8 for the most
-    # accuracy on long utterances.
-    WHISPER_BEAM_SIZE: int = int(os.getenv("WHISPER_BEAM_SIZE", "5"))
+    # 1 = greedy decoding, ~3-5× faster than beam_size=5 with minimal
+    # accuracy loss on short voice commands (the use case we optimise
+    # for). Raise to 5 for the original quality target, 8 for the most
+    # accuracy on long-form transcription.
+    WHISPER_BEAM_SIZE: int = int(os.getenv("WHISPER_BEAM_SIZE", "1"))
     # Substring or full id of the TTS voice. Empty = autoselect based on
     # TTS_LANGUAGE. Example values: "Anna", "Markus", "Samantha", or a
     # full id like "com.apple.voice.compact.de-DE.Anna".
