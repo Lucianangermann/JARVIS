@@ -271,6 +271,43 @@ body[data-state="speaking"] .bracket { animation: bracket-flicker 0.5s ease-in-o
   gap: 6px;
 }
 
+/* Kill-switch badge — doubles as state indicator and action trigger.
+ * Default state ("safe"): green pill labelled STOP — clicking it fires
+ * POST /emergency-stop. Killed state: red pill labelled KILLED —
+ * clicking calls POST /resume. The body[data-kill] attribute flips the
+ * visuals so the JS doesn't need to manage class names per-state. */
+#kill-badge {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 8px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  cursor: pointer;
+  background: rgba(0, 255, 170, 0.10);
+  border: 1px solid rgba(0, 255, 170, 0.45);
+  color: var(--jarvis-ok);
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+#kill-badge:hover {
+  background: rgba(0, 255, 170, 0.22);
+  filter: drop-shadow(0 0 4px var(--jarvis-ok));
+}
+body[data-kill="true"] #kill-badge {
+  background: rgba(255, 42, 74, 0.22);
+  border-color: var(--jarvis-danger);
+  color: var(--jarvis-danger);
+  /* Slow pulse so the killed state is unmissable. */
+  animation: kill-pulse 1.6s ease-in-out infinite;
+}
+body[data-kill="true"] #kill-badge:hover {
+  background: rgba(255, 42, 74, 0.35);
+  filter: drop-shadow(0 0 6px var(--jarvis-danger));
+}
+
 /* Tier indicator: 4 small dots that fill based on data-tier */
 .tier-indicator { display: inline-flex; gap: 3px; -webkit-app-region: no-drag; }
 .tier-indicator .tier-dot {
@@ -287,6 +324,134 @@ body[data-tier="4"] .tier-dot:nth-child(-n+4) {
 }
 body[data-tier="3"] .tier-dot:nth-child(-n+3) { background: var(--jarvis-warn); box-shadow: 0 0 6px var(--jarvis-warn); }
 body[data-tier="4"] .tier-dot:nth-child(-n+4) { background: var(--jarvis-danger); box-shadow: 0 0 6px var(--jarvis-danger); }
+
+/* -- Pending action cards ------------------------------------- */
+/* Overlay above the emblem+chat row. When permissions.pending is
+ * non-empty the stack appears front-and-centre so the user can't
+ * miss a confirmation request; chat continues running underneath
+ * (faintly visible at the edges) so the conversation isn't lost. */
+#pending-stack {
+  position: absolute;
+  top: 38px;        /* clear of the status bar */
+  left: 14px;
+  right: 14px;
+  bottom: 56px;     /* clear of the bottom-row buttons + input */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px;
+  overflow-y: auto;
+  z-index: 6;       /* over the scanline (z:10) we explicitly skip;
+                       above stage-row (z:3) and chat */
+}
+#pending-stack:empty { display: none; }
+
+.pending-card {
+  padding: 10px 12px;
+  background: rgba(0, 18, 42, 0.92);
+  border: 1px solid rgba(0, 212, 255, 0.55);
+  border-radius: 8px;
+  box-shadow:
+    0 0 12px rgba(0, 212, 255, 0.25),
+    inset 0 0 0 1px rgba(0, 212, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fade-in-up 0.2s ease-out both;
+}
+.pending-card.tier-4 {
+  border-color: var(--jarvis-danger);
+  background: rgba(40, 6, 14, 0.93);
+  box-shadow:
+    0 0 14px rgba(255, 42, 74, 0.35),
+    inset 0 0 0 1px rgba(255, 42, 74, 0.18);
+}
+.pending-card .pc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  color: rgba(0, 212, 255, 0.7);
+}
+.pending-card.tier-4 .pc-head { color: var(--jarvis-danger); }
+.pending-card .pc-tier {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+  background: rgba(0, 212, 255, 0.15);
+  border: 1px solid rgba(0, 212, 255, 0.4);
+  color: var(--jarvis-primary);
+}
+.pending-card.tier-4 .pc-tier {
+  background: rgba(255, 42, 74, 0.18);
+  border-color: rgba(255, 42, 74, 0.55);
+  color: var(--jarvis-danger);
+}
+.pending-card .pc-summary {
+  font-size: 12px;
+  color: var(--jarvis-glow);
+  letter-spacing: 0.04em;
+  text-transform: none;
+  word-break: break-word;
+  line-height: 1.4;
+}
+.pending-card .pc-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.pending-card input[type="password"] {
+  flex: 1;
+  background: rgba(0, 5, 15, 0.7);
+  color: var(--jarvis-glow);
+  border: 1px solid rgba(255, 42, 74, 0.45);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  outline: none;
+}
+.pending-card input[type="password"]:focus {
+  border-color: var(--jarvis-danger);
+  box-shadow: 0 0 6px rgba(255, 42, 74, 0.4);
+}
+.pending-card button {
+  appearance: none;
+  border: 1px solid;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.pending-card .pc-approve {
+  background: rgba(0, 255, 170, 0.12);
+  border-color: rgba(0, 255, 170, 0.5);
+  color: var(--jarvis-ok);
+}
+.pending-card .pc-approve:hover {
+  background: rgba(0, 255, 170, 0.25);
+  filter: drop-shadow(0 0 4px var(--jarvis-ok));
+}
+.pending-card .pc-cancel {
+  background: rgba(255, 42, 74, 0.10);
+  border-color: rgba(255, 42, 74, 0.5);
+  color: var(--jarvis-danger);
+}
+.pending-card .pc-cancel:hover {
+  background: rgba(255, 42, 74, 0.22);
+  filter: drop-shadow(0 0 4px var(--jarvis-danger));
+}
+.pending-card button[disabled] {
+  opacity: 0.5;
+  cursor: wait;
+}
 
 /* -- Centre stage: visualizer + hexagon ----------------------- */
 

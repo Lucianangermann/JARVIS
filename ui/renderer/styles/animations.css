@@ -92,6 +92,20 @@
   30%           { transform: scale(1.6); opacity: 0.6; }
 }
 
+/* ---- kill-switch badge pulse when killed ----
+ * Slow brightness oscillation so the red KILLED state catches the eye
+ * even if the user isn't looking at the status bar. */
+@keyframes kill-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(255, 42, 74, 0.0);
+    filter: brightness(1);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(255, 42, 74, 0.18);
+    filter: brightness(1.25);
+  }
+}
+
 /* ---- idle-orb perimeter particle twinkle ----
  * Animates opacity + a brightness filter only — never the transform,
  * because each particle's transform encodes its position around the

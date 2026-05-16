@@ -15,6 +15,8 @@
 
 import { setVisualizerState } from "./visualizer.js";
 import * as ws from "./ws.js";
+import * as perms from "./permissions.js";
+import * as pending from "./pending.js";
 
 const STATES = ["idle", "active", "speaking", "processing"];
 
@@ -25,6 +27,7 @@ const connDot    = document.getElementById("conn-dot");
 const connLabel  = document.getElementById("conn-label");
 const orb        = document.getElementById("orb");
 const cmdInput   = document.getElementById("cmd-input");
+const killBadge  = document.getElementById("kill-badge");
 
 let currentState = "idle";
 let typewriterId = 0;     // monotonic id so an in-flight typewriter can be cancelled
@@ -129,6 +132,54 @@ export function setConnection(state) {
 // correctly even before the first transition.
 ws.onConnectionChange(setConnection);
 ws.connect();
+
+// ---- permission status (tier dots + kill-switch badge) ------------
+
+/** Highest reachable capability tier — drives how many tier dots light
+ *  up in the status bar. T1 is always present when the server reports
+ *  enabled; T2/T4 depend on session unlock / password configuration.
+ *  T3 is per-action confirm — always reachable if enabled, so we treat
+ *  "enabled" alone as floor=3. */
+function highestTier(p) {
+  if (!p || !p.enabled) return 1;
+  if (p.tier4_available) return 4;
+  if (p.tier2_unlocked)  return 3;     // T2 unlocked + T3 confirmable
+  return 3;                            // T3 always confirmable when enabled
+}
+
+function applyPermissionSnapshot(snap) {
+  if (!snap) return;
+  body.dataset.tier = String(highestTier(snap));
+  const killed = !!(snap.kill_switch && snap.kill_switch.killed);
+  body.dataset.kill = killed ? "true" : "false";
+  if (killBadge) {
+    killBadge.textContent = killed ? "KILLED" : "STOP";
+    if (killed && snap.kill_switch?.reason) {
+      killBadge.title = `Killed: ${snap.kill_switch.reason} — click to resume.`;
+    } else {
+      killBadge.title = "Click to trigger emergency stop (Esc)";
+    }
+  }
+  // Pending action cards are rendered by a separate module (next chunk).
+}
+
+perms.onUpdate(applyPermissionSnapshot);
+pending.init();          // subscribes to perms.onUpdate too
+perms.start();
+
+if (killBadge) {
+  killBadge.addEventListener("click", async () => {
+    const snap = perms.getSnapshot();
+    const killed = !!(snap?.kill_switch && snap.kill_switch.killed);
+    try {
+      if (killed) await perms.resume();
+      else        await perms.emergencyStop();
+    } catch (err) {
+      console.warn("[JARVIS UI] kill-switch toggle failed:", err);
+      addMessage("jarvis", `[ERROR] kill-switch: ${err.message || err}`);
+    }
+  });
+}
 
 // ---- hex buttons --------------------------------------------------
 

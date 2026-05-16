@@ -67,6 +67,11 @@
         <span class="center tabular" id="clock">00:00:00</span>
         <span class="right">
           <span id="conn-label">OFFLINE</span>
+          <button id="kill-badge" class="no-drag"
+                  type="button"
+                  title="Click to trigger emergency stop (Esc)">
+            STOP
+          </button>
           <span class="tier-indicator no-drag" title="Permission tier">
             <span class="tier-dot"></span>
             <span class="tier-dot"></span>
@@ -75,6 +80,12 @@
           </span>
         </span>
       </div>
+
+      <!-- Pending Tier-2/3/4 actions awaiting approval. Populated by
+           pending.js as an overlay above the emblem+chat row so a
+           confirmation request is unmissable; collapses to nothing
+           (display:none via :empty) when no actions are pending. -->
+      <div id="pending-stack" aria-live="polite"></div>
 
       <!-- Centre row: emblem + chat -->
       <div class="stage-row">
