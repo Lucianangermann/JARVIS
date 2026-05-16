@@ -319,10 +319,12 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     brain_cancel = threading.Event()
 
     def _brain_work(cmd: str, cancel_evt: threading.Event) -> None:
+        t_brain = time.monotonic()
         try:
             reply = brain.reply(session, cmd)
         except Exception as exc:  # noqa: BLE001 — surface to user
             reply = f"Entschuldige, etwas ist schiefgelaufen: {exc}"
+        print(f"[TIMING] brain.reply: {(time.monotonic() - t_brain)*1000:.0f}ms")
         if cancel_evt.is_set():
             print(f"[JARVIS] (cancelled; discarding reply: {reply[:60]!r}…)")
             return
@@ -431,7 +433,8 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                     print("[MIC] (segment too short, ignored)")
                     continue
 
-                print(f"[MIC] segment closed ({BLOCK_S * len(buf):.1f}s) — transcribing…")
+                segment_s = BLOCK_S * len(buf)
+                print(f"[MIC] segment closed ({segment_s:.1f}s) — transcribing…")
                 _emit_state("transcribing")
                 pcm = np.concatenate(buf).tobytes()
                 wav = stt._pcm_to_wav(pcm, sample_rate=SAMPLE_RATE)  # noqa: SLF001
@@ -439,11 +442,14 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 silence_blocks = 0
                 pre_roll.clear()
 
+                t_e2e = time.monotonic()
                 try:
                     transcript = stt.transcribe(wav, sample_rate=SAMPLE_RATE)
                 except Exception as exc:  # noqa: BLE001
                     print(f"[JARVIS] transcribe error: {exc}")
                     transcript = ""
+                print(f"[TIMING] transcribe end-to-end: "
+                      f"{(time.monotonic() - t_e2e)*1000:.0f}ms")
 
                 if not transcript:
                     continue

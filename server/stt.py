@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import tempfile
+import time
 import wave
 from pathlib import Path
 
@@ -130,11 +131,14 @@ def _load_model():
     name = settings.WHISPER_MODEL
     # Try faster-whisper first — same model names, much better latency
     # especially for medium/large.
+    t_load = time.monotonic()
     try:
         from faster_whisper import WhisperModel  # type: ignore[import-not-found]
 
         print(f"[JARVIS] loading faster-whisper model={name!r}…")
         _model = ("faster", WhisperModel(name, device="auto", compute_type="auto"))
+        print(f"[TIMING] model load (faster-whisper {name}): "
+              f"{(time.monotonic() - t_load)*1000:.0f}ms")
         return _model
     except ImportError:
         pass
@@ -143,6 +147,8 @@ def _load_model():
     print(f"[JARVIS] loading whisper model={name!r} (vanilla backend; "
           f"`pip install faster-whisper` for 2-3× speedup)…")
     _model = ("vanilla", whisper.load_model(name))
+    print(f"[TIMING] model load (vanilla {name}): "
+          f"{(time.monotonic() - t_load)*1000:.0f}ms")
     return _model
 
 
@@ -190,6 +196,7 @@ def transcribe(audio_bytes: bytes, *, sample_rate: int = 16_000) -> str:
             # SILENCE_HANG_S tail), that's typically 200-600 ms of dead
             # audio we'd otherwise burn cycles transcribing. Net result
             # on short commands: ~1.5-2× faster end-to-end.
+            t_call = time.monotonic()
             segments, _info = model.transcribe(
                 str(tmp),
                 language=lang,
@@ -199,7 +206,15 @@ def transcribe(audio_bytes: bytes, *, sample_rate: int = 16_000) -> str:
                 # fallback. Both backends accept the same constants here.
                 vad_filter=True,
             )
+            # faster-whisper returns a generator — the real work happens
+            # while we iterate `segments`, so we time the iteration here.
             text = " ".join((s.text or "").strip() for s in segments)
+            audio_s = (len(raw) / 2) / sample_rate if len(raw) >= 2 else 0.0
+            elapsed_ms = (time.monotonic() - t_call) * 1000
+            rtf = (elapsed_ms / 1000) / audio_s if audio_s > 0 else 0.0
+            print(f"[TIMING] whisper transcribe: {elapsed_ms:.0f}ms "
+                  f"(audio={audio_s:.1f}s, rtf={rtf:.2f}x, "
+                  f"beam={settings.WHISPER_BEAM_SIZE}, model={settings.WHISPER_MODEL})")
             return " ".join(text.lower().split())
         # vanilla openai-whisper
         kwargs: dict[str, object] = {"fp16": False}
