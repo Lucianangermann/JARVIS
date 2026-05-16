@@ -18,46 +18,62 @@
 
 /* -- IDLE: just an orb ---------------------------------------- */
 
+/* IDLE orb: same design language as the emblem, just smaller.
+ * Built from four bright bracket-arcs + a thin outer ring + a tiny
+ * inner disc that you can later put a wordmark or just a dot in.
+ * Uses pure CSS conic-gradient + clip-paths so it's animation-cheap. */
 #orb {
   position: relative;
   width: 110px;
   height: 110px;
   border-radius: 50%;
   background: radial-gradient(
-    circle at 50% 45%,
-    rgba(0, 255, 255, 0.55) 0%,
-    rgba(0, 102, 255, 0.35) 45%,
-    rgba(0, 30, 80, 0.85) 85%,
-    rgba(0, 10, 30, 1) 100%
+    circle at 50%,
+    rgba(0, 30, 80, 0.55) 0%,
+    rgba(0, 10, 30, 0.95) 70%
   );
-  border: 1px solid rgba(0, 212, 255, 0.7);
-  animation: orb-breathe 3s ease-in-out infinite;
+  border: 1px solid rgba(0, 212, 255, 0.45);
   -webkit-app-region: drag;
   cursor: grab;
+  animation: orb-breathe 3s ease-in-out infinite;
+  filter: drop-shadow(0 0 8px rgba(0, 212, 255, 0.5));
 }
 #orb::before {
-  /* Tiny hexagon at the orb's center hints at the full HUD it expands to. */
+  /* The four bright bracket-arcs, faked with a conic-gradient + a
+   * radial mask. Four 30° slices of bright cyan at the cardinal
+   * directions; everything else transparent. */
   content: "";
   position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 28px;
-  height: 32px;
-  background: var(--jarvis-glow);
-  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
-  opacity: 0.85;
-  filter: drop-shadow(0 0 8px var(--jarvis-glow));
+  inset: 12px;
+  border-radius: 50%;
+  background:
+    conic-gradient(
+      from -15deg,
+      var(--jarvis-glow) 0deg, var(--jarvis-glow) 30deg,
+      transparent       30deg, transparent       60deg,
+      var(--jarvis-glow) 60deg, var(--jarvis-glow) 90deg,
+      transparent       90deg, transparent       150deg,
+      var(--jarvis-glow) 150deg, var(--jarvis-glow) 180deg,
+      transparent       180deg, transparent       240deg,
+      var(--jarvis-glow) 240deg, var(--jarvis-glow) 270deg,
+      transparent       270deg, transparent       330deg,
+      var(--jarvis-glow) 330deg, var(--jarvis-glow) 360deg
+    );
+  /* Ring: keep only the donut, not the disc */
+  -webkit-mask: radial-gradient(circle, transparent 36%, black 38%, black 48%, transparent 50%);
+          mask: radial-gradient(circle, transparent 36%, black 38%, black 48%, transparent 50%);
+  filter: drop-shadow(0 0 5px var(--jarvis-glow));
 }
 #orb::after {
-  /* Thin rotating arc around the orb. */
+  /* Thin rotating outer ring with a single bright accent. */
   content: "";
   position: absolute;
-  inset: -6px;
+  inset: -4px;
   border-radius: 50%;
   border: 1px solid transparent;
-  border-top-color: rgba(0, 212, 255, 0.85);
-  border-right-color: rgba(0, 212, 255, 0.25);
-  animation: rotate-ring 6s linear infinite;
+  border-top-color: rgba(0, 255, 255, 0.85);
+  border-right-color: rgba(0, 212, 255, 0.2);
+  animation: rotate-ring 8s linear infinite;
 }
 
 /* -- HUD: full overlay ---------------------------------------- */
@@ -194,8 +210,8 @@ body[data-tier="4"] .tier-dot:nth-child(-n+4) { background: var(--jarvis-danger)
 .stage-row {
   position: relative;
   display: grid;
-  grid-template-columns: 150px 1fr;
-  gap: 14px;
+  grid-template-columns: 210px 1fr;
+  gap: 12px;
   align-items: center;
   padding: 0 4px;
   z-index: 3;
@@ -203,76 +219,59 @@ body[data-tier="4"] .tier-dot:nth-child(-n+4) { background: var(--jarvis-danger)
 
 .core-wrap {
   position: relative;
-  width: 140px;
-  height: 140px;
+  width: 200px;
+  height: 200px;
   margin: 0 auto;
 }
 
-/* Outer rotating ring(s) — two SVG-free ::before / ::after layers */
-.core-wrap::before,
-.core-wrap::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 1.5px solid transparent;
-  pointer-events: none;
-}
-.core-wrap::before {
-  border-top-color: rgba(0, 212, 255, 0.9);
-  border-right-color: rgba(0, 212, 255, 0.3);
-  filter: drop-shadow(0 0 6px rgba(0, 212, 255, 0.7));
-  animation: rotate-ring 8s linear infinite;
-}
-.core-wrap::after {
-  inset: 12px;
-  border-bottom-color: rgba(0, 102, 255, 0.7);
-  border-left-color: rgba(0, 102, 255, 0.2);
-  animation: rotate-ring-reverse 14s linear infinite;
-}
-/* Faster spin while thinking */
-body[data-state="processing"] .core-wrap::before { animation-duration: 1.6s; }
-body[data-state="processing"] .core-wrap::after  { animation-duration: 2.4s; }
-/* Sync hexagon pulse rate with the state */
-body[data-state="speaking"] .core-hex { animation-duration: 0.8s; }
-body[data-state="processing"] .core-hex { animation-duration: 1.2s; }
-
-/* Visualizer canvas sits between the rings and the hexagon. */
+/* Subtle state-reactive backdrop — the canvas visualizer's spokes show
+ * through the gaps between emblem rings without competing with it. */
 #visualizer {
   position: absolute;
-  inset: 8px;
-  width: calc(100% - 16px);
-  height: calc(100% - 16px);
+  inset: 0;
+  width: 100%;
+  height: 100%;
   border-radius: 50%;
+  opacity: 0.35;
+  mix-blend-mode: screen;
+  pointer-events: none;
 }
 
-/* Inner hexagon core */
-.core-hex {
+/* The layered J.A.R.V.I.S. emblem. */
+.emblem {
   position: absolute;
   inset: 0;
-  margin: auto;
-  width: 46px;
-  height: 52px;
-  background: linear-gradient(
-    180deg,
-    var(--jarvis-glow) 0%,
-    var(--jarvis-primary) 50%,
-    var(--jarvis-secondary) 100%
-  );
-  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
-  animation: pulse-core 2s ease-in-out infinite;
+  width: 100%;
+  height: 100%;
+  /* Aggregate glow on the whole emblem — gives it the suspended-in-air
+   * feel without painting glow on every individual layer. */
+  filter: drop-shadow(0 0 8px rgba(0, 212, 255, 0.45))
+          drop-shadow(0 0 18px rgba(0, 255, 255, 0.25));
 }
-.core-hex::after {
-  /* Hollow centre ring drawn on top */
-  content: "";
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 14px;
-  height: 16px;
-  background: rgba(0, 10, 30, 0.85);
-  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+
+/* Selective layer animations. Each layer rotates at its own pace so
+ * the emblem feels alive without anything actually moving fast. */
+.emblem .outer-accents   { transform-origin: 50% 50%; animation: rotate-ring         60s linear infinite; }
+.emblem .progress-arc    { transform-origin: 50% 50%; animation: rotate-ring-reverse 90s linear infinite; }
+.emblem .ticks-long      { transform-origin: 50% 50%; }
+.emblem .dots-ring       { transform-origin: 50% 50%; animation: rotate-ring         120s linear infinite; }
+.emblem .bracket-arcs    { transform-origin: 50% 50%; animation: rotate-ring-reverse 40s linear infinite; }
+.emblem .wordmark        { animation: glow-text 3s ease-in-out infinite; }
+
+/* Bracket arcs are the visual feature — they pulse with the core state. */
+.emblem .bracket-arcs path {
+  filter: drop-shadow(0 0 4px var(--jarvis-glow))
+          drop-shadow(0 0 10px rgba(0, 255, 255, 0.6));
 }
+
+/* State overrides — speed things up while thinking / speaking. */
+body[data-state="processing"] .emblem .bracket-arcs { animation-duration: 4s; }
+body[data-state="processing"] .emblem .outer-accents { animation-duration: 6s; }
+body[data-state="processing"] .emblem .ticks-long line {
+  animation: glow-text 0.4s ease-in-out infinite;
+}
+body[data-state="speaking"] .emblem .bracket-arcs   { animation-duration: 10s; }
+body[data-state="speaking"] .emblem .wordmark       { animation-duration: 1s; }
 
 /* -- Chat side ------------------------------------------------ */
 

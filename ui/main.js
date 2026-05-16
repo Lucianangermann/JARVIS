@@ -17,7 +17,7 @@ app.disableHardwareAcceleration();
 // PROCESSING expand to the full HUD. Resizing is done programmatically
 // — the user can't drag a resize handle (no frame).
 const ORB = { width: 140, height: 140 };
-const HUD = { width: 480, height: 340 };
+const HUD = { width: 520, height: 360 };
 // Margin from the screen edges when sized.
 const EDGE_MARGIN = 24;
 
