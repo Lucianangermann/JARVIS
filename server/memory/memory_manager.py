@@ -105,6 +105,27 @@ class MemoryManager:
                            self.long_term.available,
                            self.error_mem.available,
                            self.profile.available)
+        # Also surface the boot state to stdout so it's visible
+        # alongside the rest of the [JARVIS] startup chatter — the
+        # per-file logger has propagate=False, so without this print
+        # the operator has no way to see at a glance whether memory
+        # came up cleanly.
+        lt_stats = self.long_term.stats()
+        em_stats = self.error_mem.stats()
+        pr_stats = self.profile.stats()
+        marker = "✓" if not self.degraded else "⚠"
+        print(
+            f"[JARVIS] memory ready {marker} "
+            f"long_term={'on' if self.long_term.available else 'OFF'} "
+            f"({lt_stats.get('conversations', 0)} convos, "
+            f"{lt_stats.get('commands', 0)} cmds, "
+            f"{lt_stats.get('knowledge', 0)} facts) — "
+            f"error={'on' if self.error_mem.available else 'OFF'} "
+            f"({em_stats.get('known_fixes', 0)} known fixes) — "
+            f"profile={'on' if self.profile.available else 'OFF'} "
+            f"({pr_stats.get('session_count', 0)} sessions, "
+            f"{pr_stats.get('known_facts', 0)} facts)"
+        )
 
     # ---- properties / introspection --------------------------------------
 
