@@ -249,7 +249,11 @@ body[data-state="speaking"]   .emblem .wordmark   { animation-duration: 1s; }
   color: var(--jarvis-glow);
   clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
   display: grid;
+  /* place-items centres each child IN its track; place-content
+   * centres the tracks THEMSELVES within the 140px button. Without
+   * the second one, label + timer stack at the top edge. */
   place-items: center;
+  place-content: center;
   font-family: var(--font-display);
   font-size: 11px;
   font-weight: 700;
