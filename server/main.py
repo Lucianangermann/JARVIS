@@ -38,6 +38,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .auth import authorize_websocket, require_token
@@ -60,6 +61,7 @@ except Exception as _voice_exc:  # noqa: BLE001
     _VOICE_ERR = repr(_voice_exc)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "clients" / "web"
+PWA_DIR = Path(__file__).resolve().parent.parent / "clients" / "pwa"
 
 
 # --- App lifecycle -------------------------------------------------------- #
@@ -68,8 +70,18 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "clients" / "web"
 async def lifespan(app: FastAPI):
     print("[JARVIS] starting up")
     print(f"[JARVIS] model={settings.MODEL}")
-    print(f"[JARVIS] listening on http://{settings.HOST}:{settings.PORT}")
-    print(f"[JARVIS] web UI at  http://{settings.HOST}:{settings.PORT}/web")
+    # Scheme follows whether uvicorn was launched with --ssl-* flags.
+    # run() below reads JARVIS_SSL_CERT/_KEY from .env and passes
+    # them through, so the scheme here matches.
+    scheme = "https" if settings.JARVIS_SSL_CERT and settings.JARVIS_SSL_KEY else "http"
+    base = f"{scheme}://{settings.HOST}:{settings.PORT}"
+    print(f"[JARVIS] listening on {base}")
+    print(f"[JARVIS] web UI at  {base}/web")
+    if PWA_DIR.exists():
+        print(f"[JARVIS] PWA at     {base}/app")
+        if scheme == "http":
+            print("[JARVIS]   ⚠ iPhone PWA install + microphone need HTTPS.")
+            print("[JARVIS]   ⚠ Set JARVIS_SSL_CERT / JARVIS_SSL_KEY in .env.")
     if not _VOICE_OK:
         print(f"[JARVIS] voice stack NOT loaded ({_VOICE_ERR}) — /audio disabled,")
         print("[JARVIS] text endpoints still work. Install requirements-voice.txt to enable.")
@@ -229,6 +241,91 @@ def chat(
     if payload.speak and _VOICE_OK and tts is not None:
         tts.speak(reply)
     return ChatResponse(reply=reply)
+
+
+@app.post("/transcribe")
+async def transcribe_endpoint(
+    request: Request,
+    audio: UploadFile,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    """Speech-to-text only — no Claude call.
+
+    The iPhone PWA records via MediaRecorder (audio/mp4 from Safari,
+    audio/webm elsewhere), POSTs the blob here, and then forwards
+    the returned text via the existing ``/ws`` so the brain's
+    streaming pipeline plays back unchanged.
+
+    Backend pick mirrors stt._load_model:
+        - macOS Speech.framework gets the raw m4a / webm / wav
+          through SFSpeechURLRecognitionRequest (AVFoundation
+          decodes any of them natively).
+        - Faster-whisper / vanilla whisper expect WAV, so we let
+          stt.transcribe handle that path (it'll error on non-WAV
+          and the PWA shows the error — the doc tells users to
+          prefer the macos backend on iPhone).
+    """
+    if not _VOICE_OK:
+        raise HTTPException(
+            status_code=503,
+            detail="Voice stack not installed. "
+                   "Run: pip install -r requirements-voice.txt",
+        )
+
+    raw = await audio.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty upload.")
+    if len(raw) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Audio too large.")
+
+    content_type = (audio.content_type or "").lower()
+    if "mp4" in content_type or "m4a" in content_type:
+        suffix = ".m4a"
+    elif "webm" in content_type:
+        suffix = ".webm"
+    elif "ogg" in content_type:
+        suffix = ".ogg"
+    elif "wav" in content_type or raw[:4] == b"RIFF":
+        suffix = ".wav"
+    else:
+        suffix = ".bin"
+
+    # Try macOS Speech.framework first (best for non-WAV formats
+    # because AVFoundation handles m4a/webm decoding natively).
+    transcript = ""
+    if suffix in (".m4a", ".webm", ".ogg", ".wav"):
+        try:
+            from . import stt_macos
+        except Exception:  # noqa: BLE001
+            stt_macos = None  # type: ignore[assignment]
+        if stt_macos is not None and stt_macos.is_available() \
+           and stt_macos.authorization_status() == 3:  # _STATUS_AUTHORIZED
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as fp:
+                fp.write(raw)
+                tmp = Path(fp.name)
+            try:
+                transcript = stt_macos.transcribe_wav(str(tmp))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[JARVIS] /transcribe macos backend error: {exc}")
+            finally:
+                tmp.unlink(missing_ok=True)
+
+    # Fallback to Whisper if macOS path is unavailable or returned empty.
+    if not transcript and transcribe is not None and raw[:4] == b"RIFF":
+        try:
+            transcript = transcribe(raw)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[JARVIS] /transcribe whisper backend error: {exc}")
+
+    transcript = _sanitize(transcript or "")
+    tag = _client_tag(request)
+    if transcript:
+        print(f"[CLIENT: {tag}] [TRANSCRIBE] {transcript}")
+    else:
+        print(f"[CLIENT: {tag}] [TRANSCRIBE] (no speech detected, "
+              f"format={content_type!r}, {len(raw)} bytes)")
+    return {"transcript": transcript}
 
 
 @app.post("/audio", response_model=ChatResponse)
@@ -602,19 +699,46 @@ def web_ui() -> FileResponse:
     return FileResponse(index, media_type="text/html")
 
 
+# PWA — the iPhone-installable progressive web app. Lives under
+# clients/pwa/. html=True makes FastAPI fall back to index.html for
+# the SPA-style entry point so /app, /app/, /app/index.html all work.
+# iOS Safari needs HTTPS for Add-to-Home-Screen + mic access — see
+# README_PWA.md for the cert setup.
+if PWA_DIR.exists():
+    app.mount("/app", StaticFiles(directory=PWA_DIR, html=True), name="pwa")
+
+
 # --- Entry point ---------------------------------------------------------- #
 
 def run() -> None:
-    """``python -m server.main`` launches uvicorn with our settings."""
+    """``python -m server.main`` launches uvicorn with our settings.
+
+    If JARVIS_SSL_CERT + JARVIS_SSL_KEY are set in .env (eg. pointing
+    at the project's Tailscale-issued *.ts.net.crt / .key files) we
+    boot uvicorn in HTTPS mode. That's required for the iPhone PWA:
+    iOS Safari blocks getUserMedia + service-worker install on plain
+    HTTP. Without the cert vars we fall through to HTTP — fine for
+    Electron-on-localhost dev, broken for iPhone install.
+    """
     import uvicorn
 
-    uvicorn.run(
-        "server.main:app",
+    kwargs: dict[str, Any] = dict(
         host=settings.HOST,
         port=settings.PORT,
         reload=False,
         log_level="info",
     )
+    if settings.JARVIS_SSL_CERT and settings.JARVIS_SSL_KEY:
+        cert_path = Path(settings.JARVIS_SSL_CERT).expanduser()
+        key_path  = Path(settings.JARVIS_SSL_KEY).expanduser()
+        if not cert_path.exists() or not key_path.exists():
+            print(f"[JARVIS] ⚠ SSL files missing: cert={cert_path} key={key_path}")
+            print("[JARVIS] ⚠ falling back to HTTP — iPhone PWA won't work.")
+        else:
+            kwargs["ssl_certfile"] = str(cert_path)
+            kwargs["ssl_keyfile"]  = str(key_path)
+
+    uvicorn.run("server.main:app", **kwargs)
 
 
 if __name__ == "__main__":

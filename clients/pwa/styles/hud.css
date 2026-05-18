@@ -1,0 +1,324 @@
+/* JARVIS PWA — HUD element styles.
+ *
+ * Same visual language as the Electron HUD's hud.css but rebuilt
+ * for portrait phone layout: full-width status bar at the top, a
+ * single emblem in the middle (no horizontal split with a chat
+ * pane), a scrollable chat area below, and a finger-friendly PTT
+ * button + action row anchored at the bottom.
+ */
+
+/* ── corner brackets ───────────────────────────────────────── */
+.bracket {
+  position: fixed;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--jarvis-primary);
+  filter: drop-shadow(0 0 4px var(--jarvis-primary));
+  pointer-events: none;
+  z-index: 5;
+}
+.bracket.tl { top:    max(12px, env(safe-area-inset-top));
+              left:   max(12px, env(safe-area-inset-left));
+              border-right: 0; border-bottom: 0; }
+.bracket.tr { top:    max(12px, env(safe-area-inset-top));
+              right:  max(12px, env(safe-area-inset-right));
+              border-left: 0;  border-bottom: 0; }
+.bracket.bl { bottom: max(12px, env(safe-area-inset-bottom));
+              left:   max(12px, env(safe-area-inset-left));
+              border-right: 0; border-top: 0; }
+.bracket.br { bottom: max(12px, env(safe-area-inset-bottom));
+              right:  max(12px, env(safe-area-inset-right));
+              border-left: 0;  border-top: 0; }
+
+/* ── status bar ────────────────────────────────────────────── */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px 6px;
+  font-size: 10px;
+  color: var(--jarvis-primary);
+  letter-spacing: 0.25em;
+  z-index: 4;
+}
+.status-bar .brand   { display: inline-flex; align-items: center; gap: 8px;
+                       animation: glow-text 4s ease-in-out infinite; }
+.status-bar .center  { flex: 1; text-align: center; font-family: var(--font-mono);
+                       letter-spacing: 0.3em; color: rgba(0, 212, 255, 0.85); }
+.status-bar .right   { display: inline-flex; align-items: center; gap: 8px;
+                       font-size: 9px; letter-spacing: 0.28em; }
+
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--jarvis-ok);
+  box-shadow: 0 0 6px var(--jarvis-ok);
+  animation: dot-heartbeat 2.2s ease-out infinite;
+}
+body[data-conn="offline"]      .status-dot { background: var(--jarvis-danger);
+                                              box-shadow: 0 0 6px var(--jarvis-danger); }
+body[data-conn="connecting"]   .status-dot { background: var(--jarvis-warn);
+                                              box-shadow: 0 0 6px var(--jarvis-warn); }
+body[data-conn="error"]        .status-dot { background: var(--jarvis-danger);
+                                              box-shadow: 0 0 6px var(--jarvis-danger); }
+
+.conn-route {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 212, 255, 0.4);
+  background: rgba(0, 30, 80, 0.4);
+  font-size: 8px;
+  letter-spacing: 0.25em;
+}
+.conn-route:empty { display: none; }
+
+/* ── core visualizer ─────────────────────────────────────── */
+.core-wrap {
+  position: relative;
+  width: min(78vw, 320px);
+  aspect-ratio: 1;
+  margin: 0 auto;
+  display: grid;
+  place-items: center;
+  animation: orb-breathe 3s ease-in-out infinite;
+}
+#visualizer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  opacity: 0.55;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+.emblem {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+.emblem .ring-outer,
+.emblem .ring-mid,
+.emblem .ring-inner {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  pointer-events: none;
+}
+.emblem .ring-outer {
+  inset: 0;
+  border-color: rgba(0, 212, 255, 0.30);
+  border-top-color: rgba(0, 255, 255, 0.85);
+  animation: rotate-ring 12s linear infinite;
+}
+.emblem .ring-mid {
+  inset: 10%;
+  border-color: rgba(0, 212, 255, 0.20);
+  border-right-color: rgba(0, 255, 255, 0.55);
+  animation: rotate-ring-reverse 18s linear infinite;
+}
+.emblem .ring-inner {
+  inset: 22%;
+  border-color: rgba(0, 212, 255, 0.45);
+  border-left-color: rgba(0, 255, 255, 0.75);
+  animation: rotate-ring 8s linear infinite;
+}
+.emblem .wordmark {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  color: var(--jarvis-glow);
+  text-align: center;
+  animation: glow-text 3s ease-in-out infinite;
+}
+.emblem .wordmark-sub {
+  position: absolute;
+  bottom: 30%;
+  font-size: 7px;
+  letter-spacing: 0.25em;
+  color: rgba(0, 212, 255, 0.55);
+  text-align: center;
+}
+
+/* State-specific overrides for the emblem. */
+body[data-state="processing"] .emblem .ring-outer { animation-duration: 1.5s; }
+body[data-state="processing"] .emblem .ring-inner { animation-duration: 1s; }
+body[data-state="speaking"]   .emblem .ring-outer { animation-duration: 4s; }
+body[data-state="speaking"]   .emblem .ring-mid   { animation-duration: 6s; }
+body[data-state="speaking"]   .emblem .wordmark   { animation-duration: 1s; }
+
+/* ── chat pane ─────────────────────────────────────────── */
+.chat-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;                /* required for overflow inside grid */
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 6px 18px 0;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 212, 255, 0.35) transparent;
+}
+.chat-pane > :first-child { margin-top: auto; }
+.chat-pane::-webkit-scrollbar       { width: 4px; }
+.chat-pane::-webkit-scrollbar-thumb { background: rgba(0, 212, 255, 0.35);
+                                       border-radius: 2px; }
+
+.chat-msg {
+  padding: 8px 10px;
+  border-radius: 8px;
+  animation: fade-in-up 0.2s ease-out both;
+  line-height: 1.4;
+  word-break: break-word;
+}
+.chat-msg .who {
+  display: block;
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  color: rgba(0, 212, 255, 0.55);
+  margin-bottom: 2px;
+}
+.chat-msg.you {
+  background: rgba(0, 102, 255, 0.08);
+  border: 1px solid rgba(0, 102, 255, 0.32);
+  color: rgba(0, 212, 255, 0.9);
+}
+.chat-msg.jarvis {
+  background: rgba(0, 255, 255, 0.06);
+  border: 1px solid rgba(0, 255, 255, 0.32);
+  color: var(--jarvis-glow);
+}
+.chat-msg .body.cursor::after {
+  content: "▌";
+  margin-left: 2px;
+  color: var(--jarvis-primary);
+  animation: blink-cursor 0.8s step-end infinite;
+}
+
+/* ── PTT button ───────────────────────────────────────── */
+.ptt-wrap {
+  display: grid;
+  place-items: center;
+  padding: 8px 0 4px;
+}
+.hex-btn-large {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: radial-gradient(circle at 50%,
+              rgba(0, 30, 80, 0.55) 0%,
+              rgba(0, 10, 30, 0.92) 70%);
+  border: 1px solid rgba(0, 212, 255, 0.55);
+  color: var(--jarvis-glow);
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.25em;
+  animation: ptt-idle-pulse 2.6s ease-in-out infinite;
+  touch-action: none;       /* don't scroll / pinch on hold */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.hex-btn-large #ptt-wave {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.hex-btn-large .ptt-label  { z-index: 2; }
+.hex-btn-large .ptt-timer  { z-index: 2; font-family: var(--font-mono);
+                              font-size: 9px; letter-spacing: 0.2em;
+                              color: rgba(0, 212, 255, 0.6); margin-top: 4px; }
+
+/* Recording state — red glow + heart-beat ring */
+.hex-btn-large.recording {
+  border-color: var(--jarvis-danger);
+  color: var(--jarvis-danger);
+  animation: ptt-recording-pulse 0.8s ease-in-out infinite;
+}
+.hex-btn-large.recording #ptt-wave { opacity: 0.85; }
+
+/* Speaking state — dim, disabled while JARVIS replies. */
+.hex-btn-large.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+  animation: none;
+  border-color: rgba(0, 212, 255, 0.25);
+}
+
+/* ── action bar ────────────────────────────────────────── */
+.action-bar {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  padding: 6px 14px max(10px, env(safe-area-inset-bottom));
+  gap: 6px;
+}
+.hex-btn {
+  appearance: none;
+  width: 44px;
+  height: 50px;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 30, 80, 0.6);
+  color: var(--jarvis-primary);
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  border: 0;
+  font-size: 17px;
+  cursor: pointer;
+  filter: drop-shadow(0 0 3px rgba(0, 212, 255, 0.45));
+  -webkit-tap-highlight-color: transparent;
+}
+.hex-btn:active { background: rgba(0, 102, 255, 0.55); }
+
+.tier-indicator { display: inline-flex; gap: 4px; }
+.tier-indicator .tier-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: rgba(0, 60, 120, 0.6);
+  border: 1px solid rgba(0, 212, 255, 0.4);
+}
+body[data-tier="1"] .tier-dot:nth-child(-n+1),
+body[data-tier="2"] .tier-dot:nth-child(-n+2),
+body[data-tier="3"] .tier-dot:nth-child(-n+3),
+body[data-tier="4"] .tier-dot:nth-child(-n+4) {
+  background: var(--jarvis-primary);
+  box-shadow: 0 0 5px var(--jarvis-primary);
+}
+
+.kill-badge {
+  appearance: none;
+  background: rgba(0, 255, 170, 0.10);
+  border: 1px solid rgba(0, 255, 170, 0.45);
+  color: var(--jarvis-ok);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  -webkit-tap-highlight-color: transparent;
+}
+body[data-kill="true"] .kill-badge {
+  background: rgba(255, 42, 74, 0.22);
+  border-color: var(--jarvis-danger);
+  color: var(--jarvis-danger);
+  animation: kill-pulse 1.6s ease-in-out infinite;
+}

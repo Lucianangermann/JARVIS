@@ -37,6 +37,14 @@ class Settings:
     # --- Network ---
     HOST: str = os.getenv("HOST", "127.0.0.1")
     PORT: int = int(os.getenv("PORT", "8000"))
+    # If both paths are set, server/main.py:run() launches uvicorn in
+    # HTTPS mode. Required for the iPhone PWA (iOS blocks mic +
+    # service-worker on HTTP). Empty = HTTP — fine for Electron/dev.
+    # Typical values point at a Tailscale-issued cert:
+    #   JARVIS_SSL_CERT=./macbook-pro-von-lucian-1.tail1a2633.ts.net.crt
+    #   JARVIS_SSL_KEY =./macbook-pro-von-lucian-1.tail1a2633.ts.net.key
+    JARVIS_SSL_CERT: str = os.getenv("JARVIS_SSL_CERT", "")
+    JARVIS_SSL_KEY:  str = os.getenv("JARVIS_SSL_KEY",  "")
     ALLOWED_ORIGINS: list[str] = _csv(
         "ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000"
     )

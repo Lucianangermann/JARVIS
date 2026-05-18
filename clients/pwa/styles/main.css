@@ -1,0 +1,143 @@
+/* JARVIS PWA — core design tokens + base layout.
+ * Variables mirror the Electron HUD (ui/renderer/styles/main.css)
+ * so the two clients look identical. Keep them in sync by hand —
+ * we don't have a shared build step. */
+
+:root {
+  --jarvis-primary:   #00D4FF;
+  --jarvis-secondary: #0066FF;
+  --jarvis-glow:      #00FFFF;
+  --jarvis-dim:       #003366;
+  --jarvis-warn:      #FF6600;
+  --jarvis-danger:    #FF2A4A;
+  --jarvis-ok:        #00FFAA;
+  --jarvis-bg:        #00080F;
+  --jarvis-bg-soft:   rgba(0, 18, 42, 0.92);
+  --jarvis-grid:      rgba(0, 212, 255, 0.08);
+
+  --font-display: "Orbitron", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --radius-md: 10px;
+  --radius-lg: 18px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background:
+    /* faint perspective grid identical to the desktop HUD */
+    linear-gradient(var(--jarvis-grid) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, var(--jarvis-grid) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--jarvis-bg);
+  color: var(--jarvis-primary);
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+body {
+  display: grid;
+  /* Five-row layout: status / visualizer / chat / PTT / actions.
+   * The chat row gets the only fractional space so it scrolls. */
+  grid-template-rows:
+    auto                          /* status bar */
+    minmax(220px, 38vh)           /* visualizer */
+    minmax(0, 1fr)                /* chat (scrolls) */
+    auto                          /* PTT */
+    auto;                         /* action bar */
+  /* Safe-area insets so the notch / home indicator stay clear. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
+  gap: 8px;
+  position: relative;
+}
+
+/* Standalone vs in-browser: hide the page chrome when running
+ * from the home screen. iOS reports display-mode standalone. */
+@media (display-mode: standalone) {
+  html { background: var(--jarvis-bg); }
+}
+
+/* Default focus ring is too thick on touch — keep it minimal. */
+button:focus-visible, input:focus-visible {
+  outline: 1px solid var(--jarvis-glow);
+  outline-offset: 2px;
+}
+
+/* Slide-up panels (settings, text input) share these basics. */
+.slide-panel {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 30;
+  background: var(--jarvis-bg-soft);
+  border-top: 1px solid rgba(0, 212, 255, 0.35);
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.6);
+  transform: translateY(100%);
+  transition: transform 0.18s ease-out;
+  padding: 16px env(safe-area-inset-right) env(safe-area-inset-bottom)
+           env(safe-area-inset-left);
+}
+.slide-panel.open { transform: translateY(0); }
+.slide-panel .panel-inner { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.slide-panel h2 {
+  margin: 0 0 6px 0;
+  font-size: 12px;
+  letter-spacing: 0.32em;
+  color: var(--jarvis-glow);
+}
+.slide-panel label {
+  display: flex;
+  flex-direction: column;
+  font-size: 9px;
+  letter-spacing: 0.28em;
+  color: rgba(0, 212, 255, 0.7);
+  gap: 4px;
+}
+.slide-panel input {
+  background: rgba(0, 5, 15, 0.75);
+  color: var(--jarvis-glow);
+  border: 1px solid rgba(0, 212, 255, 0.45);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  outline: none;
+}
+.slide-panel input:focus { border-color: var(--jarvis-glow); }
+.slide-panel .row { display: flex; gap: 8px; margin-top: 4px; }
+.slide-panel .action-btn {
+  flex: 1;
+  appearance: none;
+  background: rgba(0, 30, 80, 0.55);
+  color: var(--jarvis-primary);
+  border: 1px solid rgba(0, 212, 255, 0.45);
+  border-radius: 8px;
+  padding: 10px 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+}
+.slide-panel .action-btn.primary {
+  background: rgba(0, 102, 255, 0.4);
+  border-color: var(--jarvis-glow);
+  color: var(--jarvis-glow);
+}
+.slide-panel .cfg-status {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: none;
+  color: rgba(0, 212, 255, 0.6);
+  min-height: 1em;
+  margin: 0;
+}

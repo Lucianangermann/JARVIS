@@ -1,0 +1,85 @@
+/* JARVIS PWA — mobile-only behaviours.
+ *
+ * Loaded last so the rules here override anything in the shared
+ * HUD stylesheets. Most of this exists because mobile Safari is
+ * generous with touch defaults that look broken on a custom HUD
+ * (text selection on labels, the grey "tap" highlight, rubber-band
+ * scroll on the page itself, the zoom-in on input focus, etc.).
+ */
+
+html, body {
+  /* Don't bounce the whole page when scroll hits the edge. The chat
+   * pane scrolls independently. */
+  overscroll-behavior: none;
+  /* iOS rubber-band on body looks janky against the fixed corner
+   * brackets — pin it. */
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  /* Never select / drag UI text on touch. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Buttons: minimum 44×44 px hit target per Apple HIG. */
+button { min-width: 44px; min-height: 44px; }
+
+/* Inputs are the one place the user SHOULD be able to select +
+ * paste freely (token, URLs). Re-enable here. */
+input[type="text"],
+input[type="url"],
+input[type="password"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* iOS Safari zooms in on focus when input font-size < 16 px. Bump
+ * to 16 even though our display font is smaller. */
+input { font-size: 16px; }
+
+/* Chat momentum scroll. iOS used to need -webkit-overflow-scrolling:
+ * touch; on modern Safari it's the default but explicit anyway. */
+.chat-pane {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Disable double-tap-zoom on the PTT + action bar specifically.
+ * touch-action: manipulation strips the 300 ms delay too. */
+.hex-btn,
+.hex-btn-large,
+.kill-badge,
+.action-btn {
+  touch-action: manipulation;
+}
+
+/* The PTT button needs to swallow ALL touch defaults so a
+ * fingerdrag-off doesn't fire scroll or context menu. */
+.hex-btn-large {
+  touch-action: none;
+}
+
+/* Shorten visualizer + emblem on tiny phones so the chat still
+ * has room. iPhone SE: 320×480 dimensions roughly. */
+@media (max-height: 700px) {
+  .emblem .wordmark     { font-size: 16px; }
+  .emblem .wordmark-sub { font-size: 6px; }
+  .hex-btn-large        { width: 120px; height: 120px; font-size: 10px; }
+}
+@media (max-height: 600px) {
+  body { grid-template-rows: auto 28vh minmax(0, 1fr) auto auto; }
+}
+
+/* Landscape (uncommon but worth degrading gracefully): drop the
+ * visualizer height a lot so the chat + PTT stay visible. */
+@media (orientation: landscape) {
+  body {
+    grid-template-rows: auto minmax(140px, 22vh) minmax(0, 1fr) auto auto;
+  }
+  .core-wrap { width: min(36vh, 220px); }
+}

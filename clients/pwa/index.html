@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover unlocks the safe-area-inset env() vars we
+     use in mobile.css to keep the HUD clear of the iPhone notch and
+     home indicator. -->
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<!-- iOS-only meta tags: "Add to Home Screen" reads these. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<meta name="theme-color" content="#00080F">
+
+<title>J.A.R.V.I.S.</title>
+
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="icon" href="assets/icon-192.png" type="image/png">
+
+<!-- Fonts: served from Google so the install bundle stays small,
+     but cached by the service worker after first visit. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+
+<link rel="stylesheet" href="styles/main.css">
+<link rel="stylesheet" href="styles/animations.css">
+<link rel="stylesheet" href="styles/hud.css">
+<link rel="stylesheet" href="styles/mobile.css">
+</head>
+<body data-state="idle" data-conn="offline" data-tier="1" data-kill="false">
+
+  <!-- Corner brackets to match the desktop HUD -->
+  <span class="bracket tl"></span>
+  <span class="bracket tr"></span>
+  <span class="bracket bl"></span>
+  <span class="bracket br"></span>
+
+  <!-- ── STATUS BAR ──────────────────────────────────────────── -->
+  <header class="status-bar">
+    <span class="brand">
+      <span class="status-dot" id="conn-dot"></span>
+      J.A.R.V.I.S.
+    </span>
+    <span class="center tabular" id="clock">00:00:00</span>
+    <span class="right">
+      <span id="conn-label">OFFLINE</span>
+      <span class="conn-route" id="conn-route" title="Active route"></span>
+    </span>
+  </header>
+
+  <!-- ── CORE VISUALIZER ─────────────────────────────────────── -->
+  <section class="core-wrap" id="core-wrap" aria-hidden="true">
+    <canvas id="visualizer" width="320" height="320"></canvas>
+    <div class="emblem">
+      <div class="ring-outer"></div>
+      <div class="ring-mid"></div>
+      <div class="ring-inner"></div>
+      <div class="wordmark">JARVIS</div>
+      <div class="wordmark-sub">JUST A RATHER VERY INTELLIGENT SYSTEM</div>
+    </div>
+  </section>
+
+  <!-- ── CHAT DISPLAY ────────────────────────────────────────── -->
+  <section class="chat-pane" id="chat-pane" aria-live="polite">
+    <!-- Populated by app.js -->
+  </section>
+
+  <!-- ── PTT BUTTON ──────────────────────────────────────────── -->
+  <section class="ptt-wrap">
+    <button id="ptt-btn"
+            class="hex-btn-large"
+            type="button"
+            aria-label="Hold to speak"
+            aria-pressed="false">
+      <canvas id="ptt-wave" width="120" height="120" aria-hidden="true"></canvas>
+      <span class="ptt-label" id="ptt-label">HOLD TO SPEAK</span>
+      <span class="ptt-timer" id="ptt-timer"></span>
+    </button>
+  </section>
+
+  <!-- ── QUICK ACTIONS ───────────────────────────────────────── -->
+  <nav class="action-bar">
+    <button class="hex-btn" id="act-settings" type="button" aria-label="Settings">⚙</button>
+    <button class="hex-btn" id="act-search"   type="button" aria-label="Type command">⌕</button>
+    <button class="hex-btn" id="act-music"    type="button" aria-label="Music">♪</button>
+    <span class="tier-indicator" title="Permission tier" aria-label="Tier indicator">
+      <span class="tier-dot"></span>
+      <span class="tier-dot"></span>
+      <span class="tier-dot"></span>
+      <span class="tier-dot"></span>
+    </span>
+    <button id="act-kill" class="kill-badge" type="button"
+            aria-label="Emergency stop">STOP</button>
+  </nav>
+
+  <!-- ── SETTINGS PANEL (hidden, slides up) ──────────────────── -->
+  <aside id="settings-panel" class="slide-panel" aria-hidden="true">
+    <div class="panel-inner">
+      <h2>Connection</h2>
+      <label>Local server URL
+        <input id="cfg-local"     type="url"  placeholder="https://192.168.1.50:8000"
+               autocomplete="off">
+      </label>
+      <label>Tailscale URL
+        <input id="cfg-tailscale" type="url"  placeholder="https://100.x.x.x:8000"
+               autocomplete="off">
+      </label>
+      <label>Bearer token
+        <input id="cfg-token"     type="password" placeholder="JARVIS_AUTH_TOKEN"
+               autocomplete="off" spellcheck="false">
+      </label>
+      <div class="row">
+        <button id="cfg-test"  type="button" class="action-btn">Test</button>
+        <button id="cfg-save"  type="button" class="action-btn primary">Save</button>
+        <button id="cfg-close" type="button" class="action-btn">Close</button>
+      </div>
+      <p id="cfg-status" class="cfg-status"></p>
+    </div>
+  </aside>
+
+  <!-- ── TYPE-INPUT PANEL (slides up from bottom) ────────────── -->
+  <aside id="text-panel" class="slide-panel" aria-hidden="true">
+    <div class="panel-inner">
+      <label>Type a command
+        <input id="text-input" type="text" placeholder="Speak or type a command…"
+               autocomplete="off" spellcheck="false">
+      </label>
+      <div class="row">
+        <button id="text-send"  type="button" class="action-btn primary">Send</button>
+        <button id="text-close" type="button" class="action-btn">Close</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- App scripts. Order matters: config first (others read settings), -->
+  <!-- then websocket, then ptt + visualizer, then app which wires it all. -->
+  <script type="module" src="scripts/config.js"></script>
+  <script type="module" src="scripts/websocket.js"></script>
+  <script type="module" src="scripts/visualizer.js"></script>
+  <script type="module" src="scripts/ptt.js"></script>
+  <script type="module" src="scripts/app.js"></script>
+
+  <!-- Register the service worker only when running over a secure
+       context (HTTPS or localhost). Otherwise iOS would silently
+       fail and confuse first-time setup; better to skip cleanly. -->
+  <script>
+    if ("serviceWorker" in navigator
+        && (window.isSecureContext || location.hostname === "localhost")) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch((err) => {
+          console.warn("[JARVIS PWA] sw register failed:", err);
+        });
+      });
+    }
+  </script>
+</body>
+</html>
