@@ -49,8 +49,8 @@ body {
    * The chat row gets the only fractional space so it scrolls. */
   grid-template-rows:
     auto                          /* status bar */
-    minmax(220px, 38vh)           /* visualizer */
-    minmax(0, 1fr)                /* chat (scrolls) */
+    minmax(160px, 26vh)           /* visualizer */
+    minmax(180px, 1fr)            /* chat (scrolls, gets the fluid space) */
     auto                          /* PTT */
     auto;                         /* action bar */
   /* Safe-area insets so the notch / home indicator stay clear. */

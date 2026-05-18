@@ -40,6 +40,11 @@ function loadDotEnv(envPath) {
 }
 
 const dotenv = loadDotEnv(path.join(PROJECT_ROOT, ".env"));
+// The server boots in HTTPS mode iff both cert + key are set in .env
+// (see server/main.py::run). Mirror that decision here so the renderer
+// can pick wss://+https:// when needed. Without this the HUD silently
+// fails to connect whenever the iPhone PWA path is enabled.
+const SSL_ENABLED = Boolean(dotenv.JARVIS_SSL_CERT && dotenv.JARVIS_SSL_KEY);
 const SERVER_CONFIG = {
   token: dotenv.JARVIS_AUTH_TOKEN || "",
   // Server binds to 127.0.0.1 by default; we always connect to
@@ -47,6 +52,7 @@ const SERVER_CONFIG = {
   // not for the local client).
   host: "127.0.0.1",
   port: parseInt(dotenv.PORT || "8000", 10),
+  ssl: SSL_ENABLED,
 };
 if (!SERVER_CONFIG.token) {
   console.warn("[JARVIS] JARVIS_AUTH_TOKEN missing from .env — the renderer will report OFFLINE.");
@@ -65,6 +71,29 @@ if (!SERVER_CONFIG.token) {
 // which silences the per-frame EGL noise without touching the GPU
 // pipeline. Must be set BEFORE app.whenReady().
 app.commandLine.appendSwitch("log-level", "3"); // 0=info 1=warn 2=err 3=fatal
+
+// When the user enables HTTPS via Tailscale certs (for the iPhone PWA),
+// the Electron HUD still connects through 127.0.0.1 — but the cert's
+// CN is the Tailscale hostname, not the loopback IP. Chromium rejects
+// that as CERT_COMMON_NAME_INVALID and the WS/permissions fetch silently
+// die. Accept the cert only for our own server (loopback + the configured
+// port). Scope is intentionally narrow so we don't blanket-trust every
+// bad cert the browser meets.
+if (SSL_ENABLED) {
+  app.on("certificate-error", (event, _webContents, url, _error, _cert, callback) => {
+    try {
+      const u = new URL(url);
+      const ok = (u.hostname === "127.0.0.1" || u.hostname === "localhost")
+              && String(u.port || "") === String(SERVER_CONFIG.port);
+      if (ok) {
+        event.preventDefault();
+        callback(true);
+        return;
+      }
+    } catch { /* fall through */ }
+    callback(false);
+  });
+}
 
 // ---- window sizing per state ---- //
 // IDLE shows the small orb in the bottom-right corner; ACTIVE/SPEAKING/
@@ -197,6 +226,7 @@ ipcMain.handle("jarvis:get-config", () => ({
   token: SERVER_CONFIG.token,
   host:  SERVER_CONFIG.host,
   port:  SERVER_CONFIG.port,
+  ssl:   SERVER_CONFIG.ssl,
 }));
 
 // ---- server child process ---- //

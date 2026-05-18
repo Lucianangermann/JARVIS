@@ -37,7 +37,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -432,7 +432,15 @@ async def ws(websocket: WebSocket) -> None:
                 # the end — defeating streaming. Punt to a worker
                 # thread so the loop stays free to dispatch fanout +
                 # the Cocoa runloop pump while Claude is generating.
-                reply = await asyncio.to_thread(brain.reply, token, user_text)
+                #
+                # speak_locally=False: the requester is on the other end
+                # of this WebSocket (PWA, browser, …), not standing at
+                # the Mac. They get the reply text + can synthesise
+                # speech themselves; the Mac stays silent so we don't
+                # talk over the remote client.
+                reply = await asyncio.to_thread(
+                    brain.reply, token, user_text, speak_locally=False,
+                )
             except HTTPException as exc:
                 await send_json({"error": exc.detail})
                 continue
@@ -451,6 +459,54 @@ async def ws(websocket: WebSocket) -> None:
         events.unsubscribe(event_queue)
         with contextlib.suppress(asyncio.CancelledError):
             await fanout_task
+
+
+# --- Remote TTS for the iPhone PWA --------------------------------------- #
+# iOS Safari's Web Speech API is unreliable in standalone-mode PWAs —
+# speak() silently no-ops even after a user-gesture primer. Instead we
+# synthesize audio server-side via macOS' `say` command and stream the
+# bytes back; the PWA plays them through an <audio> element, which
+# works rock-solid on iOS. Same voice the local Mac TTS uses (configurable
+# via TTS_VOICE in .env, default "Markus" for German).
+@app.get("/tts/synthesize")
+async def tts_synthesize(
+    text: str,
+    request: Request,
+    token: str = Depends(require_token),
+) -> Response:
+    import asyncio as _aio
+    import tempfile
+    text = _sanitize(text)[:2000]
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty text.")
+    voice = os.getenv("TTS_VOICE", "Markus")
+    # AIFF is what `say -o` emits natively; Safari + iOS play it
+    # through <audio> without conversion. We skip WAV/MP3 transcode
+    # to keep latency low — the file is small and only hits the
+    # local Tailscale link.
+    out = Path(tempfile.mkstemp(suffix=".aiff")[1])
+    try:
+        proc = await _aio.create_subprocess_exec(
+            "say", "-v", voice, "-o", str(out), "--", text,
+            stdout=_aio.subprocess.DEVNULL,
+            stderr=_aio.subprocess.PIPE,
+        )
+        try:
+            _, err = await _aio.wait_for(proc.communicate(), timeout=10.0)
+        except _aio.TimeoutError:
+            proc.kill()
+            raise HTTPException(status_code=504, detail="TTS synth timed out.")
+        if proc.returncode != 0:
+            detail = (err.decode("utf-8", "replace") if err else "say failed").strip()
+            raise HTTPException(status_code=500, detail=f"TTS error: {detail}")
+        data = out.read_bytes()
+    finally:
+        out.unlink(missing_ok=True)
+    return Response(
+        content=data,
+        media_type="audio/aiff",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # --- mac_control routes --------------------------------------------------- #

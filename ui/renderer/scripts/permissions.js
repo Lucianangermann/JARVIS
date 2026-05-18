@@ -66,7 +66,7 @@ export async function start() {
     console.warn("[perms] no auth token — polling disabled");
     return;
   }
-  baseUrl = `http://${cfg.host}:${cfg.port}`;
+  baseUrl = `${cfg.ssl ? "https" : "http"}://${cfg.host}:${cfg.port}`;
   token   = cfg.token;
 
   // Fire one immediately so the UI doesn't sit empty for 5 s on boot.

@@ -155,13 +155,14 @@ body[data-state="speaking"]   .emblem .wordmark   { animation-duration: 1s; }
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-height: 0;                /* required for overflow inside grid */
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 6px 18px 0;
-  font-size: 12px;
-  letter-spacing: 0.06em;
+  padding: 8px 18px 4px;
+  font-size: 14px;
+  line-height: 1.45;
+  letter-spacing: 0.04em;
   text-transform: none;
   scrollbar-width: thin;
   scrollbar-color: rgba(0, 212, 255, 0.35) transparent;

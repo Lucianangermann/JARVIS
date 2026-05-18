@@ -226,8 +226,19 @@ class Brain:
 
     # -- Public API -------------------------------------------------------- #
 
-    def reply(self, session_id: str, user_text: str) -> str:
-        """Return Claude's spoken-ready reply to ``user_text``."""
+    def reply(self, session_id: str, user_text: str,
+              *, speak_locally: bool = True) -> str:
+        """Return Claude's spoken-ready reply to ``user_text``.
+
+        ``speak_locally``: if False, suppress the per-sentence
+        ``tts_ref.speak()`` calls that would otherwise pipe audio
+        through the Mac's speakers. The streaming HUD events
+        (``jarvis_partial`` / ``jarvis_reply``) still fire, so remote
+        clients (PWA, etc.) can do their own playback. voice_loop —
+        the path triggered by the local wake word — keeps the default
+        (True) so the user gets a voice answer when speaking to the
+        Mac directly.
+        """
         user_text = user_text.strip()[: settings.MAX_INPUT_LENGTH]
         if not user_text:
             return "I didn't catch that."
@@ -250,7 +261,8 @@ class Brain:
             history.append({"role": "user", "content": user_text})
             try:
                 final_text = self._run_tool_loop(history, session_id=session_id,
-                                                  user_text=user_text)
+                                                  user_text=user_text,
+                                                  speak_locally=speak_locally)
             except Exception as exc:  # noqa: BLE001 — surface to user
                 # Roll back the user turn so a retry doesn't double it up.
                 history.pop()
@@ -295,7 +307,8 @@ class Brain:
 
     def _run_tool_loop(self, history: list[dict[str, Any]],
                        *, session_id: str = "",
-                       user_text: str = "") -> str:
+                       user_text: str = "",
+                       speak_locally: bool = True) -> str:
         """Manual agentic loop: call Claude, run any tools, feed results back.
 
         ``user_text`` is the current user turn — drives the memory
@@ -325,7 +338,8 @@ class Brain:
             # + current date/time) is regenerated per call.
             system_blocks = self.memory.build_system_blocks(user_text)
 
-            resp = self._stream_one_turn(history, system_blocks)
+            resp = self._stream_one_turn(history, system_blocks,
+                                          speak_locally=speak_locally)
 
             # Stop conditions: normal end_turn, or pause_turn (server-side
             # tool wants another round-trip — just resend with the assistant
@@ -398,7 +412,8 @@ class Brain:
     _MIN_SPEAKABLE_LEN = 4
 
     def _stream_one_turn(self, history: list[dict[str, Any]],
-                         system_blocks: list[dict[str, Any]]) -> "Message":
+                         system_blocks: list[dict[str, Any]],
+                         *, speak_locally: bool = True) -> "Message":
         """Issue one ``messages.stream()`` call, push completed
         sentences to TTS + HUD as text deltas arrive, then return the
         final Message so the existing tool_use / end_turn switch can
@@ -434,15 +449,18 @@ class Brain:
                 events.publish({"type": "jarvis_partial", "text": text})
             except Exception:  # noqa: BLE001
                 pass
-            # 2) TTS: only if voice_loop is actually running. The
-            # existing tts.speak() queues into the worker that feeds
-            # the AEC-aware audio callback — no echo regression.
-            tts_ref = getattr(_vl, "_tts_ref", None) if _vl is not None else None
-            if tts_ref is not None:
-                try:
-                    tts_ref.speak(text)
-                except Exception:  # noqa: BLE001
-                    pass
+            # 2) TTS: only if voice_loop is actually running AND the
+            # caller wants local speech. Remote clients (the PWA) set
+            # speak_locally=False so the iPhone speaks via Web Speech
+            # and the Mac stays silent — otherwise both speakers fire
+            # simultaneously, which is what the user hit.
+            if speak_locally:
+                tts_ref = getattr(_vl, "_tts_ref", None) if _vl is not None else None
+                if tts_ref is not None:
+                    try:
+                        tts_ref.speak(text)
+                    except Exception:  # noqa: BLE001
+                        pass
 
         with self.client.messages.stream(
             model=settings.MODEL,

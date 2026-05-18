@@ -13,7 +13,7 @@
 // outer setup doc explains how to enable HTTPS via the Tailscale
 // cert. On plain HTTP this script simply doesn't get installed.
 
-const CACHE_VERSION = "jarvis-pwa-v1";
+const CACHE_VERSION = "jarvis-pwa-v4";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -37,6 +37,7 @@ const APP_SHELL = [
 const NETWORK_ONLY_PREFIXES = [
   "/ws",            // WebSocket upgrade
   "/transcribe",    // raw audio → text (POST, multipart)
+  "/tts/",          // text → audio (per-reply, never cache)
   "/chat",          // legacy HTTP chat
   "/memory/",       // memory API
   "/permissions",   // mac_control status

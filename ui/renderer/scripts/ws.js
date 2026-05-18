@@ -93,7 +93,8 @@ async function buildUrl() {
   if (!cfg?.token) {
     throw new Error("auth token missing — set JARVIS_AUTH_TOKEN in .env");
   }
-  return `ws://${cfg.host}:${cfg.port}/ws?token=${encodeURIComponent(cfg.token)}`;
+  const scheme = cfg.ssl ? "wss" : "ws";
+  return `${scheme}://${cfg.host}:${cfg.port}/ws?token=${encodeURIComponent(cfg.token)}`;
 }
 
 export async function connect() {

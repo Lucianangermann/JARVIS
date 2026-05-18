@@ -169,15 +169,147 @@ ws.onEvent("user_message", ({ text }) => {
   if (text) addMessage("you", text);
 });
 
-ws.onEvent("jarvis_partial", ({ text }) => appendPartial(text));
+ws.onEvent("jarvis_partial", ({ text }) => {
+  appendPartial(text);
+  speakSentence(text);
+});
 
 ws.onEvent("jarvis_reply", ({ text }) => {
   if (liveJarvisBubble !== null) finalizeJarvis(text);
   else if (text) addMessage("jarvis", text);
+  // Speak the final reply only if the streaming partials never
+  // arrived (eg. /ws served a non-streaming path). Otherwise the
+  // partial-stream already enqueued everything.
+  if (!ttsSpokeAnythingThisTurn) speakSentence(text);
+  ttsSpokeAnythingThisTurn = false;
 });
+
+// ── iPhone-side Text-to-Speech (server-synthesised) ──────────
+// iOS Safari's Web Speech API is broken in standalone (Add-to-Home-
+// Screen) PWAs — `speechSynthesis.speak()` silently no-ops even
+// after a user-gesture primer. We tried that route and got nothing.
+// Workaround: fetch synthesized audio from the server (`GET /tts/
+// synthesize`) and play it through an HTMLAudioElement, which works
+// reliably on iOS.
+//
+// Queue model: each streamed sentence is enqueued; one player plays
+// them sequentially so partials don't overlap. A new turn (or STOP)
+// drops the queue + aborts the current playback.
+//
+// iOS still requires a user gesture to start the FIRST audio
+// playback of the session — we cover that with primeTts() on every
+// PTT/send touch, which loads + plays a near-silent AIFF inside the
+// gesture. After that, queued plays work fire-and-forget.
+const ttsAudio = new Audio();
+ttsAudio.preload = "auto";
+ttsAudio.playsInline = true;
+let ttsQueue = [];
+let ttsPlaying = false;
+let ttsCurrentUrl = null;
+let ttsSpokeAnythingThisTurn = false;
+
+async function ttsSynthUrl(text) {
+  const base = cfg.httpBase();
+  if (!base) return null;
+  const headers = cfg.authHeader();
+  // We use fetch → blob (instead of putting ?text=... directly on
+  // the Audio.src) so we can attach the Authorization header. Same
+  // pattern as /transcribe.
+  const url = `${base}/tts/synthesize?text=${encodeURIComponent(text)}`;
+  const r = await fetch(url, { method: "GET", headers, cache: "no-store" });
+  if (!r.ok) throw new Error(`tts http ${r.status}`);
+  const blob = await r.blob();
+  return URL.createObjectURL(blob);
+}
+
+function ttsRevoke(url) {
+  if (!url) return;
+  try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+}
+
+async function ttsPlayNext() {
+  if (ttsPlaying) return;
+  const next = ttsQueue.shift();
+  if (!next) return;
+  ttsPlaying = true;
+  try {
+    const url = await ttsSynthUrl(next);
+    if (!url) { ttsPlaying = false; return; }
+    ttsCurrentUrl = url;
+    ttsAudio.src = url;
+    await ttsAudio.play();
+  } catch (e) {
+    console.warn("[tts] play failed:", e);
+    ttsPlaying = false;
+    if (ttsCurrentUrl) { ttsRevoke(ttsCurrentUrl); ttsCurrentUrl = null; }
+    // Try the next chunk so a single failure doesn't stall the queue.
+    if (ttsQueue.length > 0) ttsPlayNext();
+  }
+}
+
+ttsAudio.addEventListener("ended", () => {
+  if (ttsCurrentUrl) { ttsRevoke(ttsCurrentUrl); ttsCurrentUrl = null; }
+  ttsPlaying = false;
+  if (ttsQueue.length > 0) ttsPlayNext();
+});
+ttsAudio.addEventListener("error", (ev) => {
+  console.warn("[tts] audio error:", ev);
+  if (ttsCurrentUrl) { ttsRevoke(ttsCurrentUrl); ttsCurrentUrl = null; }
+  ttsPlaying = false;
+  if (ttsQueue.length > 0) ttsPlayNext();
+});
+
+// 1-second silent WAV as a data: URL — bundled inline so playback
+// starts SYNCHRONOUSLY inside the touch handler. Any fetch() would
+// push the actual .play() call past the gesture window and iOS
+// would reject it.
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRkQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YSAAAAAA" +
+  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+let ttsUnlocked = false;
+
+/** Call from inside a touch / click handler. Plays a sync data:
+ *  URL silent clip to satisfy iOS' user-gesture requirement for
+ *  audio playback. After this, fetched-audio plays work. */
+function primeTts() {
+  if (ttsUnlocked) return;
+  try {
+    ttsAudio.src = SILENT_WAV;
+    ttsAudio.volume = 1.0;
+    // .play() returns a promise; we don't await — what matters is
+    // that the call HAPPENED synchronously inside the gesture.
+    const p = ttsAudio.play();
+    if (p && p.catch) p.catch((e) => console.warn("[tts] prime play:", e));
+    ttsUnlocked = true;
+  } catch (e) {
+    console.warn("[tts] prime failed:", e);
+  }
+}
+
+function speakSentence(text) {
+  if (!text) return;
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  ttsQueue.push(trimmed);
+  ttsSpokeAnythingThisTurn = true;
+  if (!ttsPlaying) ttsPlayNext();
+}
+
+function stopTts() {
+  ttsQueue = [];
+  try { ttsAudio.pause(); } catch { /* ignore */ }
+  if (ttsCurrentUrl) { ttsRevoke(ttsCurrentUrl); ttsCurrentUrl = null; }
+  ttsPlaying = false;
+  ttsSpokeAnythingThisTurn = false;
+}
 
 // ── One full text turn (used by PTT transcript + type panel) ─
 async function runTurn(text) {
+  // Cancel any lingering TTS from the previous turn so the iPhone
+  // doesn't keep narrating the old reply while we're sending a new
+  // one. The server-side brain is per-session, so the previous
+  // partials are about to be replaced regardless.
+  stopTts();
   abandonJarvis();
   addMessage("you", text);
   setState("processing");
@@ -201,6 +333,10 @@ ptt.onTranscript((transcript) => {
 let pttPointerId = null;
 pttBtn.addEventListener("pointerdown", (ev) => {
   if (ev.button !== undefined && ev.button !== 0) return;
+  // Unlock Web Speech right inside the touch — by the time the
+  // reply starts streaming back the gesture is long gone, and iOS
+  // would otherwise silently drop our speak() calls.
+  primeTts();
   if (ws.getState() !== ws.STATE.ONLINE) {
     // Try a reconnect on press so the user isn't stuck if the
     // socket dropped while the phone was idle.
@@ -300,6 +436,9 @@ function closeText() {
 document.getElementById("act-search").addEventListener("click", openText);
 textClose.addEventListener("click", closeText);
 textSend.addEventListener("click", async () => {
+  // Same primer rationale as the PTT button — must run inside the
+  // gesture so the eventual replies are allowed to speak.
+  primeTts();
   const v = textInput.value.trim();
   if (!v) return;
   closeText();
@@ -319,6 +458,10 @@ document.getElementById("act-music").addEventListener("click", () => {
 
 // ── Kill / interrupt button ─────────────────────────────────
 killBadge.addEventListener("click", async () => {
+  // Silence any in-flight iPhone TTS immediately — the server-side
+  // /interrupt below stops the brain, but Web Speech keeps reading
+  // its already-queued utterances unless we cancel them client-side.
+  stopTts();
   const base = cfg.httpBase();
   if (!base) return;
   // First click after JARVIS is healthy = interrupt the current
