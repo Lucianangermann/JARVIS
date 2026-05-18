@@ -73,14 +73,39 @@ body[data-conn="error"]        .status-dot { background: var(--jarvis-danger);
 .conn-route:empty { display: none; }
 
 /* ── core visualizer ─────────────────────────────────────── */
+/* Sized off the grid-row HEIGHT, not viewport width — otherwise on
+ * narrow-tall phones the width-driven aspect-ratio:1 box grows
+ * taller than the row and the rings overflow into the chat below.
+ *
+ * The min-width/min-height:0 pair is load-bearing: CSS Grid items
+ * default to `min-{width,height}:auto`, which resolves to the item's
+ * min-content size. Because <canvas width="320" height="320"> has an
+ * intrinsic 320×320 size, that propagates up and pushes the grid
+ * track ABOVE the 26vh cap. Pinning both mins to 0 lets the
+ * minmax() max actually win. */
 .core-wrap {
   position: relative;
-  width: min(78vw, 320px);
+  height: 100%;
+  max-height: 100%;
   aspect-ratio: 1;
-  margin: 0 auto;
+  max-width: min(78vw, 320px);
+  min-width: 0;
+  min-height: 0;
+  justify-self: center;
   display: grid;
   place-items: center;
+  /* Smooth the shrink when state changes (idle → processing). The
+   * row track itself is what's changing size; the aspect-ratio'd
+   * box follows automatically. */
+  transition: max-height 0.35s ease, max-width 0.35s ease;
   animation: orb-breathe 3s ease-in-out infinite;
+}
+#visualizer, .emblem {
+  /* Same min:0 escape so neither child re-inflates the track. */
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
 }
 #visualizer {
   position: absolute;
@@ -244,8 +269,9 @@ body[data-state="speaking"]   .emblem .wordmark   { animation-duration: 1s; }
   opacity: 0;
   transition: opacity 0.15s ease;
 }
-.hex-btn-large .ptt-label  { z-index: 2; }
-.hex-btn-large .ptt-timer  { z-index: 2; font-family: var(--font-mono);
+.hex-btn-large .ptt-label  { z-index: 2; text-align: center; line-height: 1.2; }
+.hex-btn-large .ptt-timer  { z-index: 2; text-align: center;
+                              font-family: var(--font-mono);
                               font-size: 9px; letter-spacing: 0.2em;
                               color: rgba(0, 212, 255, 0.6); margin-top: 4px; }
 

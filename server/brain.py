@@ -243,6 +243,20 @@ class Brain:
         if not user_text:
             return "I didn't catch that."
 
+        # Clear any leftover /interrupt flag from a previous turn.
+        # voice_loop's wake-word path already clears it before
+        # spawning its brain thread; the WS (PWA) path didn't, so a
+        # STOP press would leave brain_cancel set and every subsequent
+        # WS reply would short-circuit to an empty string on entry.
+        # Doing it once here covers both call sites.
+        try:
+            from . import voice_loop as _vl
+            ev = getattr(_vl, "_brain_cancel_ref", None)
+            if ev is not None and ev.is_set():
+                ev.clear()
+        except Exception:  # noqa: BLE001 — voice loop not running, ignore
+            pass
+
         with self._lock:
             # First message of a session triggers the memory warmup
             # (bumps session counter, semantic-searches the user's

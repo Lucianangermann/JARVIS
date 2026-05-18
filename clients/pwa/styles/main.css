@@ -46,7 +46,10 @@ html, body {
 body {
   display: grid;
   /* Five-row layout: status / visualizer / chat / PTT / actions.
-   * The chat row gets the only fractional space so it scrolls. */
+   * The chat row gets the only fractional space so it scrolls.
+   * Default (idle): orb is full-size, chat compact. State-based
+   * overrides below shrink the orb once a turn is in flight so
+   * the chat can breathe and the rings never overlap text. */
   grid-template-rows:
     auto                          /* status bar */
     minmax(160px, 26vh)           /* visualizer */
@@ -58,6 +61,23 @@ body {
            env(safe-area-inset-bottom) env(safe-area-inset-left);
   gap: 8px;
   position: relative;
+  transition: grid-template-rows 0.35s ease;
+}
+
+/* Active turn → shrink the visualiser row and hand the freed space
+ * to the chat. Triggered whenever the renderer flips body[data-state]
+ * away from "idle" (processing, speaking, active). Result: orb shrinks
+ * to ~half-size as soon as the user releases PTT, chat gets ~1.5x the
+ * vertical real-estate, no overflow can land on top of the bubbles. */
+body[data-state="processing"],
+body[data-state="speaking"],
+body[data-state="active"] {
+  grid-template-rows:
+    auto                          /* status bar */
+    minmax(90px,  14vh)           /* visualizer — shrunk */
+    minmax(220px, 1fr)            /* chat — expanded */
+    auto                          /* PTT */
+    auto;                         /* action bar */
 }
 
 /* Standalone vs in-browser: hide the page chrome when running
