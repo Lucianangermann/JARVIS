@@ -116,6 +116,33 @@ function addMessage(who, text) {
   return bodyEl;
 }
 
+// ── In-app debug log ─────────────────────────────────────────
+// iOS standalone PWAs can't be inspected without a newer macOS,
+// so we surface TTS / audio diagnostics directly in the chat pane.
+// Toggle the visible flag to suppress once debugging is done.
+const DEBUG_VISIBLE = true;
+function logDebug(msg) {
+  console.log("[debug]", msg);
+  if (!DEBUG_VISIBLE) return;
+  const stick = isPinnedToBottom();
+  const el = document.createElement("div");
+  el.className = "chat-msg debug";
+  el.style.cssText = "font-size:11px;opacity:0.7;padding:4px 8px;" +
+    "color:#7fd8ff;border:1px dashed rgba(127,216,255,0.3);" +
+    "background:rgba(0,40,60,0.25);border-radius:6px;";
+  const t = new Date();
+  const ts = `${String(t.getMinutes()).padStart(2,"0")}:${String(t.getSeconds()).padStart(2,"0")}`;
+  el.textContent = `· ${ts} ${msg}`;
+  chatPane.appendChild(el);
+  while (chatPane.children.length > CHAT_MAX) chatPane.firstChild.remove();
+  if (stick) chatPane.scrollTop = chatPane.scrollHeight;
+}
+// Surface global JS errors that would otherwise be invisible.
+window.addEventListener("error", (ev) =>
+  logDebug(`JS error: ${ev.message} @ ${ev.filename}:${ev.lineno}`));
+window.addEventListener("unhandledrejection", (ev) =>
+  logDebug(`promise rejected: ${ev.reason?.message || ev.reason}`));
+
 function appendPartial(text) {
   if (!text) return;
   const stick = isPinnedToBottom();
@@ -210,16 +237,27 @@ let ttsSpokeAnythingThisTurn = false;
 
 async function ttsSynthUrl(text) {
   const base = cfg.httpBase();
-  if (!base) return null;
+  if (!base) { logDebug("tts: no httpBase"); return null; }
   const headers = cfg.authHeader();
-  // We use fetch → blob (instead of putting ?text=... directly on
-  // the Audio.src) so we can attach the Authorization header. Same
-  // pattern as /transcribe.
   const url = `${base}/tts/synthesize?text=${encodeURIComponent(text)}`;
-  const r = await fetch(url, { method: "GET", headers, cache: "no-store" });
-  if (!r.ok) throw new Error(`tts http ${r.status}`);
-  const blob = await r.blob();
-  return URL.createObjectURL(blob);
+  logDebug(`tts: GET /tts/synthesize "${text.slice(0,30)}"`);
+  // Single retry on 429 — the server's per-token bucket is shared
+  // with the /permissions poll, so a transient overrun is plausible
+  // even at a generous limit. 1.2 s gives the 60 s sliding window
+  // enough slack to drop one entry.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await fetch(url, { method: "GET", headers, cache: "no-store" });
+    logDebug(`tts: HTTP ${r.status}${attempt ? " (retry)" : ""}`);
+    if (r.status === 429 && attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      continue;
+    }
+    if (!r.ok) throw new Error(`tts http ${r.status}`);
+    const blob = await r.blob();
+    logDebug(`tts: blob ${blob.size}B type=${blob.type || "?"}`);
+    return URL.createObjectURL(blob);
+  }
+  throw new Error("tts: retries exhausted");
 }
 
 function ttsRevoke(url) {
@@ -228,32 +266,50 @@ function ttsRevoke(url) {
 }
 
 async function ttsPlayNext() {
-  if (ttsPlaying) return;
+  if (ttsPlaying) { logDebug(`tts: playNext skip — already playing, q=${ttsQueue.length}`); return; }
   const next = ttsQueue.shift();
-  if (!next) return;
+  if (!next) { logDebug("tts: playNext queue empty"); return; }
   ttsPlaying = true;
+  logDebug(`tts: playNext starting, q=${ttsQueue.length} remaining`);
   try {
     const url = await ttsSynthUrl(next);
     if (!url) { ttsPlaying = false; return; }
     ttsCurrentUrl = url;
+    // iOS quirk: reusing the same <audio> element across multiple
+    // src changes can leave the old media graph hanging and the
+    // next .play() silently no-ops. Explicit pause() + load() forces
+    // the element to re-read the new src cleanly. This is the fix
+    // for "only the first sentence plays".
+    try { ttsAudio.pause(); } catch { /* ignore */ }
     ttsAudio.src = url;
+    ttsAudio.load();
+    ttsAudio.volume = 1.0;
+    logDebug(`tts: play() unlocked=${ttsUnlocked}`);
     await ttsAudio.play();
+    logDebug("tts: play() resolved (playback started)");
   } catch (e) {
-    console.warn("[tts] play failed:", e);
+    const name = e?.name || "?";
+    const msg  = e?.message || String(e);
+    logDebug(`tts: play FAILED ${name}: ${msg}`);
     ttsPlaying = false;
     if (ttsCurrentUrl) { ttsRevoke(ttsCurrentUrl); ttsCurrentUrl = null; }
-    // Try the next chunk so a single failure doesn't stall the queue.
     if (ttsQueue.length > 0) ttsPlayNext();
   }
 }
 
+ttsAudio.addEventListener("play",    () => logDebug("tts evt: 'play'"));
+ttsAudio.addEventListener("playing", () => logDebug("tts evt: 'playing'"));
+ttsAudio.addEventListener("pause",   () => logDebug("tts evt: 'pause'"));
+ttsAudio.addEventListener("stalled", () => logDebug("tts evt: 'stalled'"));
 ttsAudio.addEventListener("ended", () => {
+  logDebug(`tts evt: 'ended', q=${ttsQueue.length}`);
   if (ttsCurrentUrl) { ttsRevoke(ttsCurrentUrl); ttsCurrentUrl = null; }
   ttsPlaying = false;
   if (ttsQueue.length > 0) ttsPlayNext();
 });
-ttsAudio.addEventListener("error", (ev) => {
-  console.warn("[tts] audio error:", ev);
+ttsAudio.addEventListener("error", () => {
+  const err = ttsAudio.error;
+  logDebug(`tts evt: 'error' code=${err?.code || "?"} msg=${err?.message || ""}`);
   if (ttsCurrentUrl) { ttsRevoke(ttsCurrentUrl); ttsCurrentUrl = null; }
   ttsPlaying = false;
   if (ttsQueue.length > 0) ttsPlayNext();
@@ -272,17 +328,20 @@ let ttsUnlocked = false;
  *  URL silent clip to satisfy iOS' user-gesture requirement for
  *  audio playback. After this, fetched-audio plays work. */
 function primeTts() {
-  if (ttsUnlocked) return;
+  if (ttsUnlocked) { logDebug("tts: prime skip (already unlocked)"); return; }
   try {
     ttsAudio.src = SILENT_WAV;
     ttsAudio.volume = 1.0;
     // .play() returns a promise; we don't await — what matters is
     // that the call HAPPENED synchronously inside the gesture.
     const p = ttsAudio.play();
-    if (p && p.catch) p.catch((e) => console.warn("[tts] prime play:", e));
+    logDebug("tts: prime play() called sync in gesture");
+    if (p && p.catch) p.catch((e) =>
+      logDebug(`tts: prime REJECTED ${e?.name || ""}: ${e?.message || e}`));
+    if (p && p.then)  p.then(() => logDebug("tts: prime play resolved"));
     ttsUnlocked = true;
   } catch (e) {
-    console.warn("[tts] prime failed:", e);
+    logDebug(`tts: prime threw ${e?.name || ""}: ${e?.message || e}`);
   }
 }
 
@@ -292,6 +351,7 @@ function speakSentence(text) {
   if (!trimmed) return;
   ttsQueue.push(trimmed);
   ttsSpokeAnythingThisTurn = true;
+  logDebug(`tts: speakSentence enqueued "${trimmed.slice(0,28)}" q=${ttsQueue.length} playing=${ttsPlaying}`);
   if (!ttsPlaying) ttsPlayNext();
 }
 

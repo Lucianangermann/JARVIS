@@ -124,7 +124,15 @@ class Settings:
 
     # --- Safety limits ---
     MAX_INPUT_LENGTH: int = 500
-    RATE_LIMIT_PER_MINUTE: int = 10
+    # Cap requests per token per 60 s window. The bucket is shared
+    # across every authenticated route, so per-reply traffic
+    # (jarvis_partial sentences hitting /tts/synthesize one by one)
+    # plus the periodic /permissions poll plus /transcribe + /ws
+    # all draw from the same pool. 10 was the original demo cap and
+    # is far too low for the streaming PWA path. 120/min keeps any
+    # plausible interactive use comfortable while still rate-limiting
+    # a runaway client. Override via RATE_LIMIT_PER_MINUTE in .env.
+    RATE_LIMIT_PER_MINUTE: int = int(os.getenv("RATE_LIMIT_PER_MINUTE", "120"))
     MAX_HISTORY_TURNS: int = 20  # user+assistant pairs kept per session
 
     # --- mac_control ---
