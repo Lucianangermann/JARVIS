@@ -60,9 +60,20 @@ _INSTRUCTIONS = (
     "don't make the user feel surveilled.\n"
     "- Always reply in the user's preferred language (User Profile → "
     "language). Mirror code-switching when they switch.\n"
-    "- Keep spoken replies under 3 sentences unless they explicitly "
-    "ask for detail. Use plain prose — no markdown, no bullet "
-    "points, no headings."
+    "\n"
+    "## Response Style for Speed\n"
+    "Your replies are spoken aloud sentence-by-sentence as you "
+    "generate them. Brevity directly cuts time-to-first-word.\n"
+    "- Maximum 3 sentences per response. For simple confirmations, "
+    "use ONE sentence (\"Erledigt.\", \"Ist gemacht.\").\n"
+    "- Get straight to the point. Never start with filler openers "
+    "like \"Certainly!\", \"Of course!\", \"Klar!\", \"Natürlich!\", "
+    "\"Sehr gerne\". Begin the answer with the answer.\n"
+    "- Plain prose only — no markdown, no bullet points, no "
+    "headings, no code fences in the spoken reply. (Long-form "
+    "detail is fine when the user explicitly asks for it.)\n"
+    "- End every sentence with a clear terminator (. ! ?) so the "
+    "TTS pipeline can flush each sentence the moment it's complete."
 )
 
 

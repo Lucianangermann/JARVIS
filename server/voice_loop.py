@@ -370,19 +370,40 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     _brain_cancel_ref = brain_cancel
 
     def _brain_work(cmd: str, cancel_evt: threading.Event) -> None:
+        """Run one user command through Claude.
+
+        Streaming pipeline: brain.reply() now opens a streaming
+        Anthropic call and pushes each completed sentence into
+        ``tts.speak()`` AND a ``jarvis_partial`` event in real time —
+        the first sentence reaches the speakers ~300-500 ms after
+        token-1, instead of after the whole turn lands. By the time
+        brain.reply() returns we've ALREADY spoken (or are still
+        speaking) the answer. Calling tts.speak(reply) again here
+        would re-speak the entire response, so we deliberately don't.
+
+        We still emit a single ``jarvis_reply`` event at the end so
+        the HUD can finalise its in-progress bubble with the full
+        assembled text (useful for chat-only clients that aren't
+        watching ``jarvis_partial`` yet, and for the chat history).
+        """
         t_brain = time.monotonic()
         try:
             reply = brain.reply(session, cmd)
         except Exception as exc:  # noqa: BLE001 — surface to user
             reply = f"Entschuldige, etwas ist schiefgelaufen: {exc}"
+            # The streaming path never produced any audio for this
+            # turn, so we DO need to speak the error message here.
+            tts.speak(reply)
         print(f"[TIMING] brain.reply: {(time.monotonic() - t_brain)*1000:.0f}ms")
         if cancel_evt.is_set():
             print(f"[JARVIS] (cancelled; discarding reply: {reply[:60]!r}…)")
             return
         print(f"[JARVIS] {reply}")
         _emit_jarvis_reply(reply)
-        _emit_state("speaking")
-        tts.speak(reply)
+        # No tts.speak(reply) here on purpose — the brain streamed it
+        # sentence-by-sentence during the model call. The "speaking"
+        # voice_state event is fired by the main loop's per-tick
+        # heartbeat as soon as tts_busy_now flips True.
 
     # Track the previous tick's busy state so we can react to the idle→busy
     # transition (the moment TTS starts) for buffer hygiene.

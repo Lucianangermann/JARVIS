@@ -328,7 +328,14 @@ async def ws(websocket: WebSocket) -> None:
 
             print(f"[CLIENT: {tag}] [YOU] {user_text}")
             try:
-                reply = brain.reply(token, user_text)
+                # brain.reply is synchronous and streams sentences
+                # via events.publish() (loop.call_soon_threadsafe).
+                # If we ran it directly on the asyncio thread the
+                # entire stream would queue up and only deliver at
+                # the end — defeating streaming. Punt to a worker
+                # thread so the loop stays free to dispatch fanout +
+                # the Cocoa runloop pump while Claude is generating.
+                reply = await asyncio.to_thread(brain.reply, token, user_text)
             except HTTPException as exc:
                 await send_json({"error": exc.detail})
                 continue

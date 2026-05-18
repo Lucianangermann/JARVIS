@@ -256,6 +256,12 @@ class Brain:
                 history.pop()
                 return f"Sorry — something went wrong contacting Claude: {exc}"
 
+            # If a /interrupt fired during streaming the reply we
+            # have here is a fragment — don't pollute conversation
+            # history or memory with it. _brain_work / the WS caller
+            # already discards the return path via brain_cancel.
+            if self._cancel_check():
+                return final_text
             history.append({"role": "assistant", "content": final_text})
             self._trim(history)
             # Fact-extraction + learning hooks. Done outside the model
@@ -294,8 +300,24 @@ class Brain:
 
         ``user_text`` is the current user turn — drives the memory
         layer's semantic search for the per-turn "Relevant Past
-        Context" block in the system prompt."""
+        Context" block in the system prompt.
+
+        Streaming: each per-iteration call uses ``messages.stream()``
+        so text deltas reach the TTS queue + HUD as they arrive,
+        instead of after the whole turn lands. The existing
+        ``stop_reason`` switch downstream is fed the final message
+        from ``stream.get_final_message()`` so the tool_use branch is
+        unchanged. tts.speak() is queue-based and feeds into the
+        Speex AEC via voice_loop's full-duplex callback — we
+        deliberately do NOT shell out to /usr/bin/say because that
+        would bypass AEC and the mic would re-ingest JARVIS' own
+        voice (the same failure mode that killed barge-in).
+        """
         for _ in range(8):  # generous bound; tools are cheap
+            # Cancel-aware: if a /interrupt fired between turns we
+            # don't want to start a new Claude call. Cheap check.
+            if self._cancel_check():
+                return ""
             # Build a fresh system message each iteration. The cached
             # prefix (base + profile + known issues + instructions)
             # stays byte-stable so Anthropic's prompt cache hits;
@@ -303,13 +325,7 @@ class Brain:
             # + current date/time) is regenerated per call.
             system_blocks = self.memory.build_system_blocks(user_text)
 
-            resp: Message = self.client.messages.create(
-                model=settings.MODEL,
-                max_tokens=1024,
-                system=system_blocks,
-                tools=self._tools,
-                messages=history,
-            )
+            resp = self._stream_one_turn(history, system_blocks)
 
             # Stop conditions: normal end_turn, or pause_turn (server-side
             # tool wants another round-trip — just resend with the assistant
@@ -360,6 +376,124 @@ class Brain:
             return _join_text(resp) or "I can't help with that."
 
         return "I'm spinning on tool calls — try rephrasing."
+
+    def _cancel_check(self) -> bool:
+        """True iff a /interrupt is currently armed. Reads through to
+        voice_loop's module-level cancel Event so the brain stays
+        loosely coupled (no direct import dependency in __init__)."""
+        try:
+            from . import voice_loop as _vl
+        except Exception:  # noqa: BLE001
+            return False
+        ev = getattr(_vl, "_brain_cancel_ref", None)
+        return ev is not None and ev.is_set()
+
+    # Sentence-end punctuation. The detector looks at the rstripped
+    # buffer's trailing char — "..." is treated as a single boundary
+    # because the regex below normalises consecutive dots.
+    _SENTENCE_ENDERS = frozenset(".!?:")
+    # Minimum sentence length below which we don't ship to TTS yet —
+    # avoids speaking fragments like "Ja." or stray numbered list
+    # entries ("1.") before the next clause arrives.
+    _MIN_SPEAKABLE_LEN = 4
+
+    def _stream_one_turn(self, history: list[dict[str, Any]],
+                         system_blocks: list[dict[str, Any]]) -> "Message":
+        """Issue one ``messages.stream()`` call, push completed
+        sentences to TTS + HUD as text deltas arrive, then return the
+        final Message so the existing tool_use / end_turn switch can
+        run unmodified.
+
+        Cancellation: every sentence flush checks the cross-thread
+        brain_cancel event (set by /interrupt + Cmd+Shift+J). On
+        cancel we close the stream early and let the caller see a
+        partial response — the caller's existing cancel check will
+        discard it."""
+        from . import events
+        try:
+            from . import voice_loop as _vl
+        except Exception:  # noqa: BLE001
+            _vl = None
+
+        # State for sentence detection. ``flushed_len`` is the offset
+        # into ``accumulated`` past which we haven't yet emitted —
+        # everything before that is already in flight to TTS.
+        accumulated = ""
+        flushed_len = 0
+
+        # Inline alias so the inner loop doesn't pay the import cost
+        # on every delta.
+        cancel_requested = self._cancel_check
+
+        def flush_sentence(text: str) -> None:
+            text = text.strip()
+            if len(text) < self._MIN_SPEAKABLE_LEN:
+                return
+            # 1) HUD: incremental display via a typed event.
+            try:
+                events.publish({"type": "jarvis_partial", "text": text})
+            except Exception:  # noqa: BLE001
+                pass
+            # 2) TTS: only if voice_loop is actually running. The
+            # existing tts.speak() queues into the worker that feeds
+            # the AEC-aware audio callback — no echo regression.
+            tts_ref = getattr(_vl, "_tts_ref", None) if _vl is not None else None
+            if tts_ref is not None:
+                try:
+                    tts_ref.speak(text)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        with self.client.messages.stream(
+            model=settings.MODEL,
+            max_tokens=1024,
+            system=system_blocks,
+            tools=self._tools,
+            messages=history,
+        ) as stream:
+            for delta in stream.text_stream:
+                if cancel_requested():
+                    # Stop pulling deltas. The Anthropic SDK aborts
+                    # the underlying connection on context exit.
+                    break
+                if not delta:
+                    continue
+                accumulated += delta
+                # Look for the next sentence boundary past flushed_len.
+                # We scan from the back of the buffer for the latest
+                # terminator so we batch as much as possible without
+                # holding onto the entire stream.
+                tail = accumulated[flushed_len:]
+                # Find the LAST sentence-end in the new tail so we
+                # flush all complete sentences in one go.
+                last_idx = -1
+                for i, ch in enumerate(tail):
+                    if ch in self._SENTENCE_ENDERS:
+                        # Avoid flushing on a decimal point: "3.14",
+                        # "v1.0". Crude guard: require the previous
+                        # char to be non-digit OR followed by space /
+                        # end-of-buffer.
+                        prev = tail[i - 1] if i > 0 else " "
+                        nxt = tail[i + 1] if i + 1 < len(tail) else " "
+                        if prev.isdigit() and nxt.isdigit():
+                            continue
+                        last_idx = i
+                if last_idx >= 0:
+                    chunk = tail[: last_idx + 1]
+                    flushed_len += len(chunk)
+                    flush_sentence(chunk)
+
+        # Tail flush: any remaining buffer past the last sentence
+        # boundary (the model often ends a turn without a period when
+        # it stopped on max_tokens or a stop_sequence).
+        if not cancel_requested():
+            remainder = accumulated[flushed_len:].strip()
+            if remainder:
+                flush_sentence(remainder)
+
+        # Hand back the final Message so the caller's stop_reason /
+        # tool_use logic stays exactly as before.
+        return stream.get_final_message()
 
     def _record_tool_result(self, block: Any, result: str, is_error: bool) -> None:
         """Forward a tool execution outcome to the memory layer.

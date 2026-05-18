@@ -68,6 +68,66 @@ function isPinnedToBottom() {
          <= STICKY_BOTTOM_PX;
 }
 
+/** The chat bubble currently being filled by streaming jarvis_partial
+ *  events. Reset to null when a turn finishes (jarvis_reply received,
+ *  user starts a new message, or voice loop returns to listening). */
+let liveJarvisBubble = null;
+
+/** Streaming append: each partial extends the same JARVIS bubble.
+ *  The first partial of a turn creates the bubble; subsequent
+ *  partials extend its body text. No typewriter — partials arrive
+ *  at natural typing pace from Claude's stream already. */
+function appendJarvisPartial(text) {
+  if (!text) return;
+  const stick = isPinnedToBottom();
+  if (liveJarvisBubble === null) {
+    const msg = document.createElement("div");
+    msg.className = "chat-msg jarvis";
+    const whoEl = document.createElement("span");
+    whoEl.className = "who";
+    whoEl.textContent = "J.A.R.V.I.S. ›";
+    const body = document.createElement("span");
+    body.className = "body cursor";
+    msg.append(whoEl, body);
+    chatPane.appendChild(msg);
+    while (chatPane.children.length > CHAT_HISTORY_LIMIT) {
+      chatPane.firstChild.remove();
+    }
+    liveJarvisBubble = body;
+  }
+  const prev = liveJarvisBubble.textContent;
+  // Separator: only insert a space if the new chunk starts a fresh
+  // sentence (i.e. the previous chunk already ended with terminal
+  // punctuation). The server flushes per sentence so this almost
+  // always wants one space.
+  const sep = (prev && !prev.endsWith(" ")) ? " " : "";
+  liveJarvisBubble.textContent = prev + sep + text;
+  if (stick) chatPane.scrollTop = chatPane.scrollHeight;
+}
+
+/** Mark the live bubble complete. If ``fullText`` is provided we
+ *  replace the bubble's contents — guards against the rare case
+ *  where partials dropped a chunk on the wire. */
+function finalizeJarvisBubble(fullText) {
+  if (liveJarvisBubble !== null) {
+    if (fullText && fullText.trim()) {
+      liveJarvisBubble.textContent = fullText;
+    }
+    liveJarvisBubble.classList.remove("cursor");
+  }
+  liveJarvisBubble = null;
+}
+
+/** Called on interrupt / listening transitions — closes any
+ *  in-progress bubble without overwriting its partial content,
+ *  so the user can see what was spoken before the cancel. */
+function abandonJarvisBubble() {
+  if (liveJarvisBubble !== null) {
+    liveJarvisBubble.classList.remove("cursor");
+  }
+  liveJarvisBubble = null;
+}
+
 /** Append a message to the chat pane with a typewriter effect.
  *  who: "you" | "jarvis"
  *  Returns a promise that resolves when typing finishes.
@@ -183,24 +243,42 @@ ws.onEvent("voice_state", ({ state }) => {
       setState("speaking");
       break;
     case "listening":
-      // Server is back to passive wake-word listening. If the user
-      // already collapsed to the orb, don't pull it back open — just
-      // park us in "active" otherwise so the HUD stays usable for
-      // typed follow-ups.
+      // Server is back to passive wake-word listening. If a live
+      // streaming bubble is still showing the cursor (interrupted
+      // mid-stream), close it off. Otherwise the normal finalize
+      // path via jarvis_reply already cleared it.
+      abandonJarvisBubble();
+      // If the user already collapsed to the orb, don't pull it
+      // back open — just park us in "active" otherwise so the HUD
+      // stays usable for typed follow-ups.
       if (currentState !== "idle") setState("active");
       break;
   }
 });
 
 ws.onEvent("user_message", ({ text }) => {
+  // Voice path: transcribed user turn arrives. Reset any lingering
+  // jarvis-side live bubble so the next partial creates a fresh one.
+  abandonJarvisBubble();
   if (text) addMessage("you", text);
 });
 
+ws.onEvent("jarvis_partial", ({ text }) => {
+  // Streaming text from the brain: each partial extends the same
+  // bubble. Fires for both voice-path and text-path turns — the
+  // brain publishes partials regardless of which client triggered.
+  appendJarvisPartial(text);
+});
+
 ws.onEvent("jarvis_reply", ({ text }) => {
-  // Mirrors the text path's chat line. TTS plays the audio in parallel
-  // on the server side; the typewriter visual matches the spoken pace
-  // closely enough that they don't feel out of sync.
-  if (text) addMessage("jarvis", text);
+  // Voice-path: marks the streamed reply complete. If partials had
+  // been arriving the live bubble is finalised in place; otherwise
+  // (early failure, no partials) we still want SOMETHING shown.
+  if (liveJarvisBubble !== null) {
+    finalizeJarvisBubble(text);
+  } else if (text) {
+    addMessage("jarvis", text);
+  }
 });
 
 ws.connect();
@@ -301,10 +379,15 @@ cmdInput.addEventListener("keydown", async (ev) => {
 });
 
 /** One full chat turn: echo the user line, drop into PROCESSING,
- *  await the server, then SPEAKING (with the typewriter) → ACTIVE.
- *  Errors get rendered as a chat line tagged [ERROR] so the user
- *  always sees what happened, instead of a silent stuck state. */
+ *  await the server, then SPEAKING → ACTIVE. The brain streams its
+ *  reply over ``jarvis_partial`` events while we wait on ws.send(),
+ *  so the bubble fills in real time. When the response arrives in
+ *  full, finalize the streamed bubble — or fall back to a typewriter
+ *  bubble if no partials made it through. */
 async function runTurn(text) {
+  // Reset any half-finished previous-turn bubble so partials for
+  // the new turn don't accidentally append to it.
+  abandonJarvisBubble();
   addMessage("you", text);
   setState("processing");
   let reply;
@@ -314,7 +397,17 @@ async function runTurn(text) {
     reply = `[ERROR] ${err?.message || err}`;
   }
   setState("speaking");
-  await addMessage("jarvis", reply);
+  if (liveJarvisBubble !== null) {
+    // Streamed bubble exists — replace its contents with the
+    // authoritative full text and drop the cursor. No typewriter
+    // needed: the user already read the streamed sentences.
+    finalizeJarvisBubble(reply);
+  } else {
+    // No partials arrived (eg. error before any text token, or
+    // server-side events bus failed). Show the answer via the
+    // classic typewriter so the user isn't staring at silence.
+    await addMessage("jarvis", reply);
+  }
   setState("active");
 }
 
