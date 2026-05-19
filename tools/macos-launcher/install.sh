@@ -22,11 +22,25 @@ cp "$HERE/Info.plist"        "$APP_DIR/Contents/Info.plist"
 cp "$HERE/JARVIS-Launcher"   "$APP_DIR/Contents/MacOS/JARVIS-Launcher"
 chmod +x "$APP_DIR/Contents/MacOS/JARVIS-Launcher"
 
+# Ad-hoc code-sign the bundle. macOS's TCC ignores unsigned shell-
+# script .apps when resolving the "responsible process" for a
+# spawned subprocess — without a signature, TCC walks past the
+# bundle and pins responsibility back on Hammerspoon, which has no
+# Microphone permission and triggers the SIGABRT crash. Ad-hoc
+# signing (no developer ID needed) is enough to make TCC treat the
+# bundle as a real app and attach Mic + Speech permissions to it.
+codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || {
+    echo "  ⚠ codesign failed — TCC may not honour the bundle." >&2
+    echo "    Voice features may crash with SIGABRT when launched" >&2
+    echo "    via Hammerspoon. Try installing Command Line Tools:" >&2
+    echo "      xcode-select --install" >&2
+}
+
 # Re-register with LaunchServices so `open` picks up the new bundle
 # (or the updated executable / Info.plist on subsequent installs).
 LS_REGISTER=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
 "$LS_REGISTER" -f "$APP_DIR" >/dev/null 2>&1 || true
-echo "  ✓ bundle in /Applications"
+echo "  ✓ bundle in /Applications (ad-hoc signed)"
 
 # Hammerspoon config — drop ours in unless the user already has one;
 # in that case we tell them what to add so we don't clobber it.
