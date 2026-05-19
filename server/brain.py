@@ -292,6 +292,17 @@ class Brain:
         if not user_text:
             return "I didn't catch that."
 
+        # Slice 3: feed every turn into the ContextEngine so it can
+        # track command frequency, recency, and intent keywords —
+        # used to populate activity / stress / style hints in the
+        # next prompt build. Done BEFORE the briefing short-circuit
+        # so even briefing requests count toward "user is interacting".
+        if self.intelligence is not None:
+            try:
+                self.intelligence.record_command(user_text)
+            except Exception:  # noqa: BLE001 — never crash on telemetry
+                pass
+
         # Briefing short-circuit: if the user typed/said one of the
         # known trigger phrases, hand the matching routine's output
         # back directly instead of routing through Claude. Saves a

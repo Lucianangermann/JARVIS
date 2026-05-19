@@ -26,6 +26,7 @@ from typing import Callable
 from zoneinfo import ZoneInfo
 
 from . import routines
+from .context import ContextEngine
 from .scheduler import Scheduler
 
 _LOCAL_TZ = ZoneInfo(os.getenv("JARVIS_TZ", "Europe/Berlin"))
@@ -59,6 +60,7 @@ def _hhmm(env_name: str, default: str) -> str:
 class IntelligenceManager:
     def __init__(self) -> None:
         self.scheduler = Scheduler()
+        self.context = ContextEngine()
         self._enabled = _flag("INTELLIGENCE_ENABLED", "1")
         # One master switch for all scheduled briefings. Manual triggers
         # via the brain (typed/spoken phrases) work regardless — this
@@ -144,17 +146,31 @@ class IntelligenceManager:
         except Exception as exc:  # noqa: BLE001
             print(f"[INTEL] briefing handler crashed: {exc}")
 
+    # --- per-turn ingress for the context engine ----------------------- #
+
+    def record_command(self, text: str) -> None:
+        """Brain calls this on every user turn so the ContextEngine
+        can track command frequency, recency, and intent keywords.
+        No-op when intelligence is disabled."""
+        if not self._enabled:
+            return
+        try:
+            self.context.record_command(text)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[INTEL] record_command failed: {exc}")
+
     # --- context for brain --------------------------------------------- #
 
     def get_context_for_brain(self) -> str:
         """Short context string suitable for injection into Claude's
-        system prompt. Slices 1-2 emit local time + next-event; later
-        slices append activity, stress level, recent notifications.
-        Always best-effort: returns "" when nothing useful was found,
-        never raises."""
+        system prompt. Slice 1 emitted local time + next event;
+        slice 3 layers ContextEngine's prose summary on top (time
+        bucket, activity, stress, location, response-style hint).
+        Always best-effort: returns "" on total failure."""
         if not self._enabled:
             return ""
         parts: list[str] = []
+        # 1) Local time + next calendar event (slice 1)
         try:
             now = datetime.now(_LOCAL_TZ)
             wd = ["Montag", "Dienstag", "Mittwoch", "Donnerstag",
@@ -162,6 +178,7 @@ class IntelligenceManager:
             parts.append(f"Lokale Zeit: {wd} {now.strftime('%H:%M')}.")
         except Exception:  # noqa: BLE001
             pass
+        calendar_busy = False
         try:
             from ..tools import calendar_tool
             nxt = calendar_tool.get_next_event()
@@ -169,6 +186,20 @@ class IntelligenceManager:
                 hhmm = nxt.start.astimezone(_LOCAL_TZ).strftime("%H:%M")
                 title = nxt.title or "ohne Titel"
                 parts.append(f"Nächster Termin: {hhmm} {title}.")
+            # Is a calendar event happening right now? Used by the
+            # context engine to detect the in_meeting activity.
+            for ev in calendar_tool.get_today_events():
+                if ev.start <= datetime.now(_LOCAL_TZ) < ev.end \
+                   and not ev.is_all_day:
+                    calendar_busy = True
+                    break
         except Exception:  # noqa: BLE001
             pass
+
+        # 2) ContextEngine block (slice 3) — activity, stress, style
+        try:
+            parts.append(self.context.prompt_block(calendar_busy=calendar_busy))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[INTEL] context prompt_block failed: {exc}")
+
         return " ".join(parts)
