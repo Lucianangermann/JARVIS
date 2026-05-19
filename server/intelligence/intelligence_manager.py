@@ -22,12 +22,23 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Callable
 from zoneinfo import ZoneInfo
 
 from . import routines
 from .context import ContextEngine
+from .proactive import ProactiveEngine
 from .scheduler import Scheduler
+
+# Shared DB file with the memory layer. Hard-coded relative to the
+# repo root so dev runs and the .app bundle launch agree on the path.
+_DEFAULT_DB = Path(__file__).resolve().parents[2] / "data" / "jarvis.db"
+_DB_PATH = Path(os.getenv("JARVIS_DB_PATH") or _DEFAULT_DB)
+
+# Proactive engine ticks. 60 s matches the scheduler's minute
+# resolution; anything finer just wastes a check we'd skip on cooldown.
+_PROACTIVE_TICK_SECONDS = 60
 
 _LOCAL_TZ = ZoneInfo(os.getenv("JARVIS_TZ", "Europe/Berlin"))
 
@@ -61,6 +72,14 @@ class IntelligenceManager:
     def __init__(self) -> None:
         self.scheduler = Scheduler()
         self.context = ContextEngine()
+        # Proactive engine is created upfront so brain.py / API can
+        # reach it for debug, but only started if INTELLIGENCE_ENABLED
+        # and JARVIS_PROACTIVE_ENABLED are both on.
+        self.proactive = ProactiveEngine(
+            db_path=_DB_PATH,
+            context=self.context,
+        )
+        self._proactive_enabled = _flag("JARVIS_PROACTIVE_ENABLED", "1")
         self._enabled = _flag("INTELLIGENCE_ENABLED", "1")
         # One master switch for all scheduled briefings. Manual triggers
         # via the brain (typed/spoken phrases) work regardless — this
@@ -99,6 +118,18 @@ class IntelligenceManager:
                 )
             print("[INTEL] briefings scheduled Mon–Fri: " +
                   ", ".join(f"{n}@{t}" for n, t in self._schedule.items()))
+        if self._proactive_enabled:
+            # One tick per minute is plenty — every check is either
+            # cheap (battery, context) or already TTL-cached
+            # (calendar). The scheduler isolates check exceptions per
+            # spec, so a misbehaving tool can't take the loop down.
+            self.scheduler.every(
+                _PROACTIVE_TICK_SECONDS,
+                self.proactive.tick,
+                name="proactive-tick",
+            )
+            print(f"[INTEL] proactive engine enabled "
+                  f"(tick every {_PROACTIVE_TICK_SECONDS}s)")
         self.scheduler.start()
         print("[INTEL] scheduler active")
 
@@ -113,6 +144,18 @@ class IntelligenceManager:
         push so every connected client hears scheduled briefings
         without us re-implementing those channels here."""
         self._briefing_handler = fn
+
+    def set_notification_handler(
+        self, fn: Callable[[str, str], None],
+    ) -> None:
+        """Register the delivery sink for proactive notifications.
+
+        Signature is ``(text, priority)`` — priority is one of
+        ``"high" | "medium" | "low"``. The server wires this to the
+        same TTS + WS path as scheduled briefings, with a small priority
+        adjustment so low-priority items can stay silent on the speakers
+        if the user is in a meeting."""
+        self.proactive.set_handler(fn)
 
     def run_routine(self, name: str) -> str | None:
         """Assemble a routine on demand by name. Returns the text

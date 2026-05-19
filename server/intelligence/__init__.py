@@ -7,3 +7,4 @@ MUST NOT crash the rest of the server — every entry point catches
 and the manager itself is optional (brain.py works without it).
 """
 from .intelligence_manager import IntelligenceManager  # noqa: F401
+from .proactive import ProactiveEngine  # noqa: F401

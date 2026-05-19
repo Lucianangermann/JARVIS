@@ -115,6 +115,33 @@ async def lifespan(app: FastAPI):
                     print(f"[INTEL] briefing tts failed: {exc}")
 
         intelligence.set_briefing_handler(_briefing_to_users)
+
+        def _notification_to_users(text: str, priority: str) -> None:
+            """Proactive-engine sink. Always pushes to PWA/HUD; speaks
+            on the Mac speakers unless this is a low-priority item
+            while the user is on a meeting/focus path. We don't have a
+            "natural pause" detector yet, so the priority axis is the
+            only knob — refined in slice 5."""
+            tag = priority.upper()
+            print(f"[PROACTIVE/{tag}] {text}")
+            try:
+                events.publish({
+                    "type": "jarvis_notification",
+                    "priority": priority,
+                    "text": text,
+                })
+            except Exception as exc:  # noqa: BLE001
+                print(f"[PROACTIVE] publish failed: {exc}")
+            # The ProactiveEngine already gates by activity state
+            # (sleeping / in_meeting suppress non-high), so by the
+            # time we get here it's safe to speak.
+            if _VOICE_OK and tts is not None:
+                try:
+                    tts.speak(text)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[PROACTIVE] tts failed: {exc}")
+
+        intelligence.set_notification_handler(_notification_to_users)
         intelligence.start()
         app.state.intelligence = intelligence
         app.state.brain.intelligence = intelligence
