@@ -6,6 +6,11 @@
 # (which would also spawn a second uvicorn and fail to bind to :8000).
 set -u
 
+# Shortcuts.app launches us with a bare PATH that doesn't include
+# /usr/local/bin, where Homebrew's node/npm live. Without this the
+# `npm start` below fails with `nohup: npm: No such file or directory`.
+export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 LOG="$PROJECT_ROOT/logs/launch.log"
 mkdir -p "$PROJECT_ROOT/logs"
