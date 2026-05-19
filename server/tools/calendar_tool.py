@@ -18,11 +18,32 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 _LOCAL_TZ = ZoneInfo(os.getenv("JARVIS_TZ", "Europe/Berlin"))
+
+# ── Cache + timeout settings ────────────────────────────────────────
+# AppleScript Calendar.app queries are slow at the best of times
+# (200-800 ms for a small DB) and catastrophic when something pins
+# Calendar.app or its sync agents — we've seen consistent 15 s
+# timeouts. Every chat turn calls get_context_for_brain() which hits
+# get_next_event() + get_today_events(), so an unhealthy Calendar
+# adds 30 s of latency to every reply.
+#
+# Two defences:
+#   1. A short TTL cache so back-to-back chat turns share one
+#      AppleScript invocation.
+#   2. A shorter osascript timeout — 3 s instead of 15 s. If
+#      Calendar can't answer in 3 s it's broken; we'd rather have a
+#      stale-but-fresh-ish empty list than block the user for 15.
+_OSASCRIPT_TIMEOUT_S = float(os.getenv("CALENDAR_OSASCRIPT_TIMEOUT_S", "3.0"))
+_CACHE_TTL_S = float(os.getenv("CALENDAR_CACHE_TTL_S", "30"))
+_cache: dict[tuple, tuple[float, list]] = {}
+_cache_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -103,10 +124,10 @@ def _run_applescript(script: str) -> str | None:
     try:
         proc = subprocess.run(
             ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=_OSASCRIPT_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
-        print("[calendar] osascript timed out (15s)")
+        print(f"[calendar] osascript timed out ({_OSASCRIPT_TIMEOUT_S:.0f}s)")
         return None
     except Exception as exc:  # noqa: BLE001
         print(f"[calendar] osascript failed to spawn: {exc}")
@@ -138,13 +159,35 @@ def _build_script(range_start: datetime, range_end: datetime) -> str:
 
 def get_events(range_start: datetime, range_end: datetime) -> list[CalendarEvent]:
     """All events whose start falls in ``[range_start, range_end)``,
-    sorted ascending."""
+    sorted ascending. Cached for ``_CACHE_TTL_S`` to avoid hammering
+    AppleScript from every chat turn — Calendar's contents move on
+    the order of minutes, not seconds, so a 30 s stale window is
+    invisible to the user while saving repeated 200-800 ms
+    osascript invocations (and 3 s timeouts when it's broken)."""
     if range_start.tzinfo is None:
         range_start = range_start.replace(tzinfo=_LOCAL_TZ)
     if range_end.tzinfo is None:
         range_end = range_end.replace(tzinfo=_LOCAL_TZ)
+    # Bucket the range bounds to minute resolution for the cache key
+    # — back-to-back calls with timestamps milliseconds apart hit the
+    # same cache entry instead of missing on a different microsecond.
+    cache_key = (
+        range_start.replace(second=0, microsecond=0).isoformat(),
+        range_end.replace(second=0, microsecond=0).isoformat(),
+    )
+    now_mono = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(cache_key)
+        if hit is not None and (now_mono - hit[0]) < _CACHE_TTL_S:
+            return list(hit[1])
     out = _run_applescript(_build_script(range_start, range_end))
     if not out:
+        # Cache the empty result too — if AppleScript timed out or
+        # was denied, we don't want every following turn to pay the
+        # same timeout. We use a SHORTER TTL for negative results so
+        # transient outages clear within a minute.
+        with _cache_lock:
+            _cache[cache_key] = (now_mono - _CACHE_TTL_S / 2, [])
         return []
     events: list[CalendarEvent] = []
     for line in out.splitlines():
@@ -162,6 +205,11 @@ def get_events(range_start: datetime, range_end: datetime) -> list[CalendarEvent
             location=loc, calendar_name=cal,
         ))
     events.sort(key=lambda e: e.start)
+    # Cache positive AND negative results — a timeout/permission
+    # denial that returns [] is just as worth caching, otherwise we
+    # keep paying the full timeout on every chat turn.
+    with _cache_lock:
+        _cache[cache_key] = (now_mono, list(events))
     return events
 
 

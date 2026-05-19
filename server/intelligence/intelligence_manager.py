@@ -180,17 +180,27 @@ class IntelligenceManager:
             pass
         calendar_busy = False
         try:
+            from datetime import timedelta
             from ..tools import calendar_tool
-            nxt = calendar_tool.get_next_event()
+            # ONE calendar query per turn for both signals — the
+            # AppleScript bridge is slow (200-800 ms healthy, 3-15 s
+            # when something pins Calendar.app) and we don't want
+            # context-building to dominate reply latency. A 48-hour
+            # window covers both "next event" and "is anything
+            # happening right now"; the calendar_tool layer caches
+            # results across turns.
+            now_local = datetime.now(_LOCAL_TZ)
+            events = calendar_tool.get_events(
+                now_local - timedelta(hours=1),
+                now_local + timedelta(days=2),
+            )
+            nxt = next((e for e in events if e.start > now_local), None)
             if nxt is not None:
                 hhmm = nxt.start.astimezone(_LOCAL_TZ).strftime("%H:%M")
                 title = nxt.title or "ohne Titel"
                 parts.append(f"Nächster Termin: {hhmm} {title}.")
-            # Is a calendar event happening right now? Used by the
-            # context engine to detect the in_meeting activity.
-            for ev in calendar_tool.get_today_events():
-                if ev.start <= datetime.now(_LOCAL_TZ) < ev.end \
-                   and not ev.is_all_day:
+            for ev in events:
+                if ev.start <= now_local < ev.end and not ev.is_all_day:
                     calendar_busy = True
                     break
         except Exception:  # noqa: BLE001
