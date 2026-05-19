@@ -85,7 +85,7 @@
   <!-- ── QUICK ACTIONS ───────────────────────────────────────── -->
   <nav class="action-bar">
     <button class="hex-btn" id="act-settings" type="button" aria-label="Settings">⚙</button>
-    <button class="hex-btn" id="act-search"   type="button" aria-label="Type command">⌕</button>
+    <button class="hex-btn" id="act-search"   type="button" aria-label="Nachricht tippen">⌨</button>
     <button class="hex-btn" id="act-music"    type="button" aria-label="Music">♪</button>
     <span class="tier-indicator" title="Permission tier" aria-label="Tier indicator">
       <span class="tier-dot"></span>
@@ -125,13 +125,13 @@
   <!-- ── TYPE-INPUT PANEL (slides up from bottom) ────────────── -->
   <aside id="text-panel" class="slide-panel" aria-hidden="true">
     <div class="panel-inner">
-      <label>Type a command
-        <input id="text-input" type="text" placeholder="Speak or type a command…"
-               autocomplete="off" spellcheck="false">
+      <label>Nachricht an JARVIS
+        <input id="text-input" type="text" placeholder="Tippe deine Frage…"
+               autocomplete="off" spellcheck="false" enterkeyhint="send">
       </label>
       <div class="row">
-        <button id="text-send"  type="button" class="action-btn primary">Send</button>
-        <button id="text-close" type="button" class="action-btn">Close</button>
+        <button id="text-send"  type="button" class="action-btn primary">Senden</button>
+        <button id="text-close" type="button" class="action-btn">Abbrechen</button>
       </div>
     </div>
   </aside>

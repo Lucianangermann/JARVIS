@@ -32,6 +32,51 @@ export function load() {
   } catch (e) {
     console.warn("[cfg] load failed:", e);
   }
+
+  // iOS gives every standalone PWA install its own isolated
+  // localStorage — separate from Safari and from previous installs.
+  // Each time the user removes + re-adds the home-screen bookmark
+  // they'd otherwise have to retype the URL + token. Self-configure
+  // from what we know:
+  //   • The PWA was served by SOMEONE — that someone is the server.
+  //     Default the Tailscale URL to window.location.origin if empty.
+  //   • If the install URL carried a ?token=... query param, store
+  //     it then strip it from the visible URL (defence-in-depth so
+  //     the secret isn't sitting in browser history after first run).
+  //     The home-screen bookmark itself still holds the seeded URL,
+  //     which is what makes subsequent re-installs zero-touch.
+  const auto = {};
+  if (!cfg.tailscale && window.location?.origin?.startsWith("http")) {
+    auto.tailscale = window.location.origin;
+  }
+  try {
+    const params = new URLSearchParams(window.location.search || "");
+    if (!cfg.token) {
+      const t = params.get("token");
+      if (t) auto.token = t;
+    }
+    if (!cfg.local) {
+      const l = params.get("local");
+      if (l) auto.local = l;
+    }
+    if (Object.keys(auto).length) {
+      cfg = { ...cfg, ...auto };
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg)); } catch {}
+    }
+    // Drop the token from the address bar (history.replaceState is a
+    // no-op on the actual home-screen bookmark, but tidies up the
+    // visible URL while running).
+    if (params.has("token")) {
+      params.delete("token");
+      const q = params.toString();
+      const newUrl = window.location.pathname +
+                     (q ? "?" + q : "") +
+                     (window.location.hash || "");
+      try { window.history.replaceState({}, "", newUrl); } catch {}
+    }
+  } catch (e) {
+    console.warn("[cfg] auto-derive failed:", e);
+  }
   return { ...cfg };
 }
 

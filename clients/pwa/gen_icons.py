@@ -35,62 +35,76 @@ def _hex_points(cx: float, cy: float, r: float) -> list[tuple[float, float]]:
     return pts
 
 
-def _draw_j(draw: ImageDraw.ImageDraw, *, cx: float, cy: float, h: float,
-            color: tuple[int, int, int, int]) -> None:
-    """Stylised geometric J. Two strokes — a horizontal top and a
-    vertical-then-hooked descender — drawn as polygons so we don't
-    depend on a system font."""
-    stroke = max(2, int(h * 0.16))
-    half_top = h * 0.32
-    # Top bar
-    draw.rectangle([cx - half_top, cy - h / 2,
-                    cx + half_top, cy - h / 2 + stroke], fill=color)
-    # Vertical stem (slightly right of centre, matches the cap)
-    stem_x = cx + half_top * 0.55
-    draw.rectangle([stem_x - stroke / 2, cy - h / 2,
-                    stem_x + stroke / 2, cy + h * 0.28], fill=color)
-    # Hook
-    hook_radius = h * 0.18
-    draw.arc(
-        [stem_x - 2 * hook_radius, cy + h * 0.28 - hook_radius,
-         stem_x, cy + h * 0.28 + hook_radius],
-        start=0, end=180, fill=color, width=stroke,
-    )
+def _draw_emblem(draw: ImageDraw.ImageDraw, *, cx: float, cy: float,
+                 size: float,
+                 ring_color: tuple[int, int, int, int],
+                 core_color: tuple[int, int, int, int]) -> None:
+    """Iron-Man arc-reactor inspired emblem: concentric rings, an
+    inscribed hex, six radial spokes pointing to the hex vertices,
+    and a bright filled core at the centre. Inherently symmetric —
+    no glyph-balancing tricks needed."""
+    r_outer = size * 0.46
+    r_hex   = size * 0.40
+    r_inner = size * 0.24
+    r_core  = size * 0.085
+
+    line_w  = max(2, int(size * 0.022))
+    thin_w  = max(1, int(size * 0.014))
+
+    # Outer thin ring
+    draw.ellipse([cx - r_outer, cy - r_outer, cx + r_outer, cy + r_outer],
+                 outline=ring_color, width=thin_w)
+
+    # Hex frame (HUD reference to the desktop / PWA hex buttons)
+    draw.polygon(_hex_points(cx, cy, r_hex),
+                 outline=ring_color, width=line_w)
+
+    # Inner ring around the core
+    draw.ellipse([cx - r_inner, cy - r_inner, cx + r_inner, cy + r_inner],
+                 outline=ring_color, width=line_w)
+
+    # Six radial spokes from inner ring to hex vertices
+    spoke_w = max(2, int(size * 0.026))
+    for vx, vy in _hex_points(cx, cy, r_hex):
+        # Vector from cx,cy to vertex, normalised
+        dx, dy = vx - cx, vy - cy
+        d = math.hypot(dx, dy) or 1.0
+        nx, ny = dx / d, dy / d
+        # Spoke from just outside the inner ring to just inside the hex
+        x1 = cx + nx * (r_inner + line_w)
+        y1 = cy + ny * (r_inner + line_w)
+        x2 = cx + nx * (r_hex - line_w)
+        y2 = cy + ny * (r_hex - line_w)
+        draw.line([(x1, y1), (x2, y2)], fill=ring_color, width=spoke_w)
+
+    # Filled central core — the reactor's bright point
+    draw.ellipse([cx - r_core, cy - r_core, cx + r_core, cy + r_core],
+                 fill=core_color)
 
 
 def _render(size: int) -> Image.Image:
     """Produce one icon at ``size × size`` pixels."""
     bg = (0, 8, 15, 255)
     primary = (0, 212, 255, 255)
-    glow = (0, 255, 255, 200)
+    glow = (0, 255, 255, 220)
 
     img = Image.new("RGBA", (size, size), bg)
     draw = ImageDraw.Draw(img)
 
     cx, cy = size / 2, size / 2
 
-    # Faint hexagonal border + outer ring — gives the icon the same
-    # technical-blueprint feel as the Electron emblem.
-    ring_r_outer = size * 0.44
-    ring_r_inner = size * 0.40
-    draw.ellipse([cx - ring_r_outer, cy - ring_r_outer,
-                  cx + ring_r_outer, cy + ring_r_outer],
-                 outline=(0, 212, 255, 110), width=max(1, size // 96))
-    draw.polygon(_hex_points(cx, cy, ring_r_inner),
-                 outline=(0, 212, 255, 80), width=max(1, size // 128))
+    _draw_emblem(draw, cx=cx, cy=cy, size=size,
+                 ring_color=primary, core_color=primary)
 
-    # Bright "J" in the centre
-    _draw_j(draw, cx=cx, cy=cy, h=size * 0.50, color=primary)
-
-    # Glow pass: blur a copy of the J + ring and screen-blend back.
+    # Glow pass: blur a copy of the emblem and composite under the
+    # crisp foreground for that classic HUD bloom.
     glow_layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     gdraw = ImageDraw.Draw(glow_layer)
-    _draw_j(gdraw, cx=cx, cy=cy, h=size * 0.50, color=glow)
-    gdraw.ellipse([cx - ring_r_outer, cy - ring_r_outer,
-                   cx + ring_r_outer, cy + ring_r_outer],
-                  outline=(0, 255, 255, 90), width=max(1, size // 64))
-    glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(size * 0.04))
-    # Composite the glow under the crisp foreground.
+    _draw_emblem(gdraw, cx=cx, cy=cy, size=size,
+                 ring_color=(0, 255, 255, 100),
+                 core_color=glow)
+    glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(size * 0.045))
+
     base = img.copy()
     base = Image.alpha_composite(base, glow_layer)
     base = Image.alpha_composite(base, img)

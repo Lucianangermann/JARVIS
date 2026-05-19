@@ -73,39 +73,24 @@ body[data-conn="error"]        .status-dot { background: var(--jarvis-danger);
 .conn-route:empty { display: none; }
 
 /* ── core visualizer ─────────────────────────────────────── */
-/* Sized off the grid-row HEIGHT, not viewport width — otherwise on
- * narrow-tall phones the width-driven aspect-ratio:1 box grows
- * taller than the row and the rings overflow into the chat below.
- *
- * The min-width/min-height:0 pair is load-bearing: CSS Grid items
- * default to `min-{width,height}:auto`, which resolves to the item's
- * min-content size. Because <canvas width="320" height="320"> has an
- * intrinsic 320×320 size, that propagates up and pushes the grid
- * track ABOVE the 26vh cap. Pinning both mins to 0 lets the
- * minmax() max actually win. */
+/* Explicit, equal width + height driven by a single CSS variable.
+ * height:100% + aspect-ratio:1 was too fragile against grid-row
+ * sizing — depending on which dimension the row negotiated first,
+ * the box ended up non-square and the inset-anchored rings rendered
+ * as ellipses. With explicit equal dimensions the orb is always a
+ * perfect circle and the grid row sizes naturally to its content.
+ * State-driven shrink lives on the body (see main.css). */
 .core-wrap {
   position: relative;
-  height: 100%;
-  max-height: 100%;
-  aspect-ratio: 1;
-  max-width: min(78vw, 320px);
+  width:  var(--orb-size, min(78vw, 26vh, 280px));
+  height: var(--orb-size, min(78vw, 26vh, 280px));
+  margin: 0 auto;
   min-width: 0;
   min-height: 0;
-  justify-self: center;
   display: grid;
   place-items: center;
-  /* Smooth the shrink when state changes (idle → processing). The
-   * row track itself is what's changing size; the aspect-ratio'd
-   * box follows automatically. */
-  transition: max-height 0.35s ease, max-width 0.35s ease;
+  transition: width 0.35s ease, height 0.35s ease;
   animation: orb-breathe 3s ease-in-out infinite;
-}
-#visualizer, .emblem {
-  /* Same min:0 escape so neither child re-inflates the track. */
-  min-width: 0;
-  min-height: 0;
-  max-width: 100%;
-  max-height: 100%;
 }
 #visualizer {
   position: absolute;

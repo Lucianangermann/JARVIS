@@ -29,11 +29,7 @@ html, body {
   padding: 0;
   width: 100%;
   height: 100%;
-  background:
-    /* faint perspective grid identical to the desktop HUD */
-    linear-gradient(var(--jarvis-grid) 1px, transparent 1px) 0 0 / 24px 24px,
-    linear-gradient(90deg, var(--jarvis-grid) 1px, transparent 1px) 0 0 / 24px 24px,
-    var(--jarvis-bg);
+  background: var(--jarvis-bg);
   color: var(--jarvis-primary);
   font-family: var(--font-display);
   font-weight: 500;
@@ -47,13 +43,19 @@ body {
   display: grid;
   /* Five-row layout: status / visualizer / chat / PTT / actions.
    * The chat row gets the only fractional space so it scrolls.
-   * Default (idle): orb is full-size, chat compact. State-based
-   * overrides below shrink the orb once a turn is in flight so
-   * the chat can breathe and the rings never overlap text. */
+   * The visualizer row is sized by the explicit .core-wrap, which
+   * reads --orb-size — set on the body and overridden by state below.
+   * Result: when JARVIS is thinking/speaking the orb shrinks and
+   * the 1fr chat track absorbs the freed pixels automatically. */
+  /* Width-only so the orb is the same physical size in Safari and
+   * in standalone-mode PWA — vh-based sizing made it noticeably
+   * bigger on the home-screen install because there's no browser
+   * chrome eating into the viewport. */
+  --orb-size: min(62vw, 240px);
   grid-template-rows:
     auto                          /* status bar */
-    minmax(160px, 26vh)           /* visualizer */
-    minmax(180px, 1fr)            /* chat (scrolls, gets the fluid space) */
+    auto                          /* visualizer (sized by .core-wrap) */
+    minmax(180px, 1fr)            /* chat (scrolls, fluid) */
     auto                          /* PTT */
     auto;                         /* action bar */
   /* Safe-area insets so the notch / home indicator stay clear. */
@@ -61,23 +63,17 @@ body {
            env(safe-area-inset-bottom) env(safe-area-inset-left);
   gap: 8px;
   position: relative;
-  transition: grid-template-rows 0.35s ease;
 }
 
-/* Active turn → shrink the visualiser row and hand the freed space
- * to the chat. Triggered whenever the renderer flips body[data-state]
- * away from "idle" (processing, speaking, active). Result: orb shrinks
- * to ~half-size as soon as the user releases PTT, chat gets ~1.5x the
- * vertical real-estate, no overflow can land on top of the bubbles. */
+/* Active turn → shrink the orb so the chat 1fr track absorbs the
+ * freed vertical space. Triggered whenever the renderer flips
+ * body[data-state] away from "idle" (processing, speaking, active).
+ * Just swapping --orb-size is enough; .core-wrap reads it and
+ * transitions width+height. */
 body[data-state="processing"],
 body[data-state="speaking"],
 body[data-state="active"] {
-  grid-template-rows:
-    auto                          /* status bar */
-    minmax(90px,  14vh)           /* visualizer — shrunk */
-    minmax(220px, 1fr)            /* chat — expanded */
-    auto                          /* PTT */
-    auto;                         /* action bar */
+  --orb-size: min(42vw, 160px);
 }
 
 /* Standalone vs in-browser: hide the page chrome when running
