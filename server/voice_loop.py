@@ -35,6 +35,7 @@ standalone testing without the HTTP server::
 """
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import time
@@ -134,8 +135,18 @@ BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_S)   # 160 samples per audio tick
 # fast-interrupt does that job better now, so we can keep the idle
 # threshold strict and stop hallucinating commands from breathing or
 # room noise. Numbers tuned for built-in MacBook mic in a quiet room.
-SPEECH_RMS_THRESHOLD = 900
-SILENCE_RMS_THRESHOLD = 400
+#
+# If your mic delivers weaker signal (Voice Isolation on, mic far
+# from the user, external mic with low pre-amp, …) bump these down
+# via the env vars below. A short calibration: enable JARVIS_MIC_DEBUG=1
+# for 60 s, watch the printed RMS while speaking normally, then set
+# SPEECH_RMS_THRESHOLD slightly above your idle/ambient ceiling.
+SPEECH_RMS_THRESHOLD = int(os.getenv("SPEECH_RMS_THRESHOLD", "900"))
+SILENCE_RMS_THRESHOLD = int(os.getenv("SILENCE_RMS_THRESHOLD", "400"))
+# Continuous RMS debug print — every 1 s. Useful to figure out what
+# levels your mic actually delivers when you say "Jarvis". Off in
+# production because it's noisy.
+_MIC_DEBUG = os.getenv("JARVIS_MIC_DEBUG", "0") not in {"", "0", "false", "no"}
 
 # How long sustained silence ends a segment, and the minimum / maximum
 # segment length we'll transcribe at all.
@@ -426,6 +437,23 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 # RMS in int32 space to avoid int16 overflow.
                 samples = block.astype(np.int32)
                 rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
+
+                # Optional live RMS log for tuning the thresholds. We
+                # accumulate per-block readings and print once a second
+                # so the line rate stays sane (we get ~100 blocks/sec).
+                if _MIC_DEBUG:
+                    _dbg = locals().setdefault("_mic_dbg", {"acc": 0.0, "peak": 0.0, "n": 0, "t": time.monotonic()})
+                    _dbg["acc"] += rms
+                    _dbg["peak"] = max(_dbg["peak"], rms)
+                    _dbg["n"] += 1
+                    if time.monotonic() - _dbg["t"] >= 1.0:
+                        avg = _dbg["acc"] / _dbg["n"] if _dbg["n"] else 0.0
+                        print(f"[MIC] avg_rms={avg:6.0f}  peak={_dbg['peak']:6.0f}  "
+                              f"thresholds: speech>{SPEECH_RMS_THRESHOLD} silence<{SILENCE_RMS_THRESHOLD}")
+                        _dbg["acc"] = 0.0
+                        _dbg["peak"] = 0.0
+                        _dbg["n"] = 0
+                        _dbg["t"] = time.monotonic()
 
                 brain_alive_now = brain_thread is not None and brain_thread.is_alive()
                 tts_busy_now = not tts.is_idle()
