@@ -198,20 +198,48 @@ def _system_command_tool() -> dict[str, Any]:
     }
 
 
-# Trigger phrases that route to the morning-briefing assembler
-# instead of through Claude. Kept short + literal so it's hard to
-# accidentally trigger from a normal sentence. Free-form variants
+# Trigger phrases that route to an intelligence-layer routine
+# assembler instead of through Claude. Kept short + literal so they
+# can't easily fire from a normal sentence. Free-form variants
 # ("kannst du mir kurz das Briefing geben") fall through to Claude
 # which can route them via a future briefing tool if we add one.
-_BRIEFING_TRIGGERS = frozenset({
-    "briefing", "brief mich", "morgenbriefing", "morgen-briefing",
-    "tagesbriefing", "morning briefing", "guten morgen jarvis",
-    "was steht an", "was steht heute an",
-})
+#
+# Map → routine name accepted by IntelligenceManager.run_routine.
+_BRIEFING_TRIGGERS: dict[str, str] = {
+    # ── morning briefing (default ─ "briefing" without qualifier) ──
+    "briefing":                "morning",
+    "brief mich":              "morning",
+    "morgenbriefing":          "morning",
+    "morgen-briefing":         "morning",
+    "morgens-briefing":        "morning",
+    "tagesbriefing":           "morning",
+    "morning briefing":        "morning",
+    "guten morgen jarvis":     "morning",
+    "was steht an":            "morning",
+    "was steht heute an":      "morning",
+    # ── work-start ────────────────────────────────────────────────
+    "arbeitsstart":            "work_start",
+    "arbeitsstart-briefing":   "work_start",
+    "work start":              "work_start",
+    "work start briefing":     "work_start",
+    "los geht's":              "work_start",
+    # ── lunch ────────────────────────────────────────────────────
+    "mittagsbriefing":         "lunch",
+    "mittagspause":            "lunch",
+    "lunch briefing":          "lunch",
+    # ── evening ──────────────────────────────────────────────────
+    "abendbriefing":           "evening",
+    "feierabend-briefing":     "evening",
+    "feierabend":              "evening",
+    "evening briefing":        "evening",
+    "tagesabschluss":          "evening",
+}
 
 
-def _is_briefing_trigger(text: str) -> bool:
-    return text.lower().strip().strip(".!?,").strip() in _BRIEFING_TRIGGERS
+def _briefing_routine_for(text: str) -> str | None:
+    """Return the intelligence routine name (eg ``"morning"``) for a
+    trigger phrase, or None if the text isn't a known trigger."""
+    return _BRIEFING_TRIGGERS.get(text.lower().strip().strip(".!?,").strip())
 
 
 class Brain:
@@ -265,12 +293,18 @@ class Brain:
             return "I didn't catch that."
 
         # Briefing short-circuit: if the user typed/said one of the
-        # known trigger phrases, hand the briefing back directly
-        # instead of routing through Claude. Saves a full API
-        # round-trip and keeps the response deterministic — the
-        # briefing is already polished spoken text.
-        if self.intelligence is not None and _is_briefing_trigger(user_text):
-            return self.intelligence.briefing_now()
+        # known trigger phrases, hand the matching routine's output
+        # back directly instead of routing through Claude. Saves a
+        # full API round-trip and keeps the response deterministic
+        # — the briefing is already polished spoken text.
+        if self.intelligence is not None:
+            routine_name = _briefing_routine_for(user_text)
+            if routine_name is not None:
+                text = self.intelligence.run_routine(routine_name)
+                if text:
+                    return text
+                # Unknown routine or assembly failure — fall through
+                # to Claude rather than returning empty/error string.
 
         # Clear any leftover /interrupt flag from a previous turn.
         # voice_loop's wake-word path already clears it before

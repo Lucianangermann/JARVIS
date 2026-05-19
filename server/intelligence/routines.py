@@ -15,7 +15,9 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from ..tools import calendar_tool, weather
+from datetime import timedelta
+
+from ..tools import calendar_tool, news, weather
 
 _LOCAL_TZ = ZoneInfo(os.getenv("JARVIS_TZ", "Europe/Berlin"))
 
@@ -100,5 +102,117 @@ def morning_briefing() -> str:
             lines.append(
                 "Danach: " + ", ".join(_fmt_event(e) for e in rest) + "."
             )
+
+    return " ".join(lines)
+
+
+def work_start_briefing() -> str:
+    """Short morning kick-off: today's meetings + a single headline.
+
+    Lighter than morning_briefing — meant to fire when the user
+    actually sits down to work, not when the alarm goes off. Skips
+    weather (already heard at breakfast) and skips the calendar
+    overview if there's nothing on today.
+    """
+    now = datetime.now(_LOCAL_TZ)
+    lines: list[str] = ["Arbeitsstart."]
+
+    try:
+        events = calendar_tool.get_today_events()
+    except Exception as exc:  # noqa: BLE001
+        events = []
+        print(f"[routine] calendar lookup failed: {exc}")
+    upcoming = [e for e in events if e.end >= now]
+    if upcoming:
+        lines.append(f"Heute {len(upcoming)} Termin"
+                     f"{'e' if len(upcoming) != 1 else ''}. "
+                     f"Erster: {_fmt_event(upcoming[0])}.")
+    else:
+        lines.append("Heute keine Termine im Kalender.")
+
+    try:
+        top = news.get_headlines(n=1)
+    except Exception as exc:  # noqa: BLE001
+        top = []
+        print(f"[routine] news lookup failed: {exc}")
+    if top:
+        lines.append(f"Schlagzeile: {top[0].title}.")
+
+    return " ".join(lines)
+
+
+def lunch_briefing() -> str:
+    """Mittagspause: what's still on the calendar after lunch + the
+    afternoon weather hint. Skips past meetings."""
+    now = datetime.now(_LOCAL_TZ)
+    lines: list[str] = ["Mittagspause."]
+
+    try:
+        events = calendar_tool.get_today_events()
+    except Exception as exc:  # noqa: BLE001
+        events = []
+        print(f"[routine] calendar lookup failed: {exc}")
+    afternoon = [e for e in events if e.start >= now and not e.is_all_day]
+    if afternoon:
+        lines.append(
+            f"Nachmittag: {len(afternoon)} Termin"
+            f"{'e' if len(afternoon) != 1 else ''}. "
+            f"Als nächstes: {_fmt_event(afternoon[0])}."
+        )
+    else:
+        lines.append("Der Nachmittag ist termintechnisch frei.")
+
+    # Re-pull current weather. Open-Meteo's "current" snapshot is
+    # close enough to "afternoon" for a useful one-line cue.
+    try:
+        w = weather.get_current()
+    except Exception:  # noqa: BLE001
+        w = None
+    if w is not None:
+        lines.append(f"Draußen {w.temp_c:.0f} Grad, {w.condition}.")
+
+    return " ".join(lines)
+
+
+def evening_briefing() -> str:
+    """Ausblick auf morgen: tomorrow's first meeting + tomorrow's
+    weather. Closes out the work day."""
+    now = datetime.now(_LOCAL_TZ)
+    tomorrow_start = (now + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+    tomorrow_end = tomorrow_start + timedelta(days=1)
+
+    lines: list[str] = ["Feierabend."]
+
+    # ── tomorrow's first calendar event ────────────────────────────
+    try:
+        events = calendar_tool.get_events(tomorrow_start, tomorrow_end)
+    except Exception as exc:  # noqa: BLE001
+        events = []
+        print(f"[routine] calendar lookup failed: {exc}")
+    if events:
+        first = events[0]
+        lines.append(f"Morgen, erster Termin: {_fmt_event(first)}.")
+        if len(events) > 1:
+            lines.append(f"Insgesamt {len(events)} Termine morgen.")
+    else:
+        lines.append("Morgen keine Termine im Kalender — freier Tag.")
+
+    # ── tomorrow's weather ─────────────────────────────────────────
+    try:
+        forecast = weather.get_forecast(days=2)
+    except Exception:  # noqa: BLE001
+        forecast = []
+    # forecast[0] = today, forecast[1] = tomorrow. Defensive index.
+    if len(forecast) >= 2:
+        tmrw = forecast[1]
+        rain = ""
+        if tmrw.precipitation_mm >= 1.0:
+            rain = f", {tmrw.precipitation_mm:.0f} mm Niederschlag"
+        lines.append(
+            f"Wetter morgen: {tmrw.temp_min_c:.0f} bis "
+            f"{tmrw.temp_max_c:.0f} Grad, {tmrw.condition}{rain}."
+        )
 
     return " ".join(lines)
