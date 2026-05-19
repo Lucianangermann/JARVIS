@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>JARVIS-Launcher</string>
+    <key>CFBundleIdentifier</key>
+    <string>de.bergerhq.jarvis-launcher</string>
+    <key>CFBundleName</key>
+    <string>JARVIS Launcher</string>
+    <key>CFBundleDisplayName</key>
+    <string>JARVIS Launcher</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>JRVS</string>
+    <key>LSBackgroundOnly</key>
+    <true/>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>JARVIS needs microphone access for wake-word detection and voice commands.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>JARVIS uses Apple's Speech Recognition to transcribe voice commands locally.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>JARVIS uses AppleEvents to integrate with macOS apps (Calendar, Music, …).</string>
+</dict>
+</plist>

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# JARVIS Launcher bundle entry-point.
+#
+# Why this exists as an .app bundle: macOS 13+ removed the manual
+# "+ Add app" button from the Microphone / Speech Recognition
+# privacy panels. Apps can only enter those lists by REQUESTING
+# access — and TCC checks the responsible process's Info.plist for
+# NSMicrophoneUsageDescription before it even prompts. A bare
+# shell script launched from Hammerspoon never qualifies, so the
+# voice_loop's PortAudio / Speech.framework init crashes with
+# `__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__` → SIGABRT.
+#
+# This bundle is the smallest possible TCC-anchor: an identifier,
+# the usage descriptions, and an executable that exec's the real
+# launch.command. After first run, macOS grants this bundle the
+# Mic + Speech permissions and every subsequent launch inherits.
+exec "$HOME/Documents/JARVIS/launch.command"
