@@ -45,6 +45,7 @@ from .auth import authorize_websocket, require_token
 from .brain import Brain
 from .config import settings
 from . import events
+from .intelligence import IntelligenceManager
 from .mac_control import dispatcher as mac_dispatcher
 from .mac_control import kill_switch as mac_kill_switch
 
@@ -91,6 +92,35 @@ async def lifespan(app: FastAPI):
     # from voice_loop's thread. Must happen BEFORE the voice thread
     # starts, otherwise its first publish() lands a no-op.
     events.set_loop(asyncio.get_running_loop())
+
+    # Intelligence layer. Best-effort: any boot failure logs and we
+    # keep going — brain.reply has a None-check and degrades silently.
+    intelligence: IntelligenceManager | None = None
+    try:
+        intelligence = IntelligenceManager()
+
+        def _briefing_to_users(text: str) -> None:
+            """Deliver a scheduled briefing to every connected client:
+            speak it on the Mac (if voice stack is loaded) and push
+            it to PWA / HUD listeners via the WS event bus."""
+            print(f"[INTEL] briefing: {text}")
+            try:
+                events.publish({"type": "jarvis_reply", "text": text})
+            except Exception as exc:  # noqa: BLE001
+                print(f"[INTEL] briefing publish failed: {exc}")
+            if _VOICE_OK and tts is not None:
+                try:
+                    tts.speak(text)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[INTEL] briefing tts failed: {exc}")
+
+        intelligence.set_briefing_handler(_briefing_to_users)
+        intelligence.start()
+        app.state.intelligence = intelligence
+        app.state.brain.intelligence = intelligence
+    except Exception as exc:  # noqa: BLE001
+        print(f"[INTEL] init failed, continuing without intelligence: {exc}")
+        intelligence = None
 
     # On macOS, periodically drain the main-thread NSRunLoop so Cocoa
     # framework callbacks (Speech.framework's SFSpeechRecognizer in
@@ -146,6 +176,11 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if intelligence is not None:
+            try:
+                intelligence.stop()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[INTEL] stop error: {exc}")
         if runloop_pump_task is not None:
             runloop_pump_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

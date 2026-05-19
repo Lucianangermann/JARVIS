@@ -198,6 +198,22 @@ def _system_command_tool() -> dict[str, Any]:
     }
 
 
+# Trigger phrases that route to the morning-briefing assembler
+# instead of through Claude. Kept short + literal so it's hard to
+# accidentally trigger from a normal sentence. Free-form variants
+# ("kannst du mir kurz das Briefing geben") fall through to Claude
+# which can route them via a future briefing tool if we add one.
+_BRIEFING_TRIGGERS = frozenset({
+    "briefing", "brief mich", "morgenbriefing", "morgen-briefing",
+    "tagesbriefing", "morning briefing", "guten morgen jarvis",
+    "was steht an", "was steht heute an",
+})
+
+
+def _is_briefing_trigger(text: str) -> bool:
+    return text.lower().strip().strip(".!?,").strip() in _BRIEFING_TRIGGERS
+
+
 class Brain:
     """Conversation manager + agentic tool loop around Claude Haiku."""
 
@@ -205,6 +221,11 @@ class Brain:
         self.client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         self._histories: dict[str, list[dict[str, Any]]] = {}
         self._lock = threading.Lock()  # FastAPI runs handlers in a threadpool
+
+        # Optional intelligence layer. The server wires this in
+        # main.py's lifespan; brain works fine with it set to None
+        # (no briefing short-circuit, no context injection).
+        self.intelligence = None  # type: ignore[assignment]
 
         self._tools: list[dict[str, Any]] = [
             _system_command_tool(),
@@ -242,6 +263,14 @@ class Brain:
         user_text = user_text.strip()[: settings.MAX_INPUT_LENGTH]
         if not user_text:
             return "I didn't catch that."
+
+        # Briefing short-circuit: if the user typed/said one of the
+        # known trigger phrases, hand the briefing back directly
+        # instead of routing through Claude. Saves a full API
+        # round-trip and keeps the response deterministic — the
+        # briefing is already polished spoken text.
+        if self.intelligence is not None and _is_briefing_trigger(user_text):
+            return self.intelligence.briefing_now()
 
         # Clear any leftover /interrupt flag from a previous turn.
         # voice_loop's wake-word path already clears it before
@@ -351,6 +380,24 @@ class Brain:
             # only the dynamic suffix (recent activity + relevant past
             # + current date/time) is regenerated per call.
             system_blocks = self.memory.build_system_blocks(user_text)
+
+            # Intelligence-layer context (local time, next calendar
+            # event, …) goes in its own trailing text block so it
+            # stays OUTSIDE the cache-control breakpoint on block 1.
+            # If it shared a block with the stable prefix, every turn
+            # would invalidate the prompt cache; if it shared the
+            # dynamic block from memory, the memory layer would have
+            # to know about intelligence, which we want to avoid.
+            if self.intelligence is not None:
+                try:
+                    intel_ctx = self.intelligence.get_context_for_brain()
+                except Exception as exc:  # noqa: BLE001
+                    intel_ctx = ""
+                    print(f"[brain] intelligence context failed: {exc}")
+                if intel_ctx:
+                    system_blocks = system_blocks + [
+                        {"type": "text", "text": intel_ctx},
+                    ]
 
             resp = self._stream_one_turn(history, system_blocks,
                                           speak_locally=speak_locally)
