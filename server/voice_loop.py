@@ -536,7 +536,26 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 segment_s = BLOCK_S * len(buf)
                 print(f"[MIC] segment closed ({segment_s:.1f}s) — transcribing…")
                 _emit_state("transcribing")
-                pcm = np.concatenate(buf).tobytes()
+                pcm_block = np.concatenate(buf)
+                # Pre-STT gain: Apple Speech.framework rejects quiet
+                # audio with "recognition error: Retry" even when our
+                # VAD considered the segment speech. We normalise the
+                # segment toward a known target peak (60 % of int16
+                # full-scale) so Apple sees a hearty signal. Cap the
+                # gain at 12× so we don't amplify hiss into a hurricane
+                # on a hot mic. Override via JARVIS_STT_TARGET_PEAK
+                # (0 disables) for tuning.
+                target_peak = int(os.getenv("JARVIS_STT_TARGET_PEAK", "19660"))
+                peak = int(np.max(np.abs(pcm_block))) or 1
+                if target_peak > 0 and peak < target_peak:
+                    gain = min(12.0, target_peak / peak)
+                    boosted = (pcm_block.astype(np.int32) * gain).clip(
+                        -32768, 32767
+                    ).astype(np.int16)
+                    print(f"[MIC] pre-STT gain ×{gain:.1f} (peak {peak} → "
+                          f"{int(np.max(np.abs(boosted)))})")
+                    pcm_block = boosted
+                pcm = pcm_block.tobytes()
                 wav = stt._pcm_to_wav(pcm, sample_rate=SAMPLE_RATE)  # noqa: SLF001
                 buf = []
                 silence_blocks = 0
