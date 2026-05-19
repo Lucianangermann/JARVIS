@@ -354,6 +354,20 @@ app.on("will-quit", () => {
   killServer();
 });
 
+// macOS does NOT exit Electron on SIGTERM by default — no `will-quit`,
+// no server cleanup, no process exit. Our hotkey quit script
+// (quit.command) relies on SIGTERM to wind everything down cleanly,
+// so we have to bridge the signal into app.quit() ourselves. SIGINT
+// (^C in a terminal) gets the same handler for parity. Without this
+// the entire stop-via-hotkey flow is a no-op and stale Electron
+// instances accumulate forever in `ps`.
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  process.on(sig, () => {
+    console.log(`[JARVIS] received ${sig} — quitting`);
+    app.quit();
+  });
+}
+
 app.on("window-all-closed", () => {
   // On macOS apps typically stay alive until Cmd+Q. We mirror that.
   if (process.platform !== "darwin") app.quit();

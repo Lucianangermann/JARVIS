@@ -10,11 +10,15 @@ PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 LOG="$PROJECT_ROOT/logs/launch.log"
 mkdir -p "$PROJECT_ROOT/logs"
 
-# Already running? Electron's main process shows up as "Electron" with
-# our project path in its argv. pgrep -f matches against the whole
-# command line so this is reliable.
-if pgrep -f "Electron.*${PROJECT_ROOT}/ui" >/dev/null 2>&1; then
-  echo "[$(date '+%F %T')] HUD already running — bringing to front" >> "$LOG"
+# Already running? Two checks because Electron and the Python server
+# can outlive each other (a SIGTERM'd Electron may leave its child
+# python alive for a few seconds while voice_loop shuts down; an
+# Electron crash leaves an orphaned server). If EITHER is up we
+# refuse to spawn a new pair — a second python would crash on
+# port 8000 in use and Electron alone would talk to the wrong server.
+if pgrep -f "Electron.*${PROJECT_ROOT}/ui" >/dev/null 2>&1 \
+   || pgrep -f "python.* -m server\.main" >/dev/null 2>&1; then
+  echo "[$(date '+%F %T')] HUD/server already running — bringing to front" >> "$LOG"
   osascript -e 'tell application "System Events" to set frontmost of every process whose name is "Electron" to true' >/dev/null 2>&1 || true
   exit 0
 fi
