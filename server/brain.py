@@ -313,6 +313,29 @@ class Brain:
             if routine_name is not None:
                 text = self.intelligence.run_routine(routine_name)
                 if text:
+                    # The streaming-Claude path speaks each sentence via
+                    # flush_sentence() as it's assembled; voice_loop
+                    # therefore assumes by the time reply() returns the
+                    # audio is already in flight and does NOT call
+                    # tts.speak() on the return value. The briefing
+                    # short-circuit skips that streaming path entirely,
+                    # so without this block the briefing comes back as
+                    # text-only and the Mac stays silent. We also emit a
+                    # jarvis_partial event so the HUD can render the
+                    # text bubble the same way it does for normal replies.
+                    try:
+                        from . import events as _events
+                        _events.publish({"type": "jarvis_partial", "text": text})
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if speak_locally:
+                        try:
+                            from . import voice_loop as _vl
+                            tts_ref = getattr(_vl, "_tts_ref", None)
+                            if tts_ref is not None:
+                                tts_ref.speak(text)
+                        except Exception:  # noqa: BLE001
+                            pass
                     return text
                 # Unknown routine or assembly failure — fall through
                 # to Claude rather than returning empty/error string.
