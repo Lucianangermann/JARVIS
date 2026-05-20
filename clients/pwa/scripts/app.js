@@ -223,6 +223,15 @@ ws.onEvent("jarvis_reply", ({ text }) => {
 // them sequentially so partials don't overlap. A new turn (or STOP)
 // drops the queue + aborts the current playback.
 //
+// Prefetch pipeline: as soon as a sentence is enqueued we kick off
+// the /tts/synthesize fetch in parallel and stash the in-flight
+// Promise<blobUrl>. By the time the current sentence finishes playing,
+// the next sentence's audio blob is (usually) already downloaded —
+// so the gap between sentences shrinks from "HTTP RTT + `say` synth
+// + blob transfer" to "just the new <audio> src swap." For typical
+// 2-3 sentence German replies this collapses ~1-2 s of dead air per
+// sentence into something close to natural prosody.
+//
 // iOS still requires a user gesture to start the FIRST audio
 // playback of the session — we cover that with primeTts() on every
 // PTT/send touch, which loads + plays a near-silent AIFF inside the
@@ -270,10 +279,13 @@ async function ttsPlayNext() {
   const next = ttsQueue.shift();
   if (!next) { logDebug("tts: playNext queue empty"); return; }
   ttsPlaying = true;
-  logDebug(`tts: playNext starting, q=${ttsQueue.length} remaining`);
+  logDebug(`tts: playNext starting "${next.text.slice(0,28)}" q=${ttsQueue.length} remaining`);
   try {
-    const url = await ttsSynthUrl(next);
-    if (!url) { ttsPlaying = false; return; }
+    // urlPromise was kicked off in speakSentence() the moment the
+    // sentence arrived from the WebSocket. By now it's usually
+    // already resolved — await is a no-op in the common path.
+    const url = await next.urlPromise;
+    if (!url) { ttsPlaying = false; if (ttsQueue.length > 0) ttsPlayNext(); return; }
     ttsCurrentUrl = url;
     // iOS quirk: reusing the same <audio> element across multiple
     // src changes can leave the old media graph hanging and the
@@ -349,14 +361,31 @@ function speakSentence(text) {
   if (!text) return;
   const trimmed = text.trim();
   if (!trimmed) return;
-  ttsQueue.push(trimmed);
+  // Start the network fetch IMMEDIATELY — don't wait until playback
+  // reaches this slot. ttsSynthUrl is async; the returned promise
+  // resolves to a blob URL (or null on failure). Storing the promise
+  // (not the resolved value) lets ttsPlayNext() await it later
+  // without us having to coordinate completion order.
+  const urlPromise = ttsSynthUrl(trimmed).catch((e) => {
+    logDebug(`tts: prefetch failed for "${trimmed.slice(0,28)}": ${e?.message || e}`);
+    return null;
+  });
+  ttsQueue.push({ text: trimmed, urlPromise });
   ttsSpokeAnythingThisTurn = true;
-  logDebug(`tts: speakSentence enqueued "${trimmed.slice(0,28)}" q=${ttsQueue.length} playing=${ttsPlaying}`);
+  logDebug(`tts: enqueued+prefetch "${trimmed.slice(0,28)}" q=${ttsQueue.length} playing=${ttsPlaying}`);
   if (!ttsPlaying) ttsPlayNext();
 }
 
 function stopTts() {
+  // Revoke blob URLs from any in-flight prefetches so we don't leak
+  // memory. The fetches themselves can't be cancelled at this point
+  // without an AbortController, but their resolved blob URLs are
+  // useless once we've decided to stop — drop them as they arrive.
+  const cancelled = ttsQueue;
   ttsQueue = [];
+  for (const item of cancelled) {
+    item.urlPromise.then((url) => { if (url) ttsRevoke(url); });
+  }
   try { ttsAudio.pause(); } catch { /* ignore */ }
   if (ttsCurrentUrl) { ttsRevoke(ttsCurrentUrl); ttsCurrentUrl = null; }
   ttsPlaying = false;
