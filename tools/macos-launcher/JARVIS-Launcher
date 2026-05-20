@@ -4,14 +4,81 @@
 # Why this exists as an .app bundle: macOS 13+ removed the manual
 # "+ Add app" button from the Microphone / Speech Recognition
 # privacy panels. Apps can only enter those lists by REQUESTING
-# access — and TCC checks the responsible process's Info.plist for
+# access — and TCC checks the RESPONSIBLE process's Info.plist for
 # NSMicrophoneUsageDescription before it even prompts. A bare
-# shell script launched from Hammerspoon never qualifies, so the
-# voice_loop's PortAudio / Speech.framework init crashes with
-# `__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__` → SIGABRT.
+# shell script launched from Shortcuts.app or Hammerspoon never
+# qualifies, so the voice_loop either crashes with SIGABRT
+# (older macOS) or silently delivers zero mic buffers (Sequoia).
 #
-# This bundle is the smallest possible TCC-anchor: an identifier,
-# the usage descriptions, and an executable that exec's the real
-# launch.command. After first run, macOS grants this bundle the
-# Mic + Speech permissions and every subsequent launch inherits.
-exec "$HOME/Documents/JARVIS/launch.command"
+# Why we DON'T exec launch.command anymore: launch.command does
+# `nohup npm start >>$LOG 2>&1 &; disown` so the Shortcut returns
+# quickly. But `nohup … &; disown` reparents the npm process to
+# launchd, and at that point macOS' responsible-process tracking
+# loses sight of THIS bundle — TCC falls back to whoever launchd
+# thinks called the process, which has no Microphone permission
+# and no Info.plist to attach one to. The chain then silently
+# denies the mic and we never see a permission prompt.
+#
+# Fix: stay attached. Run npm in the FOREGROUND from this bundle
+# process so the bundle's CFBundleIdentifier remains the
+# responsible code all the way down to the Python child that
+# opens the mic. `open` (Shortcuts uses it) doesn't wait for the
+# launched process anyway, so blocking here costs nothing.
+set -u
+
+PROJECT_ROOT="$HOME/Documents/JARVIS"
+LOG="$PROJECT_ROOT/logs/launch.log"
+mkdir -p "$PROJECT_ROOT/logs"
+
+# Homebrew node / npm live under /usr/local/bin — Shortcuts and
+# launchd hand us a bare PATH that doesn't include those.
+export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+
+# Disable the HuggingFace tokenizers Rust thread pool BEFORE we
+# spawn Electron / Python. Otherwise the Python server SIGABRTs
+# the first time something forks a subprocess (calendar AppleScript,
+# memory subprocess, …) — the tokenizers library detects fork-after-
+# multithreading and panics on the child side instead of just
+# warning. Setting this once in the launcher means the var is in
+# the env before tokenizers ever gets imported.
+export TOKENIZERS_PARALLELISM=false
+
+# Already running? Bring to front and exit so we don't spawn a
+# second uvicorn that would fail to bind to :8000.
+if pgrep -f "Electron.*${PROJECT_ROOT}/ui" >/dev/null 2>&1 \
+   || pgrep -f "python.* -m server\.main" >/dev/null 2>&1; then
+  echo "[$(date '+%F %T')] HUD/server already running — bringing to front" >> "$LOG"
+  osascript -e 'tell application "System Events" to set frontmost of every process whose name is "Electron" to true' >/dev/null 2>&1 || true
+  exit 0
+fi
+
+echo "[$(date '+%F %T')] launching HUD via bundle (direct electron)" >> "$LOG"
+cd "$PROJECT_ROOT/ui" || exit 1
+
+# Skip `npm start` — go straight to the Electron binary inside the
+# project's node_modules. Reason: macOS TCC walks UP the process
+# tree to find the "responsible code" and stops at the FIRST signed
+# binary it sees. Homebrew's node (/usr/local/bin/node) is
+# Developer-ID-signed by the Node maintainers, so TCC would happily
+# stop there — and node has no NSMicrophoneUsageDescription in its
+# Info.plist (because it doesn't have one at all), which means TCC
+# silently denies the mic for everything below it. The smoking gun
+# was tccd's AUTHREQ_ATTRIBUTION log showing
+#   responsible={identifier=node, binary_path=/usr/local/bin/node}
+# Going bash → electron (direct) puts the launcher bundle as the
+# next signed ancestor above Electron, so TCC resolves the
+# responsible code to de.bergerhq.jarvis-launcher whose Info.plist
+# DOES carry NSMicrophoneUsageDescription / NSSpeechRecognitionUsageDescription
+# and TCC finally prompts the user.
+ELECTRON_BIN="$PROJECT_ROOT/ui/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
+if [ ! -x "$ELECTRON_BIN" ]; then
+  echo "[$(date '+%F %T')] ERROR: $ELECTRON_BIN not found / not executable" >> "$LOG"
+  echo "    did you run \`npm install\` in $PROJECT_ROOT/ui ?" >> "$LOG"
+  exit 1
+fi
+
+# Launch Electron in the foreground so this bash process stays the
+# parent. No nohup, no disown — see the header comment for why.
+"$ELECTRON_BIN" "$PROJECT_ROOT/ui" >>"$LOG" 2>&1 &
+ELECTRON_PID=$!
+wait "$ELECTRON_PID"

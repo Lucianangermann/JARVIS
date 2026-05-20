@@ -6,7 +6,8 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --enable-logging"
+    "dev": "electron . --enable-logging",
+    "postinstall": "bash ./codesign-electron.sh"
   },
   "devDependencies": {
     "electron": "^32.0.0"
