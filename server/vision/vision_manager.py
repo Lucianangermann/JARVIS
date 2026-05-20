@@ -70,6 +70,9 @@ class VisionManager:
         # the manager API.
         self._screen: Any | None = None
         self._ocr: Any | None = None
+        self._scanner: Any | None = None
+        self._recognizer: Any | None = None
+        self._comparator: Any | None = None
 
     # --- subcomponent accessors --------------------------------------- #
 
@@ -89,6 +92,32 @@ class VisionManager:
             from .ocr import OCR
             self._ocr = OCR(self)
         return self._ocr
+
+    @property
+    def scanner(self) -> Any:
+        """Document scanner (Phase 2). Lazily instantiated like the
+        other subcomponents so importing this module stays cheap."""
+        if self._scanner is None:
+            from .document_scanner import DocumentScanner
+            self._scanner = DocumentScanner(self)
+        return self._scanner
+
+    @property
+    def recognizer(self) -> Any:
+        """Object / plant / food / animal / damage / style identifier
+        (Phase 2)."""
+        if self._recognizer is None:
+            from .object_recognition import ObjectRecognizer
+            self._recognizer = ObjectRecognizer(self)
+        return self._recognizer
+
+    @property
+    def comparator(self) -> Any:
+        """Pairwise image diff + screen-snapshot flow (Phase 2)."""
+        if self._comparator is None:
+            from .comparator import ImageComparator
+            self._comparator = ImageComparator(self)
+        return self._comparator
 
     # --- image normalisation ------------------------------------------ #
 
