@@ -61,6 +61,10 @@ export function initCamera({
   const camPanel     = document.getElementById("camera-panel");
   const camClose     = document.getElementById("cam-close");
   const camInput     = document.getElementById("cam-input");
+  // Optional free-form question. Only the "photo" action reads this;
+  // the other three have schema-shaped prompts where user-supplied
+  // text doesn't slot in cleanly.
+  const camQuestion  = document.getElementById("cam-question");
 
   // Action buttons inside the panel — each picks the endpoint.
   const btnPhoto     = document.getElementById("cam-act-photo");
@@ -120,6 +124,13 @@ export function initCamera({
   }
 
   async function runFlow(action) {
+    // Snapshot the user's custom question BEFORE closing the panel,
+    // so user-edits during the camera intent don't bleed into the
+    // upload. Only honoured by the "photo" action; the others have
+    // structured prompts that wouldn't accept a free-form question.
+    const customQuestion = (camQuestion && action === "photo")
+      ? (camQuestion.value || "").trim()
+      : "";
     closePanel();
     let file;
     try {
@@ -129,8 +140,15 @@ export function initCamera({
       return;
     }
     setState && setState("processing");
-    addMessage("you", `📷 ${actionLabel(action)}…`);
-    logDebug(`[camera] uploading ${action}, ${(file.size / 1024).toFixed(0)} KiB`);
+    // Surface the custom question (if any) in the user-side chat
+    // bubble so the conversation reads naturally — "you asked X
+    // about a photo" rather than a bare "📷 Foto" tag.
+    const youLabel = customQuestion
+      ? `📷 ${customQuestion}`
+      : `📷 ${actionLabel(action)}…`;
+    addMessage("you", youLabel);
+    logDebug(`[camera] uploading ${action} (question=${customQuestion || "<default>"}), `
+             + `${(file.size / 1024).toFixed(0)} KiB`);
 
     let base64;
     try {
@@ -143,9 +161,13 @@ export function initCamera({
     logDebug(`[camera] compressed to ${(base64.length * 0.75 / 1024).toFixed(0)} KiB`);
 
     try {
-      const result = await uploadToVision(action, base64);
+      const result = await uploadToVision(action, base64, customQuestion);
       const text = formatResult(action, result);
       addMessage("jarvis", text);
+      // Clear the question field on success so the next photo starts
+      // fresh. On error we keep it so the user can retry without
+      // re-typing.
+      if (customQuestion && camQuestion) camQuestion.value = "";
       // Speak the result through the same prefetch+queue TTS pipeline
       // a normal WS reply uses. Fire-and-forget — speakSentence
       // enqueues and resolves quickly; the audio plays asynchronously.
@@ -241,7 +263,7 @@ function fitToBounds(w, h) {
 
 // ── Vision endpoint dispatch ──────────────────────────────────────
 
-async function uploadToVision(action, base64) {
+async function uploadToVision(action, base64, customQuestion = "") {
   const base = cfg.httpBase();
   if (!base) throw new Error("no server URL configured");
   const headers = {
@@ -253,9 +275,15 @@ async function uploadToVision(action, base64) {
   switch (action) {
     case "photo":
       url = `${base}/vision/analyze`;
+      // Custom question wins over the default if the user typed one
+      // in the panel. We append the "Antworte auf Deutsch" hint
+      // because Claude tends to answer in the prompt's language and
+      // the rest of the app is German-first.
       body = {
         image: base64,
-        question: "Was ist auf diesem Bild zu sehen? Antworte auf Deutsch.",
+        question: customQuestion
+          ? `${customQuestion}\nAntworte auf Deutsch.`
+          : "Was ist auf diesem Bild zu sehen? Antworte auf Deutsch.",
       };
       break;
     case "document":

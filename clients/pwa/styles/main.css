@@ -186,3 +186,19 @@ button:focus-visible, input:focus-visible {
   font-size: 28px;
   line-height: 1;
 }
+
+/* Optional free-form question — only the "photo" action reads it.
+   Styled like the settings inputs so the panel keeps a single visual
+   language. The hint label sits ABOVE the input rather than left of
+   it so the input keeps full width on narrow phones. */
+.slide-panel .cam-question-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.slide-panel .cam-question-hint {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: rgba(0, 212, 255, 0.6);
+  text-transform: uppercase;
+}

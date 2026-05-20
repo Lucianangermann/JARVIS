@@ -115,7 +115,20 @@
   <aside id="camera-panel" class="slide-panel" aria-hidden="true">
     <div class="panel-inner">
       <h2>Kamera</h2>
-      <p class="cam-hint">Was möchtest du fotografieren?</p>
+      <!-- Optional custom question. Only the "Foto identifizieren"
+           path actually reads this value — the other three actions
+           have structured prompts (document JSON, OCR transcription,
+           translation) where a free-form question wouldn't fit.
+           Empty input = use the per-action default prompt. -->
+      <label class="cam-question-label">
+        <span class="cam-question-hint">Frage zum Foto (optional)</span>
+        <input id="cam-question"
+               type="text"
+               placeholder="z.B. „Ist die Pflanze gesund?"
+               autocomplete="off"
+               spellcheck="false"
+               enterkeyhint="done">
+      </label>
       <div class="cam-grid">
         <button id="cam-act-photo"     type="button" class="action-btn">
           <span class="cam-icon">📸</span><span>Foto identifizieren</span>
