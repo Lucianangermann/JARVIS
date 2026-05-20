@@ -46,8 +46,17 @@ let pendingReject = null;
  *      this the answer renders silently in the chat, because the
  *      vision HTTP path doesn't go through the WebSocket
  *      jarvis_partial stream that normally triggers speakSentence.
+ *  @param {() => void} [opts.primeTts]
+ *      Optional — fires the silent-WAV iOS audio unlocker inside
+ *      the camera button gesture. If the user taps the camera as
+ *      their FIRST action of the PWA session (no PTT, no send),
+ *      iOS still has audio locked and the eventual ttsAudio.play()
+ *      would silently fail. Calling primeTts here piggybacks on
+ *      the camera gesture to satisfy the autoplay policy.
  */
-export function initCamera({ addMessage, setState, logDebug, speakSentence }) {
+export function initCamera({
+  addMessage, setState, logDebug, speakSentence, primeTts,
+}) {
   const cameraBtn    = document.getElementById("act-camera");
   const camPanel     = document.getElementById("camera-panel");
   const camClose     = document.getElementById("cam-close");
@@ -74,7 +83,14 @@ export function initCamera({ addMessage, setState, logDebug, speakSentence }) {
     camPanel.setAttribute("aria-hidden", "true");
   }
 
-  cameraBtn.addEventListener("click", openPanel);
+  cameraBtn.addEventListener("click", () => {
+    // Prime iOS audio inside THIS gesture so a later
+    // ttsAudio.play() (triggered by the vision reply, far outside
+    // any user gesture) isn't rejected by Safari's autoplay policy.
+    // primeTts is idempotent — already-unlocked is a no-op.
+    if (typeof primeTts === "function") primeTts();
+    openPanel();
+  });
   camClose.addEventListener("click", closePanel);
 
   // The file input's `change` event is the camera return signal.

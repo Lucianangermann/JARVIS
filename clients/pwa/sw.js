@@ -13,7 +13,7 @@
 // outer setup doc explains how to enable HTTPS via the Tailscale
 // cert. On plain HTTP this script simply doesn't get installed.
 
-const CACHE_VERSION = "jarvis-pwa-v20";
+const CACHE_VERSION = "jarvis-pwa-v21";
 const APP_SHELL = [
   "./",
   "./index.html",

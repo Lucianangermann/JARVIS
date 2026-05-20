@@ -575,7 +575,9 @@ killBadge.addEventListener("click", async () => {
 // HTTP, not via the WebSocket jarvis_partial stream, so without
 // explicitly handing the reply to the TTS queue the PWA would
 // display the answer silently.
-camera.initCamera({ addMessage, setState, logDebug, speakSentence });
+camera.initCamera({
+  addMessage, setState, logDebug, speakSentence, primeTts,
+});
 
 // ── Boot ────────────────────────────────────────────────────
 ws.connect();
