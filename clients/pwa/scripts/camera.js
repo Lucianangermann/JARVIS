@@ -40,8 +40,14 @@ let pendingReject = null;
  *      Optional — flips body[data-state] so the HUD shows processing.
  *  @param {(msg: string) => void} opts.logDebug
  *      Debug-log sink shared with the rest of app.js.
+ *  @param {(text: string) => void} [opts.speakSentence]
+ *      Optional — hands the reply to the parallel-prefetch TTS queue
+ *      so the iPhone actually speaks the vision response. Without
+ *      this the answer renders silently in the chat, because the
+ *      vision HTTP path doesn't go through the WebSocket
+ *      jarvis_partial stream that normally triggers speakSentence.
  */
-export function initCamera({ addMessage, setState, logDebug }) {
+export function initCamera({ addMessage, setState, logDebug, speakSentence }) {
   const cameraBtn    = document.getElementById("act-camera");
   const camPanel     = document.getElementById("camera-panel");
   const camClose     = document.getElementById("cam-close");
@@ -124,8 +130,21 @@ export function initCamera({ addMessage, setState, logDebug }) {
       const result = await uploadToVision(action, base64);
       const text = formatResult(action, result);
       addMessage("jarvis", text);
+      // Speak the result through the same prefetch+queue TTS pipeline
+      // a normal WS reply uses. Fire-and-forget — speakSentence
+      // enqueues and resolves quickly; the audio plays asynchronously.
+      // Skipped silently if the caller didn't pass speakSentence
+      // (older app.js wirings) — text still displays.
+      if (typeof speakSentence === "function" && text) {
+        try { speakSentence(text); }
+        catch (e) { logDebug(`[camera] tts enqueue failed: ${e.message || e}`); }
+      }
     } catch (e) {
-      addMessage("jarvis", `Vision-Server-Fehler: ${e.message || e}`);
+      const errText = `Vision-Server-Fehler: ${e.message || e}`;
+      addMessage("jarvis", errText);
+      if (typeof speakSentence === "function") {
+        try { speakSentence(errText); } catch { /* ignore */ }
+      }
       logDebug(`[camera] upload failed: ${e.message || e}`);
     } finally {
       setState && setState("idle");

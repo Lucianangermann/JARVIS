@@ -569,9 +569,13 @@ killBadge.addEventListener("click", async () => {
 // ── Camera ──────────────────────────────────────────────────
 // Wire the camera button + panel + file-input. Passing in app-level
 // helpers lets camera.js stay self-contained (no circular imports)
-// and reuses the existing chat-message + state + debug-log paths so
-// vision replies look exactly like a normal turn.
-camera.initCamera({ addMessage, setState, logDebug });
+// and reuses the existing chat-message + state + debug-log + TTS
+// paths so vision replies look AND sound exactly like a normal turn.
+// speakSentence is critical here: vision uploads return text via
+// HTTP, not via the WebSocket jarvis_partial stream, so without
+// explicitly handing the reply to the TTS queue the PWA would
+// display the answer silently.
+camera.initCamera({ addMessage, setState, logDebug, speakSentence });
 
 // ── Boot ────────────────────────────────────────────────────
 ws.connect();
