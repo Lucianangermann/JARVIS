@@ -10,10 +10,11 @@
 // And renders three transient UI surfaces: the chat pane, the
 // settings slide-up panel, and the type-input slide-up panel.
 
-import * as cfg  from "./config.js";
-import * as ws   from "./websocket.js";
-import * as viz  from "./visualizer.js";
-import * as ptt  from "./ptt.js";
+import * as cfg    from "./config.js";
+import * as ws     from "./websocket.js";
+import * as viz    from "./visualizer.js";
+import * as ptt    from "./ptt.js";
+import * as camera from "./camera.js";
 
 // ── DOM handles ──────────────────────────────────────────────
 const body        = document.body;
@@ -564,6 +565,13 @@ killBadge.addEventListener("click", async () => {
     });
   } catch (e) { console.warn("[app] interrupt:", e); }
 });
+
+// ── Camera ──────────────────────────────────────────────────
+// Wire the camera button + panel + file-input. Passing in app-level
+// helpers lets camera.js stay self-contained (no circular imports)
+// and reuses the existing chat-message + state + debug-log paths so
+// vision replies look exactly like a normal turn.
+camera.initCamera({ addMessage, setState, logDebug });
 
 // ── Boot ────────────────────────────────────────────────────
 ws.connect();

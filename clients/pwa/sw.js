@@ -13,7 +13,7 @@
 // outer setup doc explains how to enable HTTPS via the Tailscale
 // cert. On plain HTTP this script simply doesn't get installed.
 
-const CACHE_VERSION = "jarvis-pwa-v18";
+const CACHE_VERSION = "jarvis-pwa-v19";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -26,6 +26,7 @@ const APP_SHELL = [
   "./scripts/websocket.js",
   "./scripts/visualizer.js",
   "./scripts/ptt.js",
+  "./scripts/camera.js",
   "./scripts/app.js",
   "./assets/icon-192.png",
   "./assets/icon-512.png",
@@ -46,6 +47,7 @@ const NETWORK_ONLY_PREFIXES = [
   "/emergency-stop",
   "/resume",
   "/interrupt",
+  "/vision/",       // every vision endpoint is per-request, never cache
 ];
 
 

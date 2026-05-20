@@ -86,6 +86,7 @@
   <nav class="action-bar">
     <button class="hex-btn" id="act-settings" type="button" aria-label="Settings">⚙</button>
     <button class="hex-btn" id="act-search"   type="button" aria-label="Nachricht tippen">⌨</button>
+    <button class="hex-btn" id="act-camera"   type="button" aria-label="Kamera">📷</button>
     <button class="hex-btn" id="act-music"    type="button" aria-label="Music">♪</button>
     <span class="tier-indicator" title="Permission tier" aria-label="Tier indicator">
       <span class="tier-dot"></span>
@@ -96,6 +97,44 @@
     <button id="act-kill" class="kill-badge" type="button"
             aria-label="Emergency stop">STOP</button>
   </nav>
+
+  <!-- Hidden native-camera file input. The camera.js module triggers
+       a .click() on this when one of the panel actions is chosen, so
+       iOS opens its full-screen camera UI rather than us juggling
+       getUserMedia inside the PWA. ``capture="environment"`` asks
+       iOS to default to the rear camera (the one users actually
+       want for documents / objects); user can still swap to front. -->
+  <input id="cam-input"
+         type="file"
+         accept="image/*"
+         capture="environment"
+         style="display: none"
+         aria-hidden="true">
+
+  <!-- ── CAMERA PANEL (hidden, slides up) ────────────────────── -->
+  <aside id="camera-panel" class="slide-panel" aria-hidden="true">
+    <div class="panel-inner">
+      <h2>Kamera</h2>
+      <p class="cam-hint">Was möchtest du fotografieren?</p>
+      <div class="cam-grid">
+        <button id="cam-act-photo"     type="button" class="action-btn">
+          <span class="cam-icon">📸</span><span>Foto identifizieren</span>
+        </button>
+        <button id="cam-act-doc"       type="button" class="action-btn">
+          <span class="cam-icon">📄</span><span>Dokument scannen</span>
+        </button>
+        <button id="cam-act-read"      type="button" class="action-btn">
+          <span class="cam-icon">📖</span><span>Text lesen</span>
+        </button>
+        <button id="cam-act-translate" type="button" class="action-btn">
+          <span class="cam-icon">🌐</span><span>Übersetzen</span>
+        </button>
+      </div>
+      <div class="row">
+        <button id="cam-close" type="button" class="action-btn">Abbrechen</button>
+      </div>
+    </div>
+  </aside>
 
   <!-- ── SETTINGS PANEL (hidden, slides up) ──────────────────── -->
   <aside id="settings-panel" class="slide-panel" aria-hidden="true">
@@ -142,6 +181,7 @@
   <script type="module" src="scripts/websocket.js"></script>
   <script type="module" src="scripts/visualizer.js"></script>
   <script type="module" src="scripts/ptt.js"></script>
+  <script type="module" src="scripts/camera.js"></script>
   <script type="module" src="scripts/app.js"></script>
 
   <!-- Register the service worker only when running over a secure
