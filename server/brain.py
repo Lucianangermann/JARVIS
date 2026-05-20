@@ -242,6 +242,71 @@ def _briefing_routine_for(text: str) -> str | None:
     return _BRIEFING_TRIGGERS.get(text.lower().strip().strip(".!?,").strip())
 
 
+# Vision short-circuits. Like the briefing map above: each key is a
+# normalised lowercase phrase (no trailing punctuation), each value
+# is one of the action keys handled by ``_run_vision_action`` below.
+# The set is deliberately tight — fuzzy matches fall through to
+# Claude, which can call vision_tools.* via tool_use if it wants.
+_VISION_TRIGGERS: dict[str, str] = {
+    # ── screen describe ──────────────────────────────────────────
+    "was ist auf meinem bildschirm":   "screen_describe",
+    "was siehst du":                   "screen_describe",
+    "was siehst du auf meinem bildschirm": "screen_describe",
+    "was ist auf dem bildschirm":      "screen_describe",
+    "beschreibe meinen bildschirm":    "screen_describe",
+    "what's on my screen":             "screen_describe",
+    "describe my screen":              "screen_describe",
+    # ── error / problem ──────────────────────────────────────────
+    "was ist das problem":             "screen_error",
+    "gibt es einen fehler":            "screen_error",
+    "siehst du einen fehler":          "screen_error",
+    "what's wrong":                    "screen_error",
+    "any errors":                      "screen_error",
+    # ── read / OCR via screen ────────────────────────────────────
+    "lies das":                        "screen_read",
+    "lies das mal":                    "screen_read",
+    "lies das vor":                    "screen_read",
+    "read this":                       "screen_read",
+    "read the screen":                 "screen_read",
+    # ── code explanation ─────────────────────────────────────────
+    "erkläre diesen code":             "screen_code",
+    "erkläre den code":                "screen_code",
+    "was macht der code":              "screen_code",
+    "explain this code":               "screen_code",
+    "explain the code":                "screen_code",
+    # ── snapshot for later compare ────────────────────────────────
+    "merk dir den bildschirm":         "screen_snapshot",
+    "speicher den bildschirm":         "screen_snapshot",
+    "remember this screen":            "screen_snapshot",
+    # ── compare with last snapshot ───────────────────────────────
+    "was hat sich verändert":          "screen_compare",
+    "was hat sich geändert":           "screen_compare",
+    "was ist anders":                  "screen_compare",
+    "what changed":                    "screen_compare",
+    # ── camera ───────────────────────────────────────────────────
+    "ist jemand da":                   "camera_snapshot",
+    "guck mal nach":                   "camera_snapshot",
+    "schau in die kamera":             "camera_snapshot",
+    "is anyone there":                 "camera_snapshot",
+    # ── motion monitor ───────────────────────────────────────────
+    "beobachte die tür":               "motion_start",
+    "beobachte die tuer":              "motion_start",
+    "überwache die kamera":            "motion_start",
+    "watch the door":                  "motion_start",
+    "start watching":                  "motion_start",
+    "hör auf zu beobachten":           "motion_stop",
+    "hoer auf zu beobachten":          "motion_stop",
+    "stop watching":                   "motion_stop",
+}
+
+
+def _vision_action_for(text: str) -> str | None:
+    """Return the vision action key for a trigger phrase, or None if
+    the text isn't a known trigger. Same normalisation as the briefing
+    matcher so ``"Lies das."`` works."""
+    return _VISION_TRIGGERS.get(text.lower().strip().strip(".!?,").strip())
+
+
 class Brain:
     """Conversation manager + agentic tool loop around Claude Haiku."""
 
@@ -255,6 +320,12 @@ class Brain:
         # (no briefing short-circuit, no context injection).
         self.intelligence = None  # type: ignore[assignment]
 
+        # Optional vision layer (Phase 5 of the slice plan). Same
+        # pattern as intelligence: lifespan attaches it after init,
+        # every call-site None-guards. Set to None means the trigger
+        # short-circuit below falls through to Claude.
+        self.vision = None  # type: ignore[assignment]
+
         self._tools: list[dict[str, Any]] = [
             _system_command_tool(),
             # Built-in Anthropic web search. Free tier on Haiku is generous.
@@ -265,6 +336,14 @@ class Brain:
         # text-only deployments.
         if settings.MAC_CONTROL_ENABLED:
             self._tools.extend([_mac_action_tool(), _confirm_action_tool()])
+
+        # Vision tools (Phase 4 of the vision slice). Registered
+        # unconditionally — when ``self.vision`` is None at runtime
+        # (deps missing, init failed) the dispatcher returns a clean
+        # error string so Claude can still finish its reply gracefully
+        # instead of crashing the turn.
+        from .tools.vision_tools import vision_tools
+        self._tools.extend(vision_tools())
 
         # Long-term memory + self-learning. Owns short-term history (was
         # _histories), error history, profile, and the dynamic system-
@@ -339,6 +418,24 @@ class Brain:
                     return text
                 # Unknown routine or assembly failure — fall through
                 # to Claude rather than returning empty/error string.
+
+        # Vision short-circuit. Same pattern as the briefing block:
+        # tight trigger-phrase match, route to a vision call, deliver
+        # the reply through the same partial+TTS plumbing the
+        # streaming Claude path uses so voice_loop doesn't go silent.
+        # Free-form vision questions (eg "siehst du was am Fenster")
+        # fall through to Claude, which can call the vision_tools
+        # below if appropriate.
+        if self.vision is not None:
+            action = _vision_action_for(user_text)
+            if action is not None:
+                text = self._run_vision_action(action)
+                if text:
+                    self._emit_short_circuit_reply(text, speak_locally)
+                    return text
+                # No usable result (capture failed, deps missing, …)
+                # — fall through to Claude rather than returning a
+                # bare error string to the user.
 
         # Clear any leftover /interrupt flag from a previous turn.
         # voice_loop's wake-word path already clears it before
@@ -493,6 +590,12 @@ class Brain:
                         result, is_error = self._exec_mac_action(block.input)
                     elif block.name == "confirm_action":
                         result, is_error = self._exec_confirm_action(block.input)
+                    elif block.name in {"analyze_screen",
+                                         "check_screen_for_errors",
+                                         "read_screen_text"}:
+                        result, is_error = self._exec_vision_tool(
+                            block.name, block.input,
+                        )
                     else:
                         result = f"Unknown tool {block.name!r}."
                         is_error = True
@@ -539,6 +642,103 @@ class Brain:
     # avoids speaking fragments like "Ja." or stray numbered list
     # entries ("1.") before the next clause arrives.
     _MIN_SPEAKABLE_LEN = 4
+
+    # ── short-circuit helpers shared by briefing + vision paths ────── #
+
+    def _emit_short_circuit_reply(
+        self, text: str, speak_locally: bool,
+    ) -> None:
+        """Deliver a non-streaming reply (briefing, vision result, …)
+        through the same HUD+TTS pair the streaming Claude path uses.
+
+        Why: ``flush_sentence()`` inside _stream_one_turn() does the
+        per-sentence TTS + jarvis_partial publish for normal replies,
+        so voice_loop assumes by the time reply() returns the audio is
+        already in flight and never calls tts.speak() on the return
+        value. Short-circuits skip that streaming path entirely, so
+        without this helper they come back text-only and the Mac
+        stays silent. Mirroring the two side-effects keeps short-
+        circuit replies indistinguishable from Claude-streamed ones
+        as far as the rest of the stack is concerned.
+        """
+        try:
+            from . import events as _events
+            _events.publish({"type": "jarvis_partial", "text": text})
+        except Exception:  # noqa: BLE001
+            pass
+        if speak_locally:
+            try:
+                from . import voice_loop as _vl
+                tts_ref = getattr(_vl, "_tts_ref", None)
+                if tts_ref is not None:
+                    tts_ref.speak(text)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _run_vision_action(self, action: str) -> str | None:
+        """Execute one vision short-circuit action and return a German
+        speakable reply, or None if the action couldn't produce useful
+        output (failed capture, deps missing, no snapshot stored).
+
+        The map below is intentionally lightweight — each entry is the
+        smallest amount of glue between the trigger phrase and the
+        underlying VisionManager subcomponent. Anything richer (custom
+        prompts, parameter passing) belongs in the vision_tools.py
+        tool_use surface, not here.
+        """
+        vision = self.vision
+        if vision is None:
+            return None
+
+        try:
+            if action == "screen_describe":
+                return vision.screen.analyze_screen("describe")
+            if action == "screen_error":
+                # detect_error_on_screen is the same call with the
+                # "error" preset; using it explicitly so future tweaks
+                # (eg auto-suggest a fix) land in one place.
+                return vision.screen.detect_error_on_screen()
+            if action == "screen_read":
+                return vision.screen.analyze_screen("read")
+            if action == "screen_code":
+                return vision.screen.analyze_screen("code")
+
+            if action == "screen_snapshot":
+                ok = vision.comparator.snapshot_screen()
+                return ("Bildschirm gespeichert. Sag mir später "
+                        "'was hat sich verändert', um zu vergleichen.") \
+                    if ok else None
+            if action == "screen_compare":
+                result = vision.comparator.compare_with_snapshot()
+                if result is None:
+                    return ("Ich habe keinen gespeicherten Bildschirm "
+                            "zum Vergleichen. Sag 'merk dir den "
+                            "Bildschirm' und frag später erneut.")
+                if not result.differences:
+                    return result.summary
+                # Trim the bullet list for the speakable reply — the
+                # full list still rides along in the comparator's
+                # state for debug/inspection.
+                bullets = "; ".join(result.differences[:3])
+                return f"{result.summary} Konkret: {bullets}."
+
+            if action == "camera_snapshot":
+                analysis = vision.motion.capture_once()
+                return analysis or None
+            if action == "motion_start":
+                ok = vision.motion.start()
+                return ("Kamera-Überwachung läuft. Ich melde mich, "
+                        "wenn ich Bewegung sehe.") \
+                    if ok else ("Ich konnte die Kamera nicht starten "
+                                "— vermutlich keine Berechtigung oder "
+                                "schon in Benutzung.")
+            if action == "motion_stop":
+                vision.motion.stop()
+                return "Kamera-Überwachung beendet."
+        except Exception as exc:  # noqa: BLE001
+            print(f"[VISION] short-circuit action {action!r} crashed: {exc}")
+            return None
+        return None
 
     def _stream_one_turn(self, history: list[dict[str, Any]],
                          system_blocks: list[dict[str, Any]],
@@ -681,6 +881,44 @@ class Brain:
                 )
         except Exception:  # noqa: BLE001 — memory must never break the brain
             pass
+
+    def _exec_vision_tool(
+        self, name: str, tool_input: dict[str, Any],
+    ) -> tuple[str, bool]:
+        """Dispatch a vision tool_use to the VisionManager.
+
+        Returns ``(text, is_error)`` so the surrounding tool loop can
+        decide whether to surface the result as content or as an
+        error to the model. We deliberately keep the error case
+        non-fatal — Claude can still wrap a "I couldn't see the
+        screen" reply around it rather than aborting the turn."""
+        if self.vision is None:
+            return (
+                "vision unavailable (deps missing or init failed)",
+                True,
+            )
+        try:
+            if name == "analyze_screen":
+                question = (tool_input or {}).get("question") or "describe"
+                if not isinstance(question, str):
+                    return ("`question` must be a string.", True)
+                result = self.vision.screen.analyze_screen(question)
+            elif name == "check_screen_for_errors":
+                result = self.vision.screen.detect_error_on_screen()
+            elif name == "read_screen_text":
+                result = self.vision.screen.analyze_screen("read")
+            else:
+                return (f"Unknown vision tool {name!r}.", True)
+        except Exception as exc:  # noqa: BLE001
+            return (f"vision tool {name!r} crashed: {exc}", True)
+
+        if not result:
+            return (
+                "vision call returned no result — likely Screen "
+                "Recording permission missing or capture failed",
+                True,
+            )
+        return (result, False)
 
     def _exec_system_command(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
         """Dispatch a `system_command` tool_use to the whitelist."""

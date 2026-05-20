@@ -49,6 +49,18 @@ from .intelligence import IntelligenceManager
 from .mac_control import dispatcher as mac_dispatcher
 from .mac_control import kill_switch as mac_kill_switch
 
+# Vision is optional — mss / opencv may not be installed. The vision
+# package's import itself is cheap (subcomponents load lazily), but
+# guard anyway so a missing dep on a minimal install doesn't block
+# the rest of the server.
+try:
+    from .vision import VisionManager  # noqa: F401
+    _VISION_OK = True
+except Exception as _vision_exc:  # noqa: BLE001
+    print(f"[JARVIS] vision module unavailable: {_vision_exc}")
+    VisionManager = None  # type: ignore[assignment,misc]
+    _VISION_OK = False
+
 # stt and tts are optional — the voice stack (whisper, pyttsx3, …) may not
 # be installed. The text endpoints work without them.
 try:
@@ -148,6 +160,22 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         print(f"[INTEL] init failed, continuing without intelligence: {exc}")
         intelligence = None
+
+    # Vision layer. Best-effort like intelligence — brain.vision is
+    # None until this block succeeds, and every vision call-site
+    # guards against that. We share the brain's Anthropic client so
+    # Claude Vision and Claude chat hit the same auth/quota pool.
+    if _VISION_OK and VisionManager is not None:
+        try:
+            vision = VisionManager(client=app.state.brain.client)
+            app.state.vision = vision
+            app.state.brain.vision = vision
+            print("[VISION] manager ready (screen + ocr + scanner + "
+                  "recognizer + comparator + motion + translator)")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[VISION] init failed, continuing without vision: {exc}")
+    else:
+        print("[VISION] disabled (deps missing or import failed)")
 
     # On macOS, periodically drain the main-thread NSRunLoop so Cocoa
     # framework callbacks (Speech.framework's SFSpeechRecognizer in
@@ -802,6 +830,155 @@ def resume(token: str = Depends(require_token)) -> dict[str, Any]:
     """Clear the kill switch. Tier 2 stays locked — explicit reconfirm needed."""
     mac_kill_switch.resume()
     return mac_kill_switch.status()
+
+
+# --- Vision API ----------------------------------------------------------- #
+# The PWA uploads base64-encoded images here; the Mac screen capture
+# route doesn't need an image because it grabs the screen server-side.
+# Every route returns 503 when the vision manager isn't ready (deps
+# missing, init failed) so the client gets a clean signal rather than
+# silent 500s.
+#
+# Payload size cap is generous (8 MiB base64) because Claude Vision's
+# 5 MiB limit lives on the DECODED image and our image_to_base64
+# pipeline re-encodes anyway. We just need enough headroom for the
+# encoded representation.
+
+
+_MAX_VISION_IMG = 8 * 1024 * 1024
+
+
+def _vision(request: Request):
+    """Return the attached VisionManager, or None if vision isn't
+    available on this server. Centralised so route handlers don't
+    each duplicate the getattr lookup."""
+    return getattr(request.app.state, "vision", None)
+
+
+class VisionAnalyzeRequest(BaseModel):
+    image: str = Field(..., min_length=1, max_length=_MAX_VISION_IMG)
+    question: str = Field(
+        default="Was siehst du auf diesem Bild?", max_length=2000,
+    )
+
+
+class VisionScreenRequest(BaseModel):
+    # "describe" / "error" / "code" / "read" — or a free-form question
+    # forwarded verbatim. Mirrors ScreenReader.analyze_screen contract.
+    question: str = Field(default="describe", max_length=2000)
+
+
+class VisionScanRequest(BaseModel):
+    image: str = Field(..., min_length=1, max_length=_MAX_VISION_IMG)
+    # "auto" | "receipt" | "invoice" | "contract" | "letter" |
+    # "business_card" | "form" | "handwriting" | "table" |
+    # "id_document" | "general". Unknown values normalise to general
+    # in the scanner so we don't need server-side validation.
+    doc_type: str = Field(default="auto", max_length=32)
+
+
+class VisionTranslateRequest(BaseModel):
+    image: str = Field(..., min_length=1, max_length=_MAX_VISION_IMG)
+    target_language: str = Field(default="de", max_length=10)
+
+
+@app.post("/vision/analyze")
+def vision_analyze(
+    payload: VisionAnalyzeRequest,
+    request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    """Run a free-form vision query against a base64 image. Used by
+    the iPhone PWA's photo-and-ask flow."""
+    vision = _vision(request)
+    if vision is None:
+        raise HTTPException(status_code=503, detail="vision unavailable")
+    result = vision.analyze_image(payload.image, payload.question)
+    if result is None:
+        raise HTTPException(
+            status_code=500, detail="vision analysis failed",
+        )
+    return {"result": result, "type": "analyze"}
+
+
+@app.post("/vision/screen")
+def vision_screen(
+    payload: VisionScreenRequest,
+    request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    """Capture the Mac's screen and analyse it. Privacy indicator
+    prints server-side. Screen Recording permission must be granted
+    to whatever process is running uvicorn (Electron on launcher;
+    Terminal in dev)."""
+    vision = _vision(request)
+    if vision is None:
+        raise HTTPException(status_code=503, detail="vision unavailable")
+    result = vision.screen.analyze_screen(payload.question)
+    if result is None:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "screen analysis failed — likely Screen Recording "
+                "permission missing for this process"
+            ),
+        )
+    return {"result": result, "type": "screen"}
+
+
+@app.post("/vision/scan")
+def vision_scan(
+    payload: VisionScanRequest,
+    request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    """Document scanning: receipts, invoices, business cards,
+    contracts, handwriting. Returns both speakable summary AND the
+    JSON-shaped structured fields where applicable."""
+    vision = _vision(request)
+    if vision is None:
+        raise HTTPException(status_code=503, detail="vision unavailable")
+    result = vision.scanner.scan_document(
+        payload.image, doc_type=payload.doc_type,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=500, detail="document scan failed",
+        )
+    return {
+        "doc_type":         result.doc_type,
+        "summary":          result.summary,
+        "structured_data":  result.structured_data,
+        "raw_text":         result.raw_text,
+        "action_items":     result.action_items,
+        "confidence":       result.confidence,
+    }
+
+
+@app.post("/vision/translate")
+def vision_translate(
+    payload: VisionTranslateRequest,
+    request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    """Single-shot visual translation. Rate-limited live mode lives
+    on the WebSocket surface (TBD) — this is for "übersetze das"
+    on a still photo or screen snippet."""
+    vision = _vision(request)
+    if vision is None:
+        raise HTTPException(status_code=503, detail="vision unavailable")
+    result = vision.translator.translate_image(
+        payload.image, target_language=payload.target_language,
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=500, detail="translation failed",
+        )
+    return {
+        "original":         result.original,
+        "translated":       result.translated,
+        "target_language":  result.target_language,
+    }
 
 
 # --- Web UI --------------------------------------------------------------- #
