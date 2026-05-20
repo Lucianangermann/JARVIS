@@ -43,13 +43,39 @@ export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 # the env before tokenizers ever gets imported.
 export TOKENIZERS_PARALLELISM=false
 
-# Already running? Bring to front and exit so we don't spawn a
-# second uvicorn that would fail to bind to :8000.
-if pgrep -f "Electron.*${PROJECT_ROOT}/ui" >/dev/null 2>&1 \
-   || pgrep -f "python.* -m server\.main" >/dev/null 2>&1; then
-  echo "[$(date '+%F %T')] HUD/server already running — bringing to front" >> "$LOG"
+# Already running?  Two checks needed because Electron and the
+# Python server can outlive each other when shutdown goes wrong:
+# a SIGKILLed Electron (from quit.command's hotkey-spam fallback)
+# leaves an orphan Python that this launcher would otherwise see
+# and refuse to start again, leaving the user stuck.
+ELECTRON_ALIVE=0
+PYTHON_ALIVE=0
+pgrep -f "Electron.*${PROJECT_ROOT}/ui" >/dev/null 2>&1 && ELECTRON_ALIVE=1
+pgrep -f "python.* -m server\.main"     >/dev/null 2>&1 && PYTHON_ALIVE=1
+
+if [ "$ELECTRON_ALIVE" = "1" ]; then
+  echo "[$(date '+%F %T')] HUD already running — bringing to front" >> "$LOG"
   osascript -e 'tell application "System Events" to set frontmost of every process whose name is "Electron" to true' >/dev/null 2>&1 || true
   exit 0
+fi
+
+if [ "$PYTHON_ALIVE" = "1" ]; then
+  # Electron is dead but Python is still alive — that's an orphan
+  # from a failed shutdown. The new Electron would try to bind to
+  # :8000 and crash. Take the orphan down with a SIGTERM so the
+  # lifespan handler can close the audio stream cleanly (giving it
+  # 5 s before we escalate); only THEN spawn a fresh pair.
+  echo "[$(date '+%F %T')] orphan python detected — SIGTERM and wait" >> "$LOG"
+  pkill -TERM -f "python.* -m server\.main" 2>&1 || true
+  for i in $(seq 1 5); do
+    sleep 1
+    pgrep -f "python.* -m server\.main" >/dev/null 2>&1 || break
+  done
+  if pgrep -f "python.* -m server\.main" >/dev/null 2>&1; then
+    echo "[$(date '+%F %T')] orphan python still alive after 5s — SIGKILL" >> "$LOG"
+    pkill -KILL -f "python.* -m server\.main" 2>&1 || true
+    sleep 1
+  fi
 fi
 
 echo "[$(date '+%F %T')] launching HUD via bundle (direct electron)" >> "$LOG"

@@ -23,6 +23,36 @@ mkdir -p "$PROJECT_ROOT/logs"
 ELECTRON_PAT="Electron.*${PROJECT_ROOT}/ui"
 SERVER_PAT="python.* -m server\.main"
 
+# Self-mutex via mkdir (atomic on every POSIX filesystem) so
+# impatient hotkey spamming — mashing ⌃⌥⌘K twenty times in two
+# seconds while we're still waiting on the first quit — doesn't
+# fire twenty parallel quit.command instances. The first invocation
+# wins the mkdir race and runs to completion; subsequent ones see
+# the lock dir already exist, log a single line, and exit. Without
+# this we used to end up with multiple processes racing to SIGKILL
+# Electron, which orphaned the Python child and required a manual
+# pkill -TERM to recover. flock isn't available on stock macOS, so
+# we go with mkdir which IS atomic in the POSIX spec.
+LOCK_DIR="/tmp/jarvis-quit.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  # Recover from a stale lock: if the lock dir exists but is older
+  # than 60 s, the previous quit.command must have died without
+  # cleaning up (kill -9, panic, etc.). 60 s is well past the 15 s
+  # outer wait + the SIGKILL escalation below, so anything older is
+  # definitely stale. We compare epoch seconds via `stat` because
+  # `find -mmin` with a fractional value isn't portable across BSD/GNU.
+  LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$LOCK_DIR" 2>/dev/null || echo 0) ))
+  if [ "$LOCK_AGE" -gt 60 ]; then
+    echo "[$(date '+%F %T')] stop: stale lock (${LOCK_AGE}s old) — taking over" >> "$LOG"
+    rmdir "$LOCK_DIR" 2>/dev/null
+    mkdir "$LOCK_DIR" 2>/dev/null || true
+  else
+    echo "[$(date '+%F %T')] stop: another quit.command already running — ignoring" >> "$LOG"
+    exit 0
+  fi
+fi
+trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+
 if ! pgrep -f "$ELECTRON_PAT" >/dev/null 2>&1 \
    && ! pgrep -f "$SERVER_PAT" >/dev/null 2>&1; then
   echo "[$(date '+%F %T')] stop: nothing running — no-op" >> "$LOG"
