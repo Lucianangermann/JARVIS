@@ -28,3 +28,16 @@ sentence-transformers>=2.7
 transformers<4.50
 scikit-learn>=1.4
 numpy>=1.26
+
+# --- Vision (Phase 1) ---
+# Screen capture goes through mss (Cocoa CGWindowList wrapper on macOS,
+# X11/Win32 elsewhere) which is faster and more portable than mucking
+# with PyObjC directly. Pillow handles JPEG encoding + resizing for the
+# Claude Vision payload — every image is re-encoded to JPEG ≤1920px to
+# keep token cost and request size bounded. OpenCV / pyzbar arrive in
+# later phases (camera + barcodes).
+mss>=9.0
+# Pillow is already pulled in transitively by sentence-transformers /
+# chromadb, but list it explicitly so vision keeps working if those
+# memory deps ever change.
+Pillow>=10.0
