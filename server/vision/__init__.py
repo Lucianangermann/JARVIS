@@ -10,16 +10,18 @@ exception handling and returns ``None`` (or a descriptive error
 string) on failure. The optional ``mss`` import is gated so the
 server still boots if the vision deps aren't installed.
 
-Phase 1+2 surface:
+Phase 1+2+3 surface:
   * VisionManager       — base coordinator + image_to_base64 utility
   * ScreenReader        — full-screen or region capture + analysis
   * OCR                 — text extraction + visual translation
   * DocumentScanner     — receipts / contracts / business cards / …
   * ObjectRecognizer    — identify / plant / food / animal / damage / barcode
   * ImageComparator     — pairwise diff + screen-snapshot flow
+  * MotionDetector      — OpenCV camera + frame-diff + Claude alerts
+  * Translator          — rate-limited live visual translation
 
-Later phases (motion_detector, live translation, API routes, …) plug
-into the same VisionManager.
+Later phases (brain/API integration, mobile camera) plug into the
+same VisionManager.
 """
 from .vision_manager import VisionManager  # noqa: F401
 from .screen_reader import ScreenReader  # noqa: F401
@@ -29,3 +31,5 @@ from .object_recognition import (
     ObjectRecognizer, RecognitionResult, BarcodeResult,
 )  # noqa: F401
 from .comparator import ImageComparator, ComparisonResult  # noqa: F401
+from .motion_detector import MotionDetector, MotionEvent  # noqa: F401
+from .translator import Translator, LiveTranslation  # noqa: F401

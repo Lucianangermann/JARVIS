@@ -27,17 +27,31 @@ chromadb>=0.5
 sentence-transformers>=2.7
 transformers<4.50
 scikit-learn>=1.4
-numpy>=1.26
+# numpy MUST stay <2.0 because PyTorch (transitive via sentence-
+# transformers) on Intel macOS pinned at 2.2 has no numpy-2.x ABI.
+# Bumping numpy past 2.0 silently breaks long-term embeddings.
+numpy>=1.26,<2.0
 
 # --- Vision (Phase 1) ---
 # Screen capture goes through mss (Cocoa CGWindowList wrapper on macOS,
 # X11/Win32 elsewhere) which is faster and more portable than mucking
 # with PyObjC directly. Pillow handles JPEG encoding + resizing for the
 # Claude Vision payload — every image is re-encoded to JPEG ≤1920px to
-# keep token cost and request size bounded. OpenCV / pyzbar arrive in
-# later phases (camera + barcodes).
+# keep token cost and request size bounded.
 mss>=9.0
 # Pillow is already pulled in transitively by sentence-transformers /
 # chromadb, but list it explicitly so vision keeps working if those
 # memory deps ever change.
 Pillow>=10.0
+
+# --- Vision (Phase 3) ---
+# OpenCV for camera capture + frame-diff motion detection. Pinned
+# <4.11 because the 4.12 wheels require numpy 2.x, which silently
+# breaks the older PyTorch / sentence-transformers C extensions
+# the memory layer depends on (long-term embeddings won't load).
+# numpy is pinned <2.0 in lockstep — keep both in sync if you bump.
+opencv-python<4.11
+# pyzbar is optional for barcode/QR decoding (Phase 2). The Python
+# package is small but needs the native libzbar — on macOS install
+# via `brew install zbar`. We don't list it as a hard dep because
+# barcode scanning gracefully no-ops if it's missing.

@@ -73,6 +73,8 @@ class VisionManager:
         self._scanner: Any | None = None
         self._recognizer: Any | None = None
         self._comparator: Any | None = None
+        self._motion: Any | None = None
+        self._translator: Any | None = None
 
     # --- subcomponent accessors --------------------------------------- #
 
@@ -118,6 +120,25 @@ class VisionManager:
             from .comparator import ImageComparator
             self._comparator = ImageComparator(self)
         return self._comparator
+
+    @property
+    def motion(self) -> Any:
+        """OpenCV-based camera motion detector (Phase 3). Stateful —
+        the same instance survives across start/stop cycles."""
+        if self._motion is None:
+            from .motion_detector import MotionDetector
+            self._motion = MotionDetector(self)
+        return self._motion
+
+    @property
+    def translator(self) -> Any:
+        """Rate-limited live visual translator (Phase 3). Holds per-
+        session caches; the brain forwards iPhone WebSocket session
+        IDs through to the underlying ``live_translation`` call."""
+        if self._translator is None:
+            from .translator import Translator
+            self._translator = Translator(self)
+        return self._translator
 
     # --- image normalisation ------------------------------------------ #
 
