@@ -420,19 +420,33 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
     # transition (the moment TTS starts) for buffer hygiene.
     last_busy = False
 
+    # Open the PortAudio duplex stream manually (no `with` block) so the
+    # outer `finally` can guarantee stream.stop() + stream.close() even
+    # if some inner branch raises, and we don't depend on the context
+    # manager's __exit__ ordering vs. our brain-thread join. macOS only
+    # clears the orange mic-in-use indicator once the PaCloseStream is
+    # called AND the process either continues to live without holding
+    # another stream or exits cleanly, so a leaked-open stream on a
+    # quit-but-stuck JARVIS leaves the dot lit until coreaudiod GCs.
+    stream = sd.Stream(
+        samplerate=SAMPLE_RATE,
+        channels=(1, 1),         # mono in, mono out
+        dtype="int16",
+        blocksize=BLOCK_SIZE,    # 10 ms — matches AEC frame size
+        callback=_callback,
+    )
+    stream.start()
     try:
-        with sd.Stream(
-            samplerate=SAMPLE_RATE,
-            channels=(1, 1),         # mono in, mono out
-            dtype="int16",
-            blocksize=BLOCK_SIZE,    # 10 ms — matches AEC frame size
-            callback=_callback,
-        ):
-            while not _stop_event.is_set():
-                try:
-                    block = audio_q.get(timeout=1.0)
-                except queue.Empty:
-                    continue
+        while not _stop_event.is_set():
+            try:
+                # Short timeout (was 1.0 s) so request_stop() shows up
+                # within ~0.2 s instead of sitting in a blocking get().
+                # That's the difference between "Mac releases the mic
+                # immediately after the quit shortcut" and "indicator
+                # lingers for up to a second."
+                block = audio_q.get(timeout=0.2)
+            except queue.Empty:
+                continue
 
                 # RMS in int32 space to avoid int16 overflow.
                 samples = block.astype(np.int32)
@@ -687,6 +701,19 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
                 if followup_window > 0:
                     followup_until = time.monotonic() + followup_window
     finally:
+        # 1) Close the duplex stream FIRST so the orange mic indicator
+        #    drops the moment the user hits the quit shortcut. Even if
+        #    the brain-thread join below takes its full 2 s, PortAudio
+        #    has already let go of the device by then. stop() halts the
+        #    audio callback; close() releases the device handle.
+        try:
+            stream.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            stream.close()
+        except Exception:  # noqa: BLE001
+            pass
         if brain_thread is not None and brain_thread.is_alive():
             brain_cancel.set()
             tts.stop()
