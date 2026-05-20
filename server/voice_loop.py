@@ -448,258 +448,258 @@ def run(brain: "Brain", session_id: str | None = None) -> None:
             except queue.Empty:
                 continue
 
-                # RMS in int32 space to avoid int16 overflow.
-                samples = block.astype(np.int32)
-                rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
+            # RMS in int32 space to avoid int16 overflow.
+            samples = block.astype(np.int32)
+            rms = float(np.sqrt(np.mean(samples * samples))) if samples.size else 0.0
 
-                # Optional live RMS log for tuning the thresholds. We
-                # accumulate per-block readings and print once a second
-                # so the line rate stays sane (we get ~100 blocks/sec).
-                if _MIC_DEBUG:
-                    _dbg = locals().setdefault("_mic_dbg", {"acc": 0.0, "peak": 0.0, "n": 0, "t": time.monotonic()})
-                    _dbg["acc"] += rms
-                    _dbg["peak"] = max(_dbg["peak"], rms)
-                    _dbg["n"] += 1
-                    if time.monotonic() - _dbg["t"] >= 1.0:
-                        avg = _dbg["acc"] / _dbg["n"] if _dbg["n"] else 0.0
-                        print(f"[MIC] avg_rms={avg:6.0f}  peak={_dbg['peak']:6.0f}  "
-                              f"thresholds: speech>{SPEECH_RMS_THRESHOLD} silence<{SILENCE_RMS_THRESHOLD}")
-                        _dbg["acc"] = 0.0
-                        _dbg["peak"] = 0.0
-                        _dbg["n"] = 0
-                        _dbg["t"] = time.monotonic()
+            # Optional live RMS log for tuning the thresholds. We
+            # accumulate per-block readings and print once a second
+            # so the line rate stays sane (we get ~100 blocks/sec).
+            if _MIC_DEBUG:
+                _dbg = locals().setdefault("_mic_dbg", {"acc": 0.0, "peak": 0.0, "n": 0, "t": time.monotonic()})
+                _dbg["acc"] += rms
+                _dbg["peak"] = max(_dbg["peak"], rms)
+                _dbg["n"] += 1
+                if time.monotonic() - _dbg["t"] >= 1.0:
+                    avg = _dbg["acc"] / _dbg["n"] if _dbg["n"] else 0.0
+                    print(f"[MIC] avg_rms={avg:6.0f}  peak={_dbg['peak']:6.0f}  "
+                          f"thresholds: speech>{SPEECH_RMS_THRESHOLD} silence<{SILENCE_RMS_THRESHOLD}")
+                    _dbg["acc"] = 0.0
+                    _dbg["peak"] = 0.0
+                    _dbg["n"] = 0
+                    _dbg["t"] = time.monotonic()
 
-                brain_alive_now = brain_thread is not None and brain_thread.is_alive()
-                tts_busy_now = not tts.is_idle()
-                busy_now = brain_alive_now or tts_busy_now
-                last_busy = busy_now
+            brain_alive_now = brain_thread is not None and brain_thread.is_alive()
+            tts_busy_now = not tts.is_idle()
+            busy_now = brain_alive_now or tts_busy_now
+            last_busy = busy_now
 
-                # Per-tick state heartbeat for the HUD. _emit_state dedups
-                # so this only actually publishes on a real transition,
-                # but emitting every iteration means we cover paths that
-                # don't have explicit emit calls (e.g. the canned
-                # "Ja?" / "Alles klar" / kill-switch TTS responses,
-                # or a transcribe that didn't match the wake word).
-                if in_speech:
-                    pass                        # user is mid-utterance
-                elif brain_alive_now:
-                    _emit_state("thinking")
-                elif tts_busy_now:
-                    _emit_state("speaking")
-                else:
-                    _emit_state("listening")
+            # Per-tick state heartbeat for the HUD. _emit_state dedups
+            # so this only actually publishes on a real transition,
+            # but emitting every iteration means we cover paths that
+            # don't have explicit emit calls (e.g. the canned
+            # "Ja?" / "Alles klar" / kill-switch TTS responses,
+            # or a transcribe that didn't match the wake word).
+            if in_speech:
+                pass                        # user is mid-utterance
+            elif brain_alive_now:
+                _emit_state("thinking")
+            elif tts_busy_now:
+                _emit_state("speaking")
+            else:
+                _emit_state("listening")
 
-                if busy_now:
-                    # While JARVIS is talking or thinking, completely
-                    # ignore the mic: the speakers leak into it and
-                    # would otherwise build up 15-second segments of
-                    # JARVIS's own voice. No barge-in — both the
-                    # energy-burst and Whisper-rolling paths were
-                    # cancelling replies on TTS echo, so the user has
-                    # to wait for JARVIS to finish before speaking
-                    # again. (Kill-switch and stop phrases still
-                    # work — they go through the normal segment-closed
-                    # transcribe path as soon as JARVIS goes idle.)
-                    in_speech = False
-                    speech_seed = 0
-                    buf.clear()
-                    silence_blocks = 0
-                    pre_roll.clear()
-                    continue
-
-                if not in_speech:
-                    pre_roll.append(block)
-                    if rms > SPEECH_RMS_THRESHOLD:
-                        speech_seed += 1
-                        if speech_seed >= SPEECH_SEED_BLOCKS:
-                            in_speech = True
-                            speech_seed = 0
-                            buf = list(pre_roll)        # keep the pre-roll
-                            buf.append(block)
-                            silence_blocks = 0
-                            print("[MIC] speech started")
-                    else:
-                        # A single quiet block resets the seed run — that's
-                        # what filters keyboard clicks (10-30 ms peaks with
-                        # long quiet gaps) from triggering speech onset.
-                        speech_seed = 0
-                    continue
-
-                # In-speech: keep accumulating, watch for sustained silence.
-                buf.append(block)
-                if rms < SILENCE_RMS_THRESHOLD:
-                    silence_blocks += 1
-                else:
-                    silence_blocks = 0
-
-                end_by_silence = silence_blocks >= silence_blocks_to_end
-                end_by_cap = len(buf) >= max_speech_blocks
-                if not (end_by_silence or end_by_cap):
-                    continue
-
-                # Segment closed — transcribe.
+            if busy_now:
+                # While JARVIS is talking or thinking, completely
+                # ignore the mic: the speakers leak into it and
+                # would otherwise build up 15-second segments of
+                # JARVIS's own voice. No barge-in — both the
+                # energy-burst and Whisper-rolling paths were
+                # cancelling replies on TTS echo, so the user has
+                # to wait for JARVIS to finish before speaking
+                # again. (Kill-switch and stop phrases still
+                # work — they go through the normal segment-closed
+                # transcribe path as soon as JARVIS goes idle.)
                 in_speech = False
-                if len(buf) - silence_blocks < min_speech_blocks:
-                    # Too short to be real speech. Drop and reset.
-                    buf = []
-                    silence_blocks = 0
-                    pre_roll.clear()
-                    print("[MIC] (segment too short, ignored)")
-                    continue
+                speech_seed = 0
+                buf.clear()
+                silence_blocks = 0
+                pre_roll.clear()
+                continue
 
-                segment_s = BLOCK_S * len(buf)
-                print(f"[MIC] segment closed ({segment_s:.1f}s) — transcribing…")
-                _emit_state("transcribing")
-                pcm_block = np.concatenate(buf)
-                # Pre-STT gain: Apple Speech.framework rejects quiet
-                # audio with "recognition error: Retry" even when our
-                # VAD considered the segment speech. We normalise the
-                # segment toward a known target peak (60 % of int16
-                # full-scale) so Apple sees a hearty signal. Cap the
-                # gain at 12× so we don't amplify hiss into a hurricane
-                # on a hot mic. Override via JARVIS_STT_TARGET_PEAK
-                # (0 disables) for tuning.
-                target_peak = int(os.getenv("JARVIS_STT_TARGET_PEAK", "19660"))
-                peak = int(np.max(np.abs(pcm_block))) or 1
-                if target_peak > 0 and peak < target_peak:
-                    gain = min(12.0, target_peak / peak)
-                    boosted = (pcm_block.astype(np.int32) * gain).clip(
-                        -32768, 32767
-                    ).astype(np.int16)
-                    print(f"[MIC] pre-STT gain ×{gain:.1f} (peak {peak} → "
-                          f"{int(np.max(np.abs(boosted)))})")
-                    pcm_block = boosted
-                pcm = pcm_block.tobytes()
-                wav = stt._pcm_to_wav(pcm, sample_rate=SAMPLE_RATE)  # noqa: SLF001
+            if not in_speech:
+                pre_roll.append(block)
+                if rms > SPEECH_RMS_THRESHOLD:
+                    speech_seed += 1
+                    if speech_seed >= SPEECH_SEED_BLOCKS:
+                        in_speech = True
+                        speech_seed = 0
+                        buf = list(pre_roll)        # keep the pre-roll
+                        buf.append(block)
+                        silence_blocks = 0
+                        print("[MIC] speech started")
+                else:
+                    # A single quiet block resets the seed run — that's
+                    # what filters keyboard clicks (10-30 ms peaks with
+                    # long quiet gaps) from triggering speech onset.
+                    speech_seed = 0
+                continue
+
+            # In-speech: keep accumulating, watch for sustained silence.
+            buf.append(block)
+            if rms < SILENCE_RMS_THRESHOLD:
+                silence_blocks += 1
+            else:
+                silence_blocks = 0
+
+            end_by_silence = silence_blocks >= silence_blocks_to_end
+            end_by_cap = len(buf) >= max_speech_blocks
+            if not (end_by_silence or end_by_cap):
+                continue
+
+            # Segment closed — transcribe.
+            in_speech = False
+            if len(buf) - silence_blocks < min_speech_blocks:
+                # Too short to be real speech. Drop and reset.
                 buf = []
                 silence_blocks = 0
                 pre_roll.clear()
+                print("[MIC] (segment too short, ignored)")
+                continue
 
-                t_e2e = time.monotonic()
-                try:
-                    transcript = stt.transcribe(wav, sample_rate=SAMPLE_RATE)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[JARVIS] transcribe error: {exc}")
-                    transcript = ""
-                print(f"[TIMING] transcribe end-to-end: "
-                      f"{(time.monotonic() - t_e2e)*1000:.0f}ms")
+            segment_s = BLOCK_S * len(buf)
+            print(f"[MIC] segment closed ({segment_s:.1f}s) — transcribing…")
+            _emit_state("transcribing")
+            pcm_block = np.concatenate(buf)
+            # Pre-STT gain: Apple Speech.framework rejects quiet
+            # audio with "recognition error: Retry" even when our
+            # VAD considered the segment speech. We normalise the
+            # segment toward a known target peak (60 % of int16
+            # full-scale) so Apple sees a hearty signal. Cap the
+            # gain at 12× so we don't amplify hiss into a hurricane
+            # on a hot mic. Override via JARVIS_STT_TARGET_PEAK
+            # (0 disables) for tuning.
+            target_peak = int(os.getenv("JARVIS_STT_TARGET_PEAK", "19660"))
+            peak = int(np.max(np.abs(pcm_block))) or 1
+            if target_peak > 0 and peak < target_peak:
+                gain = min(12.0, target_peak / peak)
+                boosted = (pcm_block.astype(np.int32) * gain).clip(
+                    -32768, 32767
+                ).astype(np.int16)
+                print(f"[MIC] pre-STT gain ×{gain:.1f} (peak {peak} → "
+                      f"{int(np.max(np.abs(boosted)))})")
+                pcm_block = boosted
+            pcm = pcm_block.tobytes()
+            wav = stt._pcm_to_wav(pcm, sample_rate=SAMPLE_RATE)  # noqa: SLF001
+            buf = []
+            silence_blocks = 0
+            pre_roll.clear()
 
-                if not transcript:
-                    continue
-                if stt.looks_like_hallucination(transcript):
-                    print(f"[JARVIS] (whisper hallucination, ignored): {transcript!r}")
-                    continue
+            t_e2e = time.monotonic()
+            try:
+                transcript = stt.transcribe(wav, sample_rate=SAMPLE_RATE)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[JARVIS] transcribe error: {exc}")
+                transcript = ""
+            print(f"[TIMING] transcribe end-to-end: "
+                  f"{(time.monotonic() - t_e2e)*1000:.0f}ms")
 
-                # Snapshot busy state — used by several branches below.
-                brain_alive = brain_thread is not None and brain_thread.is_alive()
-                busy = brain_alive or (not tts.is_idle())
+            if not transcript:
+                continue
+            if stt.looks_like_hallucination(transcript):
+                print(f"[JARVIS] (whisper hallucination, ignored): {transcript!r}")
+                continue
 
-                # ─── KILL SWITCH / RESUME ──────────────────────────────────
-                # "Jarvis halt" / "Notaus" → disarm the whole mac_control
-                # surface. Distinct from plain stop phrases (which only
-                # barge in) — kill_switch stays set until "Jarvis weiter".
-                if stt.is_kill_switch_phrase(transcript):
-                    from .mac_control import kill_switch as _ks
-                    _ks.trigger(f"voice: {transcript!r}")
+            # Snapshot busy state — used by several branches below.
+            brain_alive = brain_thread is not None and brain_thread.is_alive()
+            busy = brain_alive or (not tts.is_idle())
+
+            # ─── KILL SWITCH / RESUME ──────────────────────────────────
+            # "Jarvis halt" / "Notaus" → disarm the whole mac_control
+            # surface. Distinct from plain stop phrases (which only
+            # barge in) — kill_switch stays set until "Jarvis weiter".
+            if stt.is_kill_switch_phrase(transcript):
+                from .mac_control import kill_switch as _ks
+                _ks.trigger(f"voice: {transcript!r}")
+                brain_cancel.set()
+                tts.stop()
+                tts.speak("Kill-Switch aktiv. Sag 'Jarvis weiter' zum Fortfahren.")
+                _drain(audio_q)
+                continue
+            if stt.is_resume_phrase(transcript):
+                from .mac_control import kill_switch as _ks
+                if _ks.is_set():
+                    _ks.resume()
+                    tts.speak("Wieder aktiv.")
+                continue
+
+            # ─── STOP / END PHRASE always wins ─────────────────────────
+            # "Stop", "Halt", "Warte", … cut JARVIS off mid-flight.
+            # End phrases ("okay das war's", "tschüss", …) also exit
+            # follow-up mode. starts_with_stop_phrase catches Whisper
+            # variants (stoppt, stoppen, "stop hör auf", "ok halt").
+            if stt.is_stop_phrase(transcript) or stt.starts_with_stop_phrase(transcript):
+                is_end = stt.is_end_phrase(transcript)
+                if busy:
+                    print(f"[JARVIS] stop heard mid-flight: {transcript!r}")
                     brain_cancel.set()
                     tts.stop()
-                    tts.speak("Kill-Switch aktiv. Sag 'Jarvis weiter' zum Fortfahren.")
-                    _drain(audio_q)
-                    continue
-                if stt.is_resume_phrase(transcript):
-                    from .mac_control import kill_switch as _ks
-                    if _ks.is_set():
-                        _ks.resume()
-                        tts.speak("Wieder aktiv.")
-                    continue
-
-                # ─── STOP / END PHRASE always wins ─────────────────────────
-                # "Stop", "Halt", "Warte", … cut JARVIS off mid-flight.
-                # End phrases ("okay das war's", "tschüss", …) also exit
-                # follow-up mode. starts_with_stop_phrase catches Whisper
-                # variants (stoppt, stoppen, "stop hör auf", "ok halt").
-                if stt.is_stop_phrase(transcript) or stt.starts_with_stop_phrase(transcript):
-                    is_end = stt.is_end_phrase(transcript)
-                    if busy:
-                        print(f"[JARVIS] stop heard mid-flight: {transcript!r}")
-                        brain_cancel.set()
-                        tts.stop()
-                    else:
-                        print(f"[JARVIS] stop heard while idle: {transcript!r}")
-                    if is_end:
-                        followup_until = 0.0
-                        if not busy:
-                            # Quietly acknowledge the deliberate goodbye.
-                            tts.speak("Alles klar. Bis später.")
-                    _drain(audio_q)
-                    continue
-
-                # ─── BUSY safety net ───────────────────────────────────────
-                # The top-of-loop busy_now guard already drops audio
-                # while JARVIS is talking/thinking, so reaching this
-                # check usually means the brain became busy *during*
-                # transcription (eg. a parallel /chat HTTP request).
-                # Drop the transcript so we don't stack work.
-                if busy:
-                    print(f"[JARVIS] busy — ignoring: {transcript!r}")
-                    continue
-
-                # ─── Follow-up window check ────────────────────────────────
-                now = time.monotonic()
-                in_followup = followup_window > 0 and now < followup_until
-                if followup_until and not in_followup:
-                    print("[JARVIS] follow-up window lapsed — listening for "
-                          f"wake word again ({settings.WAKE_WORD!r})")
-                    followup_until = 0.0
-
-                # ─── Command extraction ────────────────────────────────────
-                if in_followup:
-                    # Every utterance counts. Strip the wake word if the
-                    # user accidentally said "Jarvis" again.
-                    command = (
-                        stt.strip_wake_word(transcript)
-                        if stt.has_wake_word(transcript)
-                        else transcript
-                    )
-                    print(f"[JARVIS] (follow-up) heard={transcript!r}")
                 else:
-                    # Idle: only react to the wake word.
-                    if not stt.has_wake_word(transcript):
-                        print(f"[JARVIS] (no wake word) heard: {transcript!r}")
-                        continue
-                    command = stt.strip_wake_word(transcript)
-                    print(f"[JARVIS] wake word fired. heard={transcript!r}")
-                    if not command:
-                        # Just "Jarvis" — confirm and enter follow-up mode.
-                        tts.speak("Ja?")
-                        if followup_window > 0:
-                            followup_until = time.monotonic() + followup_window
-                        continue
+                    print(f"[JARVIS] stop heard while idle: {transcript!r}")
+                if is_end:
+                    followup_until = 0.0
+                    if not busy:
+                        # Quietly acknowledge the deliberate goodbye.
+                        tts.speak("Alles klar. Bis später.")
+                _drain(audio_q)
+                continue
 
-                if not command.strip():
-                    # Empty-after-strip — refresh the window and listen on.
+            # ─── BUSY safety net ───────────────────────────────────────
+            # The top-of-loop busy_now guard already drops audio
+            # while JARVIS is talking/thinking, so reaching this
+            # check usually means the brain became busy *during*
+            # transcription (eg. a parallel /chat HTTP request).
+            # Drop the transcript so we don't stack work.
+            if busy:
+                print(f"[JARVIS] busy — ignoring: {transcript!r}")
+                continue
+
+            # ─── Follow-up window check ────────────────────────────────
+            now = time.monotonic()
+            in_followup = followup_window > 0 and now < followup_until
+            if followup_until and not in_followup:
+                print("[JARVIS] follow-up window lapsed — listening for "
+                      f"wake word again ({settings.WAKE_WORD!r})")
+                followup_until = 0.0
+
+            # ─── Command extraction ────────────────────────────────────
+            if in_followup:
+                # Every utterance counts. Strip the wake word if the
+                # user accidentally said "Jarvis" again.
+                command = (
+                    stt.strip_wake_word(transcript)
+                    if stt.has_wake_word(transcript)
+                    else transcript
+                )
+                print(f"[JARVIS] (follow-up) heard={transcript!r}")
+            else:
+                # Idle: only react to the wake word.
+                if not stt.has_wake_word(transcript):
+                    print(f"[JARVIS] (no wake word) heard: {transcript!r}")
+                    continue
+                command = stt.strip_wake_word(transcript)
+                print(f"[JARVIS] wake word fired. heard={transcript!r}")
+                if not command:
+                    # Just "Jarvis" — confirm and enter follow-up mode.
+                    tts.speak("Ja?")
                     if followup_window > 0:
                         followup_until = time.monotonic() + followup_window
                     continue
 
-                # ─── Dispatch brain in worker thread ───────────────────────
-                # We do NOT block here — the main loop keeps pumping audio
-                # so the user can say "Stop" mid-reply.
-                print(f"[CLIENT: MacBook] [YOU·voice] {command}")
-                _emit_user_message(command)
-                _emit_state("thinking")
-                brain_cancel.clear()
-                brain_thread = threading.Thread(
-                    target=_brain_work,
-                    args=(command, brain_cancel),
-                    name="jarvis-brain",
-                    daemon=True,
-                )
-                brain_thread.start()
-
-                # Extend the follow-up window optimistically.
+            if not command.strip():
+                # Empty-after-strip — refresh the window and listen on.
                 if followup_window > 0:
                     followup_until = time.monotonic() + followup_window
+                continue
+
+            # ─── Dispatch brain in worker thread ───────────────────────
+            # We do NOT block here — the main loop keeps pumping audio
+            # so the user can say "Stop" mid-reply.
+            print(f"[CLIENT: MacBook] [YOU·voice] {command}")
+            _emit_user_message(command)
+            _emit_state("thinking")
+            brain_cancel.clear()
+            brain_thread = threading.Thread(
+                target=_brain_work,
+                args=(command, brain_cancel),
+                name="jarvis-brain",
+                daemon=True,
+            )
+            brain_thread.start()
+
+            # Extend the follow-up window optimistically.
+            if followup_window > 0:
+                followup_until = time.monotonic() + followup_window
     finally:
         # 1) Close the duplex stream FIRST so the orange mic indicator
         #    drops the moment the user hits the quit shortcut. Even if
