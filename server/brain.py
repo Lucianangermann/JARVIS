@@ -326,6 +326,10 @@ class Brain:
         # short-circuit below falls through to Claude.
         self.vision = None  # type: ignore[assignment]
 
+        # Optional smart home layer. Attached by main.py's lifespan
+        # after SmartHomeManager.start() completes. None = no devices.
+        self.smarthome = None  # type: ignore[assignment]
+
         self._tools: list[dict[str, Any]] = [
             _system_command_tool(),
             # Built-in Anthropic web search. Free tier on Haiku is generous.
@@ -344,6 +348,12 @@ class Brain:
         # instead of crashing the turn.
         from .tools.vision_tools import vision_tools
         self._tools.extend(vision_tools())
+
+        # Smart Home tool. Registered unconditionally; the dispatcher
+        # returns a clean error when smarthome is None so Claude can
+        # still finish the turn gracefully.
+        from .smarthome.tools.smarthome_tools import smarthome_tool
+        self._tools.append(smarthome_tool())
 
         # Long-term memory + self-learning. Owns short-term history (was
         # _histories), error history, profile, and the dynamic system-
@@ -596,6 +606,8 @@ class Brain:
                         result, is_error = self._exec_vision_tool(
                             block.name, block.input,
                         )
+                    elif block.name == "smarthome_control":
+                        result, is_error = self._exec_smarthome_tool(block.input)
                     else:
                         result = f"Unknown tool {block.name!r}."
                         is_error = True
@@ -968,6 +980,39 @@ class Brain:
                     else mac_dispatcher.cancel(pid))
         is_error = envelope.get("status") == "rejected"
         return (json.dumps(envelope, ensure_ascii=False), is_error)
+
+
+    def _exec_smarthome_tool(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        """Dispatch a smarthome_control tool_use to the SmartHomeManager.
+
+        Brain runs in a worker thread (asyncio.to_thread), so we
+        schedule the coroutine on the main event loop via
+        run_coroutine_threadsafe and wait for the result synchronously.
+        Falls back to asyncio.run() if the main loop isn't captured yet
+        (e.g. unit tests)."""
+        import asyncio as _aio
+        from .smarthome.tools.smarthome_tools import execute_smarthome_tool
+        from . import events as _events
+        inp = tool_input or {}
+        try:
+            coro = execute_smarthome_tool(
+                self.smarthome,
+                action=inp.get("action", ""),
+                command=inp.get("command"),
+                scene=inp.get("scene"),
+                device=inp.get("device"),
+                level=inp.get("level"),
+                color=inp.get("color"),
+            )
+            main_loop = _events._loop
+            if main_loop is not None and main_loop.is_running():
+                future = _aio.run_coroutine_threadsafe(coro, main_loop)
+                result = future.result(timeout=15)
+            else:
+                result = _aio.run(coro)
+            return (result, False)
+        except Exception as exc:  # noqa: BLE001
+            return (f"Smart Home Fehler: {exc}", True)
 
 
 _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n+")

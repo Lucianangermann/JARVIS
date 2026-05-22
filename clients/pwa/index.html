@@ -84,10 +84,11 @@
 
   <!-- ── QUICK ACTIONS ───────────────────────────────────────── -->
   <nav class="action-bar">
-    <button class="hex-btn" id="act-settings" type="button" aria-label="Settings">⚙</button>
-    <button class="hex-btn" id="act-search"   type="button" aria-label="Nachricht tippen">⌨</button>
-    <button class="hex-btn" id="act-camera"   type="button" aria-label="Kamera">📷</button>
-    <button class="hex-btn" id="act-music"    type="button" aria-label="Music">♪</button>
+    <button class="hex-btn" id="act-settings"   type="button" aria-label="Settings">⚙</button>
+    <button class="hex-btn" id="act-search"     type="button" aria-label="Nachricht tippen">⌨</button>
+    <button class="hex-btn" id="act-camera"     type="button" aria-label="Kamera">📷</button>
+    <button class="hex-btn" id="act-music"      type="button" aria-label="Music">♪</button>
+    <button class="hex-btn" id="act-smarthome"  type="button" aria-label="Smart Home">🏠</button>
     <span class="tier-indicator" title="Permission tier" aria-label="Tier indicator">
       <span class="tier-dot"></span>
       <span class="tier-dot"></span>
@@ -174,6 +175,98 @@
     </div>
   </aside>
 
+  <!-- ── SMART HOME PANEL (hidden, slides up) ───────────────── -->
+  <aside id="smarthome-panel" class="slide-panel" aria-hidden="true">
+    <div class="panel-inner">
+      <h2>Smart Home</h2>
+
+      <!-- Devices section -->
+      <div class="sh-section">
+        <div class="sh-device-row">
+          <span class="sh-device-name">💡 Lichter</span>
+          <div class="sh-controls">
+            <button class="sh-btn" id="sh-lights-on"  type="button">AN</button>
+            <button class="sh-btn" id="sh-lights-off" type="button">AUS</button>
+          </div>
+        </div>
+        <div class="sh-device-row">
+          <span class="sh-device-name">🔌 Steckdosen</span>
+          <div class="sh-controls">
+            <button class="sh-btn" id="sh-plugs-on"  type="button">AN</button>
+            <button class="sh-btn" id="sh-plugs-off" type="button">AUS</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Device selector -->
+      <div class="sh-section">
+        <label class="sh-label">Gerät
+          <select id="sh-device-select" class="sh-select">
+            <option value="">Alle Lichter</option>
+          </select>
+        </label>
+      </div>
+
+      <!-- Brightness slider -->
+      <div class="sh-section">
+        <label class="sh-label">
+          Helligkeit
+          <input id="sh-brightness" type="range" min="0" max="100" value="70" class="sh-slider">
+          <span id="sh-brightness-val">70%</span>
+        </label>
+        <button class="sh-btn sh-apply" id="sh-brightness-apply" type="button">Anwenden</button>
+      </div>
+
+      <!-- Color buttons -->
+      <div class="sh-section">
+        <div class="sh-label">Farbe</div>
+        <div class="sh-color-row">
+          <button class="sh-color" data-color="rot"    style="background:#ff0000" title="Rot"></button>
+          <button class="sh-color" data-color="gelb"   style="background:#ffdc00" title="Gelb"></button>
+          <button class="sh-color" data-color="grün"   style="background:#00c800" title="Grün"></button>
+          <button class="sh-color" data-color="cyan"   style="background:#00dcff" title="Cyan"></button>
+          <button class="sh-color" data-color="blau"   style="background:#0000ff" title="Blau"></button>
+          <button class="sh-color" data-color="lila"   style="background:#8000c8" title="Lila"></button>
+          <button class="sh-color" data-color="pink"   style="background:#ff64b4" title="Pink"></button>
+          <button class="sh-color" data-color="orange" style="background:#ff8c00" title="Orange"></button>
+          <button class="sh-color" data-color="weiß"   style="background:#ffffff;border:1px solid #444" title="Weiß"></button>
+        </div>
+      </div>
+
+      <!-- Scenes -->
+      <div class="sh-section">
+        <div class="sh-label">Szenen</div>
+        <div class="sh-scene-grid">
+          <button class="sh-scene-btn" data-scene="kinoabend"   type="button">🎬 Kino</button>
+          <button class="sh-scene-btn" data-scene="arbeiten"    type="button">💼 Arbeit</button>
+          <button class="sh-scene-btn" data-scene="entspannen"  type="button">😌 Relax</button>
+          <button class="sh-scene-btn" data-scene="gute_nacht"  type="button">🌙 Nacht</button>
+          <button class="sh-scene-btn" data-scene="party"       type="button">🎉 Party</button>
+          <button class="sh-scene-btn" data-scene="gaming"      type="button">🎮 Gaming</button>
+          <button class="sh-scene-btn" data-scene="lesen"       type="button">📚 Lesen</button>
+          <button class="sh-scene-btn" data-scene="fokus"       type="button">🎯 Fokus</button>
+          <button class="sh-scene-btn" data-scene="romantisch"  type="button">❤️ Romantisch</button>
+          <button class="sh-scene-btn" data-scene="alles_aus"   type="button">⚫ Alles aus</button>
+        </div>
+      </div>
+
+      <!-- Platform status -->
+      <div class="sh-section" id="sh-platforms">
+        <div class="sh-label">Plattformen</div>
+        <div id="sh-platform-list" class="sh-platform-list">
+          <span class="sh-loading">Lade...</span>
+        </div>
+      </div>
+
+      <!-- Status message -->
+      <p id="sh-status" class="sh-status"></p>
+
+      <div class="row">
+        <button id="sh-close" type="button" class="action-btn">Schließen</button>
+      </div>
+    </div>
+  </aside>
+
   <!-- ── TYPE-INPUT PANEL (slides up from bottom) ────────────── -->
   <aside id="text-panel" class="slide-panel" aria-hidden="true">
     <div class="panel-inner">
@@ -195,6 +288,7 @@
   <script type="module" src="scripts/visualizer.js"></script>
   <script type="module" src="scripts/ptt.js"></script>
   <script type="module" src="scripts/camera.js"></script>
+  <script type="module" src="scripts/smarthome.js"></script>
   <script type="module" src="scripts/app.js"></script>
 
   <!-- Register the service worker only when running over a secure

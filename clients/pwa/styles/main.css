@@ -202,3 +202,119 @@ button:focus-visible, input:focus-visible {
   color: rgba(0, 212, 255, 0.6);
   text-transform: uppercase;
 }
+
+/* ── Smart Home Panel ──────────────────────────────────────────── */
+.sh-section {
+  border-top: 1px solid rgba(0, 212, 255, 0.12);
+  padding: 10px 0;
+}
+.sh-label {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: rgba(0, 212, 255, 0.6);
+  margin-bottom: 8px;
+}
+.sh-device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.sh-device-name {
+  font-size: 11px;
+  letter-spacing: 0.15em;
+}
+.sh-controls { display: flex; gap: 6px; }
+.sh-btn {
+  background: rgba(0, 212, 255, 0.08);
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  color: var(--jarvis-primary);
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.sh-btn:active { background: rgba(0, 212, 255, 0.25); }
+.sh-btn.sh-apply {
+  margin-top: 6px;
+  width: 100%;
+}
+.sh-select {
+  width: 100%;
+  background: rgba(0, 212, 255, 0.06);
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  color: var(--jarvis-primary);
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  margin-top: 4px;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+.sh-select option {
+  background: #00080F;
+  color: var(--jarvis-primary);
+}
+.sh-slider {
+  width: 100%;
+  accent-color: var(--jarvis-primary);
+  margin: 6px 0;
+}
+.sh-color-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sh-color {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 212, 255, 0.3);
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s;
+}
+.sh-color:active { transform: scale(0.9); border-color: #fff; }
+.sh-scene-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.sh-scene-btn {
+  background: rgba(0, 102, 255, 0.1);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  color: var(--jarvis-primary);
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  padding: 10px 6px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s;
+  text-transform: none;
+}
+.sh-scene-btn:active { background: rgba(0, 102, 255, 0.35); }
+.sh-platform-list { display: flex; flex-direction: column; gap: 4px; }
+.sh-platform-item {
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  color: rgba(0, 212, 255, 0.8);
+}
+.sh-loading {
+  font-size: 10px;
+  color: rgba(0, 212, 255, 0.4);
+}
+.sh-status {
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  color: var(--jarvis-primary);
+  min-height: 1.2em;
+  margin: 4px 0 0;
+  text-transform: none;
+}

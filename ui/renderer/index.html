@@ -8,7 +8,11 @@
                  font-src https://fonts.gstatic.com;
                  img-src 'self' data:;
                  script-src 'self';
-                 connect-src 'self' ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:*;" />
+                 connect-src 'self'
+                   ws://127.0.0.1:* ws://localhost:*
+                   wss://127.0.0.1:* wss://localhost:*
+                   http://127.0.0.1:* http://localhost:*
+                   https://127.0.0.1:* https://localhost:*;" />
   <title>JARVIS</title>
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -204,6 +208,38 @@
         </div>
       </div>
 
+      <!-- Smart Home mini-panel (shown/hidden by ⌂ button) -->
+      <div id="sh-panel" class="sh-panel" hidden>
+        <div class="sh-row">
+          <button class="sh-btn" id="sh-all-on"  type="button">💡 AN</button>
+          <button class="sh-btn" id="sh-all-off" type="button">💡 AUS</button>
+          <div class="sh-bright-row">
+            <button class="sh-bright" data-level="25"  type="button">25%</button>
+            <button class="sh-bright" data-level="50"  type="button">50%</button>
+            <button class="sh-bright" data-level="80"  type="button">80%</button>
+            <button class="sh-bright" data-level="100" type="button">MAX</button>
+          </div>
+          <button class="sh-close-btn" id="sh-panel-close" type="button">✕</button>
+        </div>
+        <div class="sh-row">
+          <button class="sh-color" data-color="weiß"   style="background:#fff;border-color:#999" title="Weiß"></button>
+          <button class="sh-color" data-color="rot"     style="background:#f00" title="Rot"></button>
+          <button class="sh-color" data-color="gelb"   style="background:#ffd700" title="Gelb"></button>
+          <button class="sh-color" data-color="grün"   style="background:#00c800" title="Grün"></button>
+          <button class="sh-color" data-color="cyan"   style="background:#00dcff" title="Cyan"></button>
+          <button class="sh-color" data-color="blau"   style="background:#0044ff" title="Blau"></button>
+          <button class="sh-color" data-color="lila"   style="background:#8000c8" title="Lila"></button>
+          <button class="sh-color" data-color="orange" style="background:#ff8c00" title="Orange"></button>
+        </div>
+        <div class="sh-row sh-scenes">
+          <button class="sh-scene-btn" data-scene="entspannen" type="button">😌 Relax</button>
+          <button class="sh-scene-btn" data-scene="arbeiten"   type="button">💼 Arbeit</button>
+          <button class="sh-scene-btn" data-scene="kinoabend"  type="button">🎬 Kino</button>
+          <button class="sh-scene-btn" data-scene="gute_nacht" type="button">🌙 Nacht</button>
+          <button class="sh-scene-btn" data-scene="party"      type="button">🎉 Party</button>
+        </div>
+      </div>
+
       <!-- Bottom row: action buttons + input -->
       <div class="bottom-row">
         <div class="hex-buttons no-drag">
@@ -226,5 +262,6 @@
   <script type="module" src="scripts/emblem.js"></script>
   <script type="module" src="scripts/visualizer.js"></script>
   <script type="module" src="scripts/app.js"></script>
+  <!-- smarthome.js is imported as a module by app.js — no separate tag needed -->
 </body>
 </html>

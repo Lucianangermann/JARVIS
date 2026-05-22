@@ -61,6 +61,16 @@ except Exception as _vision_exc:  # noqa: BLE001
     VisionManager = None  # type: ignore[assignment,misc]
     _VISION_OK = False
 
+# Smart Home layer — import directly from the module, not via __init__,
+# so the brain's smarthome_tools import doesn't cascade into this.
+try:
+    from .smarthome.smarthome_manager import SmartHomeManager
+    _SMARTHOME_OK = True
+except Exception as _smarthome_exc:  # noqa: BLE001
+    print(f"[JARVIS] smarthome module unavailable: {_smarthome_exc}")
+    SmartHomeManager = None  # type: ignore[assignment,misc]
+    _SMARTHOME_OK = False
+
 # stt and tts are optional — the voice stack (whisper, pyttsx3, …) may not
 # be installed. The text endpoints work without them.
 try:
@@ -176,6 +186,30 @@ async def lifespan(app: FastAPI):
             print(f"[VISION] init failed, continuing without vision: {exc}")
     else:
         print("[VISION] disabled (deps missing or import failed)")
+
+    # Smart Home layer. Wired immediately; adapter connections run in
+    # background so the server becomes ready without waiting for API
+    # calls (Govee, HA, etc.) that may take several seconds.
+    if _SMARTHOME_OK and SmartHomeManager is not None:
+        try:
+            smarthome = SmartHomeManager()
+            app.state.smarthome = smarthome
+            app.state.brain.smarthome = smarthome
+
+            async def _start_smarthome(mgr: "SmartHomeManager") -> None:
+                try:
+                    await mgr.start()
+                    print("[SMARTHOME] wired to brain ✓")
+                except Exception as _exc:  # noqa: BLE001
+                    import traceback as _tb
+                    print(f"[SMARTHOME] init failed — smart home disabled: {_exc}")
+                    _tb.print_exc()
+
+            asyncio.create_task(_start_smarthome(smarthome))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[SMARTHOME] could not create manager: {exc}")
+    else:
+        print("[SMARTHOME] disabled (module unavailable)")
 
     # On macOS, periodically drain the main-thread NSRunLoop so Cocoa
     # framework callbacks (Speech.framework's SFSpeechRecognizer in
@@ -979,6 +1013,174 @@ def vision_translate(
         "translated":       result.translated,
         "target_language":  result.target_language,
     }
+
+
+# --- Smart Home API ------------------------------------------------------- #
+
+
+def _smarthome(request: Request) -> Any:
+    return getattr(request.app.state, "smarthome", None)
+
+
+class SmartHomeControlRequest(BaseModel):
+    action: str = Field(..., description="turn_on/turn_off/brightness/color/scene/command")
+    device: str | None = None
+    scene: str | None = None
+    command: str | None = None
+    level: int | None = Field(default=None, ge=0, le=100)
+    color: str | None = None
+
+
+class SmartHomeSceneRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+
+
+class SmartHomeLocationRequest(BaseModel):
+    lat: float
+    lon: float
+
+
+class SmartHomeAutomationUpdateRequest(BaseModel):
+    enabled: bool
+
+
+@app.get("/smarthome/status")
+async def smarthome_status(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sh = _smarthome(request)
+    if sh is None:
+        raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
+    return sh.status()
+
+
+@app.get("/smarthome/devices")
+async def smarthome_devices(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sh = _smarthome(request)
+    if sh is None:
+        raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
+    return {"devices": sh.get_all_devices()}
+
+
+@app.post("/smarthome/devices/refresh")
+async def smarthome_refresh(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sh = _smarthome(request)
+    if sh is None:
+        raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
+    await sh.registry.refresh_all()
+    return {"ok": True, "devices": len(sh.registry.get_all())}
+
+
+@app.post("/smarthome/control")
+async def smarthome_control(
+    payload: SmartHomeControlRequest,
+    request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sh = _smarthome(request)
+    if sh is None:
+        raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
+    from .smarthome.tools.smarthome_tools import execute_smarthome_tool
+    result = await execute_smarthome_tool(
+        sh,
+        action=payload.action,
+        command=payload.command,
+        scene=payload.scene,
+        device=payload.device,
+        level=payload.level,
+        color=payload.color,
+    )
+    return {"result": result}
+
+
+@app.get("/smarthome/scenes")
+async def smarthome_scenes(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sh = _smarthome(request)
+    if sh is None:
+        raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
+    return {"scenes": sh.get_scenes()}
+
+
+@app.post("/smarthome/scenes/run")
+async def smarthome_run_scene(
+    payload: SmartHomeSceneRequest,
+    request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sh = _smarthome(request)
+    if sh is None:
+        raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
+    result = await sh.run_scene(payload.name)
+    return {"result": result}
+
+
+@app.get("/smarthome/automations")
+async def smarthome_automations(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sh = _smarthome(request)
+    if sh is None:
+        raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
+    return {"automations": sh.get_automations()}
+
+
+@app.put("/smarthome/automations/{automation_id}")
+async def smarthome_update_automation(
+    automation_id: str,
+    payload: SmartHomeAutomationUpdateRequest,
+    request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sh = _smarthome(request)
+    if sh is None:
+        raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
+    if sh._automations is None:
+        raise HTTPException(status_code=503, detail="Automations nicht geladen.")
+    ok = sh._automations.enable(automation_id, payload.enabled)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Automation nicht gefunden.")
+    return {"ok": True, "id": automation_id, "enabled": payload.enabled}
+
+
+@app.get("/smarthome/energy")
+async def smarthome_energy(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sh = _smarthome(request)
+    if sh is None:
+        raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
+    return await sh.get_energy()
+
+
+@app.post("/smarthome/location")
+async def smarthome_location(
+    payload: SmartHomeLocationRequest,
+    request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sh = _smarthome(request)
+    if sh is None:
+        raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
+    return await sh.update_location(payload.lat, payload.lon)
+
+
+@app.post("/smarthome/adapters/{platform}/enable")
+async def smarthome_enable_adapter(
+    platform: str,
+    request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sh = _smarthome(request)
+    if sh is None:
+        raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
+    result = await sh.enable_adapter(platform)
+    return {"result": result}
 
 
 # --- Web UI --------------------------------------------------------------- #

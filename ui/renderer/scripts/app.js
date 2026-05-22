@@ -17,6 +17,7 @@ import { setVisualizerState } from "./visualizer.js";
 import * as ws from "./ws.js";
 import * as perms from "./permissions.js";
 import * as pending from "./pending.js";
+import * as smarthome from "./smarthome.js";
 
 const STATES = ["idle", "active", "speaking", "processing"];
 
@@ -346,9 +347,11 @@ document.querySelectorAll(".hex-btn").forEach((btn) => {
         break;
       case "music":
       case "search":
-      case "home":
-        // Placeholder — Phase 2 will hook to /chat or /confirm.
+        // Placeholder — will hook to /chat or /confirm in a future phase.
         addMessage("you", `[${action.toUpperCase()}] (not wired yet)`);
+        break;
+      case "home":
+        // Handled by smarthome.js (toggles the sh-panel).
         break;
     }
   });
@@ -447,6 +450,9 @@ window.jarvis?.onInterrupt?.(() => {
     console.warn("[JARVIS UI] interrupt failed:", err);
   });
 });
+
+// ---- smart home mini-panel ----------------------------------------
+smarthome.init();
 
 // ---- seed the UI with some content so first paint isn't empty ----
 
