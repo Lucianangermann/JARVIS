@@ -1017,6 +1017,104 @@ def vision_translate(
 
 # --- Smart Home API ------------------------------------------------------- #
 
+# TTS confirmation messages for smart home actions.
+_SCENE_TTS: dict[str, str] = {
+    "alles_an":        "Alle Lichter angeschaltet.",
+    "alles_aus":       "Alle Lichter ausgeschaltet.",
+    "kinoabend":       "Kino Modus aktiviert.",
+    "gute_nacht":      "Gute Nacht. Lichter werden langsam gedimmt.",
+    "guten_morgen":    "Guten Morgen. Sonnenaufgang gestartet.",
+    "entspannen":      "Relax Modus aktiviert.",
+    "arbeiten":        "Arbeits Modus aktiviert.",
+    "party":           "Party Modus gestartet.",
+    "lesen":           "Lese Modus aktiviert.",
+    "fokus":           "Fokus Modus aktiviert.",
+    "gaming":          "Gaming Modus aktiviert.",
+    "romantisch":      "Romantik Modus aktiviert.",
+    "verlasse_haus":   "Tschüss. Alles ausgeschaltet.",
+    "ankunft_zuhause": "Willkommen zuhause.",
+}
+
+_COLOR_TTS: dict[str, str] = {
+    "rot": "Rot", "red": "Rot",
+    "grün": "Grün", "green": "Grün",
+    "blau": "Blau", "blue": "Blau",
+    "weiß": "Weiß", "weiss": "Weiß", "white": "Weiß",
+    "gelb": "Gelb", "yellow": "Gelb",
+    "orange": "Orange",
+    "lila": "Lila", "purple": "Lila",
+    "pink": "Pink",
+    "cyan": "Cyan",
+    "türkis": "Türkis",
+    "sonnenuntergang": "Sonnenuntergang",
+    "ozean": "Ozean",
+    "wald": "Wald",
+    "lagerfeuer": "Lagerfeuer",
+    "lavendel": "Lavendel",
+    "gold": "Gold",
+}
+
+
+def _smarthome_tts_text(
+    action: str,
+    command: str | None,
+    scene: str | None,
+    color: str | None,
+    level: int | None,
+    result: str,
+) -> str | None:
+    """Map a smarthome action to a short spoken confirmation, or None."""
+    import re as _re
+
+    if action == "scene" and scene:
+        return _SCENE_TTS.get(scene.lower().replace(" ", "_").replace("-", "_"))
+
+    if action == "turn_on":
+        return "Eingeschaltet."
+
+    if action == "turn_off":
+        return "Ausgeschaltet."
+
+    if action == "brightness" and level is not None:
+        return f"Helligkeit auf {level} Prozent."
+
+    if action == "color" and color:
+        label = _COLOR_TTS.get(color.lower(), color.capitalize())
+        return f"Farbe auf {label} gewechselt."
+
+    if action == "command" and command:
+        cmd = command.lower()
+        # Scene triggered internally — extract name from result string
+        m = _re.search(r"Szene '([^']+)' aktiviert", result)
+        if m:
+            tts = _SCENE_TTS.get(m.group(1))
+            if tts:
+                return tts
+        # Brightness pattern "X%"
+        for word in cmd.split():
+            if word.endswith("%") and word[:-1].isdigit():
+                return f"Helligkeit auf {word[:-1]} Prozent."
+        # Color
+        for key, label in _COLOR_TTS.items():
+            if key in cmd:
+                return f"Farbe auf {label} gewechselt."
+        # Power
+        if any(w in cmd for w in ("aus", "off", "ausschalten")):
+            return "Lichter ausgeschaltet."
+        if any(w in cmd for w in ("ein", "on", "einschalten", "anmachen")):
+            return "Lichter angeschaltet."
+        # "an" only at word boundary to avoid "anmachen" double-match
+        if _re.search(r"\ban\b", cmd):
+            return "Lichter angeschaltet."
+
+    return None
+
+
+def _speak_smarthome(text: str) -> None:
+    """Fire-and-forget TTS for smarthome confirmations (non-blocking)."""
+    if _VOICE_OK and tts is not None and text:
+        asyncio.get_event_loop().run_in_executor(None, tts.speak, text)
+
 
 def _smarthome(request: Request) -> Any:
     return getattr(request.app.state, "smarthome", None)
@@ -1094,6 +1192,12 @@ async def smarthome_control(
         level=payload.level,
         color=payload.color,
     )
+    tts_msg = _smarthome_tts_text(
+        payload.action, payload.command, payload.scene,
+        payload.color, payload.level, result,
+    )
+    if tts_msg:
+        _speak_smarthome(tts_msg)
     return {"result": result}
 
 
@@ -1117,6 +1221,9 @@ async def smarthome_run_scene(
     if sh is None:
         raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
     result = await sh.run_scene(payload.name)
+    tts_msg = _SCENE_TTS.get(payload.name.lower().replace(" ", "_").replace("-", "_"))
+    if tts_msg:
+        _speak_smarthome(tts_msg)
     return {"result": result}
 
 
