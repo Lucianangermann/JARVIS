@@ -4,7 +4,7 @@ from __future__ import annotations
 import subprocess
 
 
-def _script(code: str, timeout: float = 8.0) -> tuple[str, bool]:
+def _script(code: str, timeout: float = 20.0) -> tuple[str, bool]:
     try:
         p = subprocess.run(["osascript", "-e", code],
                            capture_output=True, text=True, timeout=timeout)
