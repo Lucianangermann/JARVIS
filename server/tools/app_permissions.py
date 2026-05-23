@@ -20,7 +20,37 @@ APPLE_FIRST_PARTY: frozenset[str] = frozenset({
     "Numbers", "Preview", "TextEdit", "Calculator", "Voice Memos", "Clock",
     "System Settings", "System Preferences", "Terminal", "Activity Monitor",
     "Automator", "Script Editor", "Shortcuts", "Home", "TV",
+    "Photo Booth", "QuickTime Player", "Dictionary", "Font Book",
+    "Image Capture", "Migration Assistant", "Disk Utility",
 })
+
+# German ↔ macOS app name aliases (user says → actual app name)
+APP_ALIASES: dict[str, str] = {
+    "kamera": "Photo Booth",
+    "camera": "Photo Booth",
+    "foto": "Photos",
+    "fotos": "Photos",
+    "musik": "Music",
+    "nachrichten": "Messages",
+    "kalender": "Calendar",
+    "erinnerungen": "Reminders",
+    "notizen": "Notes",
+    "einstellungen": "System Settings",
+    "systemeinstellungen": "System Settings",
+    "rechner": "Calculator",
+    "taschenrechner": "Calculator",
+    "vorschau": "Preview",
+    "finder": "Finder",
+    "terminal": "Terminal",
+    "wetter": "Weather",
+    "karten": "Maps",
+    "bücher": "Books",
+    "buecher": "Books",
+    "sprachmemos": "Voice Memos",
+    "uhr": "Clock",
+    "tv": "TV",
+    "news": "News",
+}
 
 
 def _load() -> dict[str, bool]:

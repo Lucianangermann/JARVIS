@@ -315,11 +315,18 @@ def _apple_tools() -> list[dict[str, Any]]:
             "description": (
                 "Open or close any macOS application, list currently running apps, "
                 "or approve a new third-party app with the user's password. "
-                "Apple first-party apps (Calendar, Mail, Music, Notes, Safari, "
-                "Reminders, Messages, etc.) are always allowed. Third-party apps "
-                "require password approval before first use — call action='approve' "
-                "with the password the user just provided. Once approved, the app "
-                "is remembered permanently."
+                "Apple first-party apps are always allowed without a password: "
+                "Calendar, Mail, Music, Notes, Safari, Reminders, Messages, Photos, "
+                "FaceTime, Photo Booth, Maps, Podcasts, News, Books, Preview, "
+                "QuickTime Player, TextEdit, Calculator, Voice Memos, Finder, TV, "
+                "System Settings, Terminal, Activity Monitor, Shortcuts, Home. "
+                "German name aliases are resolved automatically: "
+                "Kamera→Photo Booth, Musik→Music, Fotos→Photos, Kalender→Calendar, "
+                "Nachrichten→Messages, Notizen→Notes, Einstellungen→System Settings, "
+                "Rechner→Calculator, Vorschau→Preview, Karten→Maps, Wetter→Weather. "
+                "Third-party apps (Spotify, Chrome, VS Code, Notion, etc.) require "
+                "password approval — call action='approve' with the password the user "
+                "just provided. Once approved, the app is remembered permanently."
             ),
             "input_schema": {
                 "type": "object",
@@ -1181,11 +1188,13 @@ class Brain:
     # ── Apple app executors ────────────────────────────────────────────── #
 
     def _exec_macos_app(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
-        from .tools.app_permissions import is_approved, approve_app, revoke_app
+        from .tools.app_permissions import is_approved, approve_app, revoke_app, APP_ALIASES
         from .tools.macos_apps import open_app, close_app, list_running
         inp = tool_input or {}
         action = inp.get("action", "")
         app = inp.get("app_name", "")
+        # Resolve German / common aliases → real macOS app name
+        app = APP_ALIASES.get(app.lower(), app)
         if action == "list_running":
             apps = list_running()
             return ", ".join(apps) if apps else "Keine Apps im Vordergrund.", False
