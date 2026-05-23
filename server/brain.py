@@ -307,6 +307,153 @@ def _vision_action_for(text: str) -> str | None:
     return _VISION_TRIGGERS.get(text.lower().strip().strip(".!?,").strip())
 
 
+def _apple_tools() -> list[dict[str, Any]]:
+    """Tool schemas for macOS app control, Apple apps, and Safari."""
+    return [
+        {
+            "name": "macos_app",
+            "description": (
+                "Open or close any macOS application, list currently running apps, "
+                "or approve a new third-party app with the user's password. "
+                "Apple first-party apps (Calendar, Mail, Music, Notes, Safari, "
+                "Reminders, Messages, etc.) are always allowed. Third-party apps "
+                "require password approval before first use — call action='approve' "
+                "with the password the user just provided. Once approved, the app "
+                "is remembered permanently."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["open", "close", "list_running", "approve", "revoke"],
+                        "description": "open/close an app, list running apps, or approve/revoke a third-party app",
+                    },
+                    "app_name": {
+                        "type": "string",
+                        "description": "Exact macOS application name (e.g. 'Spotify', 'Notion'). Required for open/close/approve/revoke.",
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "User's JARVIS app password. Required only for action='approve'.",
+                    },
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "apple_reminders",
+            "description": (
+                "Read and manage Apple Reminders. List open reminders (optionally "
+                "filtered by list), create new reminders, and mark them complete."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "list_lists", "create", "complete"],
+                    },
+                    "title": {"type": "string", "description": "Reminder title (for create/complete)"},
+                    "list_name": {"type": "string", "description": "Reminders list name (optional filter)"},
+                    "due_date": {"type": "string", "description": "ISO datetime string e.g. '2026-05-25T09:00' (optional, for create)"},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "apple_music",
+            "description": (
+                "Control Apple Music: play, pause, skip tracks, set volume, "
+                "search and play by song/artist name, toggle shuffle, get current track."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["play", "pause", "next", "previous", "current",
+                                 "volume", "play_by_name", "shuffle_on", "shuffle_off", "state"],
+                    },
+                    "query": {"type": "string", "description": "Search query for play_by_name"},
+                    "level": {"type": "integer", "description": "Volume 0–100 (for action='volume')"},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "apple_notes",
+            "description": (
+                "Read and create Apple Notes. List notes, read a note by title, "
+                "create a new note, search note content, or append text to an existing note."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "read", "create", "search", "append"],
+                    },
+                    "title": {"type": "string", "description": "Note title (for read/create/append)"},
+                    "content": {"type": "string", "description": "Note body (for create/append)"},
+                    "query": {"type": "string", "description": "Search term (for search)"},
+                    "folder": {"type": "string", "description": "Notes folder name (optional)"},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "apple_mail",
+            "description": (
+                "Read and send emails via Apple Mail. List unread messages, "
+                "read a specific message by subject fragment, send an email, "
+                "or get the unread count."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list_unread", "read", "send", "unread_count"],
+                    },
+                    "to": {"type": "string", "description": "Recipient email address (for send)"},
+                    "subject": {"type": "string", "description": "Email subject (for send or read filter)"},
+                    "body": {"type": "string", "description": "Email body text (for send)"},
+                    "mailbox": {"type": "string", "description": "Mailbox name, default 'INBOX'"},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "safari_control",
+            "description": (
+                "Control Safari: open a URL, search the web (opens DuckDuckGo), "
+                "read the current page title/URL/text, navigate back/forward, "
+                "or open a new tab."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["open_url", "search", "current_url", "current_title",
+                                 "read_page", "back", "forward", "new_tab"],
+                    },
+                    "url": {"type": "string", "description": "URL to open (for open_url/new_tab)"},
+                    "query": {"type": "string", "description": "Search query (for action='search')"},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+    ]
+
+
 class Brain:
     """Conversation manager + agentic tool loop around Claude Haiku."""
 
@@ -354,6 +501,10 @@ class Brain:
         # still finish the turn gracefully.
         from .smarthome.tools.smarthome_tools import smarthome_tool
         self._tools.append(smarthome_tool())
+
+        # macOS app control + Apple app integrations (Calendar, Reminders,
+        # Music, Notes, Mail, Safari). Registered unconditionally.
+        self._tools.extend(_apple_tools())
 
         # Long-term memory + self-learning. Owns short-term history (was
         # _histories), error history, profile, and the dynamic system-
@@ -608,6 +759,18 @@ class Brain:
                         )
                     elif block.name == "smarthome_control":
                         result, is_error = self._exec_smarthome_tool(block.input)
+                    elif block.name == "macos_app":
+                        result, is_error = await self._exec_macos_app(block.input)
+                    elif block.name == "apple_reminders":
+                        result, is_error = self._exec_apple_reminders(block.input)
+                    elif block.name == "apple_music":
+                        result, is_error = self._exec_apple_music(block.input)
+                    elif block.name == "apple_notes":
+                        result, is_error = self._exec_apple_notes(block.input)
+                    elif block.name == "apple_mail":
+                        result, is_error = self._exec_apple_mail(block.input)
+                    elif block.name == "safari_control":
+                        result, is_error = self._exec_safari_control(block.input)
                     else:
                         result = f"Unknown tool {block.name!r}."
                         is_error = True
@@ -1013,6 +1176,182 @@ class Brain:
             return (result, False)
         except Exception as exc:  # noqa: BLE001
             return (f"Smart Home Fehler: {exc}", True)
+
+
+    # ── Apple app executors ────────────────────────────────────────────── #
+
+    async def _exec_macos_app(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        from .tools.app_permissions import is_approved, approve_app, revoke_app, list_approved
+        from .tools.macos_apps import open_app, close_app, list_running
+        inp = tool_input or {}
+        action = inp.get("action", "")
+        app = inp.get("app_name", "")
+        if action == "list_running":
+            apps = await list_running()
+            return ", ".join(apps) if apps else "Keine Apps im Vordergrund.", False
+        if action == "approve":
+            if not app:
+                return "app_name ist erforderlich.", True
+            pw = inp.get("password", "")
+            ok, msg = approve_app(app, pw)
+            return msg, not ok
+        if action == "revoke":
+            if not app:
+                return "app_name ist erforderlich.", True
+            return revoke_app(app), False
+        if not app:
+            return "app_name ist erforderlich.", True
+        if not is_approved(app):
+            return (
+                f"'{app}' ist nicht freigegeben. Bitte bestätige mit deinem JARVIS-App-Passwort. "
+                f"Rufe dann macos_app mit action='approve', app_name='{app}' und dem Passwort auf.",
+                True,
+            )
+        if action == "open":
+            return await open_app(app)
+        if action == "close":
+            return await close_app(app)
+        return f"Unbekannte Aktion: {action}", True
+
+    def _exec_apple_reminders(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        from .tools.reminders_tool import (
+            list_reminders, create_reminder, complete_reminder, list_reminder_lists,
+        )
+        inp = tool_input or {}
+        action = inp.get("action", "")
+        if action == "list":
+            return list_reminders(inp.get("list_name"))
+        if action == "list_lists":
+            return list_reminder_lists()
+        if action == "create":
+            title = inp.get("title", "")
+            if not title:
+                return "title ist erforderlich.", True
+            return create_reminder(title, inp.get("list_name"), inp.get("due_date"))
+        if action == "complete":
+            title = inp.get("title", "")
+            if not title:
+                return "title ist erforderlich.", True
+            return complete_reminder(title, inp.get("list_name"))
+        return f"Unbekannte Aktion: {action}", True
+
+    def _exec_apple_music(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        from .tools.music_tool import (
+            play, pause, next_track, previous_track, current_track,
+            set_volume, play_by_name, toggle_shuffle, player_state,
+        )
+        inp = tool_input or {}
+        action = inp.get("action", "")
+        if action == "play":
+            return play()
+        if action == "pause":
+            return pause()
+        if action == "next":
+            return next_track()
+        if action == "previous":
+            return previous_track()
+        if action == "current":
+            return current_track()
+        if action == "state":
+            return player_state()
+        if action == "volume":
+            level = inp.get("level")
+            if level is None:
+                return "level (0–100) ist erforderlich.", True
+            return set_volume(int(level))
+        if action == "play_by_name":
+            query = inp.get("query", "")
+            if not query:
+                return "query ist erforderlich.", True
+            return play_by_name(query)
+        if action == "shuffle_on":
+            return toggle_shuffle(True)
+        if action == "shuffle_off":
+            return toggle_shuffle(False)
+        return f"Unbekannte Aktion: {action}", True
+
+    def _exec_apple_notes(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        from .tools.notes_tool import list_notes, read_note, create_note, search_notes, append_to_note
+        inp = tool_input or {}
+        action = inp.get("action", "")
+        if action == "list":
+            return list_notes(inp.get("folder"))
+        if action == "read":
+            title = inp.get("title", "")
+            if not title:
+                return "title ist erforderlich.", True
+            return read_note(title)
+        if action == "create":
+            title = inp.get("title", "")
+            content = inp.get("content", "")
+            if not title:
+                return "title ist erforderlich.", True
+            return create_note(title, content, inp.get("folder"))
+        if action == "search":
+            query = inp.get("query", "")
+            if not query:
+                return "query ist erforderlich.", True
+            return search_notes(query)
+        if action == "append":
+            title = inp.get("title", "")
+            content = inp.get("content", "")
+            if not title or not content:
+                return "title und content sind erforderlich.", True
+            return append_to_note(title, content)
+        return f"Unbekannte Aktion: {action}", True
+
+    def _exec_apple_mail(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        from .tools.mail_tool import list_unread, read_message, send_message, get_unread_count
+        inp = tool_input or {}
+        action = inp.get("action", "")
+        if action == "list_unread":
+            return list_unread(inp.get("mailbox", "INBOX"))
+        if action == "read":
+            subject = inp.get("subject", "")
+            if not subject:
+                return "subject ist erforderlich.", True
+            return read_message(subject)
+        if action == "send":
+            to = inp.get("to", "")
+            subject = inp.get("subject", "")
+            body = inp.get("body", "")
+            if not to or not subject:
+                return "to und subject sind erforderlich.", True
+            return send_message(to, subject, body)
+        if action == "unread_count":
+            return get_unread_count()
+        return f"Unbekannte Aktion: {action}", True
+
+    def _exec_safari_control(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        from .tools.safari_tool import (
+            open_url, search_in_safari, current_url, current_title,
+            current_page_text, navigate_back, navigate_forward, open_new_tab,
+        )
+        inp = tool_input or {}
+        action = inp.get("action", "")
+        if action == "open_url":
+            url = inp.get("url", "")
+            if not url:
+                return "url ist erforderlich.", True
+            return open_url(url)
+        if action == "search":
+            query = inp.get("query", "")
+            if not query:
+                return "query ist erforderlich.", True
+            return search_in_safari(query)
+        if action == "current_url":
+            return current_url()
+        if action == "current_title":
+            return current_title()
+        if action == "read_page":
+            return current_page_text()
+        if action == "back":
+            return navigate_back()
+        if action == "forward":
+            return navigate_forward()
+        if action == "new_tab":
+            return open_new_tab(inp.get("url"))
+        return f"Unbekannte Aktion: {action}", True
 
 
 _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n+")
