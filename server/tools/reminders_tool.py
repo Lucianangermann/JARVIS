@@ -5,7 +5,7 @@ import subprocess
 from datetime import datetime
 
 
-def _script(code: str, timeout: float = 6.0) -> tuple[str, bool]:
+def _script(code: str, timeout: float = 10.0) -> tuple[str, bool]:
     try:
         p = subprocess.run(["osascript", "-e", code],
                            capture_output=True, text=True, timeout=timeout)
