@@ -121,7 +121,7 @@ function addMessage(who, text) {
 // iOS standalone PWAs can't be inspected without a newer macOS,
 // so we surface TTS / audio diagnostics directly in the chat pane.
 // Toggle the visible flag to suppress once debugging is done.
-const DEBUG_VISIBLE = true;
+const DEBUG_VISIBLE = false;
 function logDebug(msg) {
   console.log("[debug]", msg);
   if (!DEBUG_VISIBLE) return;
