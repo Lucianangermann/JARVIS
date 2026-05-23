@@ -760,7 +760,7 @@ class Brain:
                     elif block.name == "smarthome_control":
                         result, is_error = self._exec_smarthome_tool(block.input)
                     elif block.name == "macos_app":
-                        result, is_error = await self._exec_macos_app(block.input)
+                        result, is_error = self._exec_macos_app(block.input)
                     elif block.name == "apple_reminders":
                         result, is_error = self._exec_apple_reminders(block.input)
                     elif block.name == "apple_music":
@@ -1180,14 +1180,14 @@ class Brain:
 
     # ── Apple app executors ────────────────────────────────────────────── #
 
-    async def _exec_macos_app(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
-        from .tools.app_permissions import is_approved, approve_app, revoke_app, list_approved
+    def _exec_macos_app(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        from .tools.app_permissions import is_approved, approve_app, revoke_app
         from .tools.macos_apps import open_app, close_app, list_running
         inp = tool_input or {}
         action = inp.get("action", "")
         app = inp.get("app_name", "")
         if action == "list_running":
-            apps = await list_running()
+            apps = list_running()
             return ", ".join(apps) if apps else "Keine Apps im Vordergrund.", False
         if action == "approve":
             if not app:
@@ -1208,9 +1208,9 @@ class Brain:
                 True,
             )
         if action == "open":
-            return await open_app(app)
+            return open_app(app)
         if action == "close":
-            return await close_app(app)
+            return close_app(app)
         return f"Unbekannte Aktion: {action}", True
 
     def _exec_apple_reminders(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
