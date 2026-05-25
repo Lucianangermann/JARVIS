@@ -4,6 +4,8 @@
 *.key
 *.pem
 *.crt
+devices.json
+snapshot.json
 
 # Logs
 logs/*

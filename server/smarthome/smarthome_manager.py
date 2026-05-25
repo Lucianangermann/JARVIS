@@ -129,6 +129,7 @@ class SmartHomeManager:
     def _load_adapters(self) -> None:
         """Load all adapters whose enabled flag is True in env."""
         _ADAPTERS = [
+            ("tuya",          "TUYA_ENABLED",    ".adapters.tuya_adapter",            "TuyaAdapter"),
             ("govee",         "GOVEE_ENABLED",   ".adapters.govee_adapter",           "GoveeAdapter"),
             ("hue",           "HUE_ENABLED",     ".adapters.hue_adapter",             "HueAdapter"),
             ("ikea",          "IKEA_ENABLED",    ".adapters.ikea_adapter",            "IKEAAdapter"),
