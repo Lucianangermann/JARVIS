@@ -513,6 +513,15 @@ class Brain:
         # Music, Notes, Mail, Safari). Registered unconditionally.
         self._tools.extend(_apple_tools())
 
+        # Productivity layer (tasks, focus, analytics). Registered
+        # unconditionally; dispatcher returns a clean error when the
+        # manager isn't wired yet so Claude can still finish the turn.
+        from .productivity.tools import productivity_tools
+        self._tools.extend(productivity_tools())
+
+        # Singleton handle — wired by main.py after start().
+        self._productivity = None  # type: ignore[assignment]
+
         # Long-term memory + self-learning. Owns short-term history (was
         # _histories), error history, profile, and the dynamic system-
         # prompt builder. Falls back to in-memory only if storage can't
@@ -794,6 +803,14 @@ class Brain:
                         result, is_error = self._exec_apple_mail(block.input)
                     elif block.name == "safari_control":
                         result, is_error = self._exec_safari_control(block.input)
+                    elif block.name in {
+                        "manage_tasks", "manage_focus",
+                        "get_productivity_score", "add_knowledge_note",
+                        "get_email_smart_summary",
+                    }:
+                        result, is_error = self._exec_productivity(
+                            block.name, block.input,
+                        )
                     else:
                         result = f"Unknown tool {block.name!r}."
                         is_error = True
@@ -1346,6 +1363,115 @@ class Brain:
         if action == "unread_count":
             return get_unread_count()
         return f"Unbekannte Aktion: {action}", True
+
+    def _exec_productivity(
+        self, tool_name: str, inp: dict[str, Any],
+    ) -> tuple[str, bool]:
+        """Dispatch productivity tool_use calls to the ProductivityManager."""
+        try:
+            # Lazy-create a fallback singleton when main.py hasn't wired one.
+            if self._productivity is None:
+                from pathlib import Path as _Path
+                from .productivity.productivity_manager import ProductivityManager as _PM
+                _db = _Path(__file__).resolve().parents[1] / "data" / "jarvis.db"
+                self._productivity = _PM(_db)
+
+            pm = self._productivity
+            inp = inp or {}
+
+            if tool_name == "manage_tasks":
+                action = inp.get("action", "")
+                if action == "add":
+                    title = inp.get("title", "")
+                    if not title:
+                        return "title ist erforderlich.", True
+                    tid = pm.tasks.add_task(
+                        title,
+                        priority=int(inp.get("priority", 2)),
+                        due_date=inp.get("due_date"),
+                        project_name=inp.get("project"),
+                        context=inp.get("context", "work"),
+                    )
+                    return f"Task erstellt (id={tid}): {title}", False
+                if action == "list_today":
+                    tasks = pm.tasks.get_today_tasks()
+                    if not tasks:
+                        return "Keine offenen Tasks für heute.", False
+                    lines = [
+                        f"{t['id']}. [{t['priority']}] {t['title']}"
+                        + (f" (fällig {t['due_date']})" if t.get("due_date") else "")
+                        for t in tasks
+                    ]
+                    return "\n".join(lines), False
+                if action == "top3":
+                    return pm.tasks.spoken_top3(), False
+                if action == "complete":
+                    tid = inp.get("task_id")
+                    if not tid:
+                        return "task_id ist erforderlich.", True
+                    ok = pm.tasks.complete_task(int(tid))
+                    return ("Task erledigt." if ok else "Task nicht gefunden."), not ok
+                if action == "project_status":
+                    proj = inp.get("project", "")
+                    if not proj:
+                        projs = pm.tasks.list_projects()
+                        if not projs:
+                            return "Keine aktiven Projekte.", False
+                        return "Projekte: " + ", ".join(p["name"] for p in projs), False
+                    return pm.tasks.spoken_project_status(proj), False
+                if action == "list_overdue":
+                    overdue = pm.tasks.get_overdue()
+                    if not overdue:
+                        return "Keine überfälligen Tasks.", False
+                    lines = [f"{t['id']}. {t['title']} (fällig {t['due_date']})"
+                             for t in overdue[:10]]
+                    return "\n".join(lines), False
+                return f"Unbekannte action: {action}", True
+
+            if tool_name == "manage_focus":
+                action = inp.get("action", "")
+                if action == "start_pomodoro":
+                    mins = int(inp.get("minutes", 25))
+                    return pm.focus.start_pomodoro(inp.get("task", ""), mins), False
+                if action == "stop_pomodoro":
+                    return pm.focus.stop_pomodoro(), False
+                if action == "start_timer":
+                    proj = inp.get("project", "Allgemein")
+                    return pm.focus.start_timer(proj, inp.get("task", "")), False
+                if action == "stop_timer":
+                    return pm.focus.stop_timer(), False
+                if action == "time_today":
+                    return pm.focus.get_time_today(), False
+                return f"Unbekannte action: {action}", True
+
+            if tool_name == "get_productivity_score":
+                period = inp.get("period", "today")
+                if period == "week":
+                    return pm.analytics.weekly_summary(), False
+                return pm.analytics.spoken_daily_score(), False
+
+            if tool_name == "add_knowledge_note":
+                content = inp.get("content", "")
+                category = inp.get("category", "idea")
+                if not content:
+                    return "content ist erforderlich.", True
+                try:
+                    self.memory.long_term.store_knowledge(
+                        content, category=category,
+                    )
+                    return f"Notiz gespeichert ({category}): {content[:60]}…", False
+                except Exception:
+                    print(f"[brain] knowledge note: {content[:40]}")
+                    return f"Notiz notiert ({category}).", False
+
+            if tool_name == "get_email_smart_summary":
+                from .tools.mail_tool import list_unread
+                result, is_err = list_unread("INBOX")
+                return result, is_err
+
+            return f"Unbekanntes Productivity-Tool: {tool_name}", True
+        except Exception as exc:  # noqa: BLE001
+            return f"Productivity-Fehler: {exc}", True
 
     def _exec_safari_control(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
         from .tools.safari_tool import (

@@ -212,6 +212,17 @@ async def lifespan(app: FastAPI):
     else:
         print("[SMARTHOME] disabled (module unavailable)")
 
+    # Productivity layer
+    try:
+        from .productivity.productivity_manager import ProductivityManager
+        productivity = ProductivityManager(Path("data/jarvis.db"))
+        productivity.start()
+        app.state.productivity = productivity
+        app.state.brain._productivity = productivity
+        print("[PRODUCTIVITY] wired to brain ✓")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[PRODUCTIVITY] init failed: {exc}")
+
     # On macOS, periodically drain the main-thread NSRunLoop so Cocoa
     # framework callbacks (Speech.framework's SFSpeechRecognizer in
     # particular) actually get delivered. Apple posts those completions
@@ -1310,6 +1321,79 @@ async def smarthome_enable_adapter(
         raise HTTPException(status_code=503, detail="Smart Home nicht verfügbar.")
     result = await sh.enable_adapter(platform)
     return {"result": result}
+
+
+# --- Productivity API ---------------------------------------------------- #
+
+def _productivity(request: Request) -> Any:
+    return getattr(request.app.state, "productivity", None)
+
+
+class _AddTaskRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=500)
+    priority: int = Field(default=2, ge=1, le=4)
+    due_date: str | None = None
+    project: str | None = None
+    context: str = "work"
+
+
+@app.get("/productivity/tasks/today")
+def productivity_tasks_today(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    pm = _productivity(request)
+    if pm is None:
+        raise HTTPException(status_code=503, detail="Productivity layer unavailable.")
+    return {"tasks": pm.tasks.get_today_tasks()}
+
+
+@app.get("/productivity/tasks/top3")
+def productivity_tasks_top3(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    pm = _productivity(request)
+    if pm is None:
+        raise HTTPException(status_code=503, detail="Productivity layer unavailable.")
+    return {"tasks": pm.tasks.get_top3()}
+
+
+@app.post("/productivity/tasks")
+def productivity_add_task(
+    payload: _AddTaskRequest,
+    request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    pm = _productivity(request)
+    if pm is None:
+        raise HTTPException(status_code=503, detail="Productivity layer unavailable.")
+    tid = pm.tasks.add_task(
+        payload.title,
+        priority=payload.priority,
+        due_date=payload.due_date,
+        project_name=payload.project,
+        context=payload.context,
+    )
+    return {"ok": True, "task_id": tid}
+
+
+@app.get("/productivity/focus/time-today")
+def productivity_time_today(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    pm = _productivity(request)
+    if pm is None:
+        raise HTTPException(status_code=503, detail="Productivity layer unavailable.")
+    return {"summary": pm.focus.get_time_today()}
+
+
+@app.get("/productivity/analytics/today")
+def productivity_analytics_today(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    pm = _productivity(request)
+    if pm is None:
+        raise HTTPException(status_code=503, detail="Productivity layer unavailable.")
+    return pm.analytics.daily_score()
 
 
 # --- Web UI --------------------------------------------------------------- #

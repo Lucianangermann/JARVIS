@@ -84,11 +84,12 @@
 
   <!-- ── QUICK ACTIONS ───────────────────────────────────────── -->
   <nav class="action-bar">
-    <button class="hex-btn" id="act-settings"   type="button" aria-label="Settings">⚙</button>
-    <button class="hex-btn" id="act-search"     type="button" aria-label="Nachricht tippen">⌨</button>
-    <button class="hex-btn" id="act-camera"     type="button" aria-label="Kamera">📷</button>
-    <button class="hex-btn" id="act-music"      type="button" aria-label="Music">♪</button>
-    <button class="hex-btn" id="act-smarthome"  type="button" aria-label="Smart Home">🏠</button>
+    <button class="hex-btn" id="act-settings"      type="button" aria-label="Settings">⚙</button>
+    <button class="hex-btn" id="act-search"        type="button" aria-label="Nachricht tippen">⌨</button>
+    <button class="hex-btn" id="act-camera"        type="button" aria-label="Kamera">📷</button>
+    <button class="hex-btn" id="act-music"         type="button" aria-label="Music">♪</button>
+    <button class="hex-btn" id="act-smarthome"     type="button" aria-label="Smart Home">🏠</button>
+    <button class="hex-btn" id="act-productivity"  type="button" aria-label="Produktivität">💼</button>
     <span class="tier-indicator" title="Permission tier" aria-label="Tier indicator">
       <span class="tier-dot"></span>
       <span class="tier-dot"></span>
@@ -267,6 +268,41 @@
     </div>
   </aside>
 
+  <!-- ── PRODUCTIVITY PANEL (hidden, slides up) ─────────────── -->
+  <aside id="productivity-panel" class="slide-panel" aria-hidden="true">
+    <div class="panel-inner">
+      <h2>Produktivität</h2>
+
+      <!-- Score -->
+      <div class="sh-section">
+        <div class="sh-label">Score heute</div>
+        <div id="prod-score" style="font-size:2em;color:#00d4ff;text-align:center;">–</div>
+        <div id="prod-score-detail" style="font-size:0.8em;opacity:0.7;text-align:center;"></div>
+      </div>
+
+      <!-- Top 3 tasks -->
+      <div class="sh-section">
+        <div class="sh-label">Top 3 Tasks</div>
+        <div id="prod-tasks">
+          <span class="sh-loading">Lade...</span>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="sh-section">
+        <div class="sh-scene-grid">
+          <button class="sh-scene-btn" id="prod-pomodoro" type="button">🍅 Pomodoro</button>
+          <button class="sh-scene-btn" id="prod-mails"    type="button">📧 Mails</button>
+        </div>
+      </div>
+
+      <p id="prod-status" class="sh-status"></p>
+      <div class="row">
+        <button id="prod-close" type="button" class="action-btn">Schließen</button>
+      </div>
+    </div>
+  </aside>
+
   <!-- ── TYPE-INPUT PANEL (slides up from bottom) ────────────── -->
   <aside id="text-panel" class="slide-panel" aria-hidden="true">
     <div class="panel-inner">
@@ -289,6 +325,7 @@
   <script type="module" src="scripts/ptt.js"></script>
   <script type="module" src="scripts/camera.js"></script>
   <script type="module" src="scripts/smarthome.js"></script>
+  <script type="module" src="scripts/productivity.js"></script>
   <script type="module" src="scripts/app.js"></script>
 
   <!-- Register the service worker only when running over a secure

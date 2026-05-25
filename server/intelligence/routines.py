@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from datetime import timedelta
 
 from ..tools import calendar_tool, news, weather
+
+_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 _LOCAL_TZ = ZoneInfo(os.getenv("JARVIS_TZ", "Europe/Berlin"))
 
@@ -102,6 +105,15 @@ def morning_briefing() -> str:
             lines.append(
                 "Danach: " + ", ".join(_fmt_event(e) for e in rest) + "."
             )
+
+    try:
+        from ..productivity.productivity_manager import ProductivityManager as _PM
+        _pm = _PM(_DATA_DIR / "jarvis.db")
+        addon = _pm.morning_brief_addon()
+        if addon:
+            lines.append(addon)
+    except Exception:
+        pass
 
     return " ".join(lines)
 
@@ -214,5 +226,14 @@ def evening_briefing() -> str:
             f"Wetter morgen: {tmrw.temp_min_c:.0f} bis "
             f"{tmrw.temp_max_c:.0f} Grad, {tmrw.condition}{rain}."
         )
+
+    try:
+        from ..productivity.productivity_manager import ProductivityManager as _PM
+        _pm = _PM(_DATA_DIR / "jarvis.db")
+        addon = _pm.evening_brief_addon()
+        if addon:
+            lines.append(addon)
+    except Exception:
+        pass
 
     return " ".join(lines)
