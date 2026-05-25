@@ -520,6 +520,22 @@ class Brain:
         self.memory = MemoryManager()
         self._started_sessions: set[str] = set()
 
+    def refresh_smarthome_tool(self) -> None:
+        """Re-inject device names into the smarthome tool description.
+
+        Called by main.py after SmartHomeManager.start() so Claude knows
+        which names are real devices (not scenes).
+        """
+        if self.smarthome is None:
+            return
+        from .smarthome.tools.smarthome_tools import smarthome_tool
+        names = [d.name for d in self.smarthome.registry.get_all()]
+        updated = smarthome_tool(device_names=names)
+        for i, t in enumerate(self._tools):
+            if isinstance(t, dict) and t.get("name") == "smarthome_control":
+                self._tools[i] = updated
+                break
+
     # -- Public API -------------------------------------------------------- #
 
     def reply(self, session_id: str, user_text: str,

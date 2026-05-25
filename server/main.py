@@ -199,6 +199,7 @@ async def lifespan(app: FastAPI):
             async def _start_smarthome(mgr: "SmartHomeManager") -> None:
                 try:
                     await mgr.start()
+                    app.state.brain.refresh_smarthome_tool()
                     print("[SMARTHOME] wired to brain ✓")
                 except Exception as _exc:  # noqa: BLE001
                     import traceback as _tb

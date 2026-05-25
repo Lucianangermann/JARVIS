@@ -4,8 +4,16 @@ from __future__ import annotations
 from typing import Any
 
 
-def smarthome_tool() -> dict[str, Any]:
+def smarthome_tool(device_names: list[str] | None = None) -> dict[str, Any]:
     """Tool schema for Claude to control smart home devices."""
+    device_hint = ""
+    if device_names:
+        device_hint = (
+            f"\n\nKnown devices (use exact names with turn_on/turn_off): "
+            + ", ".join(f"'{n}'" for n in device_names)
+            + "\nIMPORTANT: These are device names, NOT scene names. "
+            "E.g. 'Gaming Setup einschalten' → action='turn_on', device='Gaming Setup'."
+        )
     return {
         "name": "smarthome_control",
         "description": (
@@ -32,6 +40,7 @@ def smarthome_tool() -> dict[str, Any]:
             "  smarthome_control(action='turn_off', device='wohnzimmer')\n"
             "  smarthome_control(action='brightness', device='schreibtisch', level=50)\n"
             "  smarthome_control(action='color', device='strip', color='rot')\n"
+            + device_hint
         ),
         "input_schema": {
             "type": "object",
