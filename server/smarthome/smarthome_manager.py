@@ -167,18 +167,17 @@ class SmartHomeManager:
         """Route natural language command to the right adapter(s)."""
         cmd = command.lower().strip()
 
-        # Scene check first
-        scene_name = self._resolve_scene(cmd)
-        if scene_name and self._scenes:
-            return await self._scenes.run_scene(scene_name)
-
-        # Device lookup
+        # Device lookup first — avoids "gaming" scene alias swallowing "Gaming Setup"
         device, remainder = self._find_device_in_command(cmd)
 
         if device is None:
             # Try "alles" / "all" commands
             if any(w in cmd for w in ("alles", "alle", "all", "überall", "komplett")):
                 return await self._broadcast_command(cmd)
+            # Only fall back to scene if no specific device was named
+            scene_name = self._resolve_scene(cmd)
+            if scene_name and self._scenes:
+                return await self._scenes.run_scene(scene_name)
             return "Kein Gerät gefunden. Verfügbare Geräte: " + ", ".join(
                 d.name for d in self.registry.get_all()
             )
