@@ -263,6 +263,27 @@ async def lifespan(app: FastAPI):
             voice_thread.start()
             print("[JARVIS] local voice loop started (JARVIS_LOCAL_VOICE=1)")
 
+            # Startup greeting — speaks after a brief pause so the audio
+            # system is fully initialised before the first TTS call.
+            def _startup_greeting() -> None:
+                import time as _time
+                _time.sleep(2.5)
+                try:
+                    _hour = _time.localtime().tm_hour
+                    if _hour < 12:
+                        _msg = "Guten Morgen, Lucian. Ich bin online und einsatzbereit."
+                    elif _hour < 18:
+                        _msg = "Guten Mittag, Lucian. Ich bin online und einsatzbereit."
+                    else:
+                        _msg = "Guten Abend, Lucian. Ich bin online und einsatzbereit."
+                    if tts is not None:
+                        tts.speak(_msg)
+                except Exception as _exc:  # noqa: BLE001
+                    print(f"[JARVIS] startup greeting failed: {_exc}")
+
+            threading.Thread(target=_startup_greeting, daemon=True,
+                             name="jarvis-greeting").start()
+
     try:
         yield
     finally:
