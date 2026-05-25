@@ -64,7 +64,7 @@ _STRIPPABLE = re.compile(
 # German TTS reads "Lucian" as "Lutsian" (hard c). Replace with "Lusian"
 # so the soft-s sound comes out correctly.
 _PRONUNCIATION = [
-    (re.compile(r"\bLucian\b", re.IGNORECASE), "Lusian"),
+    (re.compile(r"\bLucian\b", re.IGNORECASE), "Lussian"),
 ]
 
 
