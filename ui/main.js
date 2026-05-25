@@ -122,6 +122,11 @@ const ORB_VISUAL_RADIUS = 55;
 
 let mainWindow = null;
 
+// When the user manually drags the window we remember the centre of
+// that position and preserve it across idle↔HUD size changes instead
+// of snapping back to the corner.
+let _userCenter = null; // { x, y } in screen coords
+
 // State-aware positioning. The HUD wants its panel-rectangle inset
 // from the screen corner by EDGE_MARGIN — straightforward. The ORB
 // state is different: the window is intentionally much bigger than
@@ -131,6 +136,20 @@ let mainWindow = null;
 // corner and let the window extend past the screen edge — macOS just
 // clips the off-screen padding, which is empty glow space anyway.
 function placeForState(win, state) {
+  const target = state === "idle" ? ORB : HUD;
+
+  // If the user has dragged the window, preserve their chosen centre
+  // and only resize around it — don't snap back to the corner.
+  if (_userCenter) {
+    win.setBounds({
+      width:  target.width,
+      height: target.height,
+      x: Math.round(_userCenter.x - target.width  / 2),
+      y: Math.round(_userCenter.y - target.height / 2),
+    });
+    return;
+  }
+
   const { workArea } = screen.getPrimaryDisplay();
   if (state === "idle") {
     const orbCenterX = workArea.x + workArea.width  - EDGE_MARGIN - ORB_VISUAL_RADIUS;
@@ -195,6 +214,15 @@ function createWindow() {
   mainWindow.setAlwaysOnTop(true, "screen-saver");
 
   placeForState(mainWindow, "idle");
+
+  // Track manual moves. We save the window centre so placeForState
+  // can resize without snapping back to the screen corner.
+  mainWindow.on("moved", () => {
+    if (!mainWindow) return;
+    const [x, y] = mainWindow.getPosition();
+    const [w, h] = mainWindow.getSize();
+    _userCenter = { x: x + w / 2, y: y + h / 2 };
+  });
 
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
 

@@ -60,6 +60,14 @@ _STRIPPABLE = re.compile(
 )
 
 
+# Pronunciation corrections — applied after markdown stripping.
+# German TTS reads "Lucian" as "Lutsian" (hard c). Replace with "Lusian"
+# so the soft-s sound comes out correctly.
+_PRONUNCIATION = [
+    (re.compile(r"\bLucian\b", re.IGNORECASE), "Lusian"),
+]
+
+
 def _speakable(text: str) -> str:
     """Strip markdown/emoji/URLs so the synthesiser doesn't read them literally."""
     if not text:
@@ -76,6 +84,8 @@ def _speakable(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{2,}", ". ", text)
     text = re.sub(r"\n", " ", text)
+    for pattern, replacement in _PRONUNCIATION:
+        text = pattern.sub(replacement, text)
     return text.strip()
 
 
