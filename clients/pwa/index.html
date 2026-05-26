@@ -90,6 +90,7 @@
     <button class="hex-btn" id="act-music"         type="button" aria-label="Music">♪</button>
     <button class="hex-btn" id="act-smarthome"     type="button" aria-label="Smart Home">🏠</button>
     <button class="hex-btn" id="act-productivity"  type="button" aria-label="Produktivität">💼</button>
+    <button class="hex-btn" id="act-entertainment" type="button" aria-label="Entertainment">🎮</button>
     <span class="tier-indicator" title="Permission tier" aria-label="Tier indicator">
       <span class="tier-dot"></span>
       <span class="tier-dot"></span>
@@ -303,6 +304,52 @@
     </div>
   </aside>
 
+  <!-- ── ENTERTAINMENT PANEL (hidden, slides up) ────────────── -->
+  <aside id="entertainment-panel" class="slide-panel" aria-hidden="true">
+    <div class="panel-inner">
+      <h2>Entertainment</h2>
+
+      <!-- Mood Music -->
+      <div class="sh-section">
+        <div class="sh-label">Musik nach Stimmung</div>
+        <div class="sh-scene-grid">
+          <button class="sh-scene-btn ent-mood" data-mood="entspannt" type="button">😌 Relax</button>
+          <button class="sh-scene-btn ent-mood" data-mood="sport"     type="button">💪 Sport</button>
+          <button class="sh-scene-btn ent-mood" data-mood="party"     type="button">🎉 Party</button>
+          <button class="sh-scene-btn ent-mood" data-mood="schlafen"  type="button">😴 Schlaf</button>
+          <button class="sh-scene-btn ent-mood" data-mood="morgen"    type="button">☕ Morgen</button>
+          <button class="sh-scene-btn ent-mood" data-mood="gaming"    type="button">🎮 Gaming</button>
+          <button class="sh-scene-btn ent-mood" data-mood="konzentriert" type="button">🎯 Fokus</button>
+          <button class="sh-scene-btn ent-mood" data-mood="romantisch" type="button">❤️ Romantisch</button>
+        </div>
+      </div>
+
+      <!-- Watchlist -->
+      <div class="sh-section">
+        <div class="sh-label">Watchlist</div>
+        <button class="sh-btn" id="ent-watchlist-load" type="button">Liste laden</button>
+        <div id="ent-watchlist-items" style="margin-top:8px;font-size:0.85em;max-height:120px;overflow-y:auto;"></div>
+      </div>
+
+      <!-- Games -->
+      <div class="sh-section">
+        <div class="sh-label">Spiele &amp; Unterhaltung</div>
+        <div class="sh-scene-grid">
+          <button class="sh-scene-btn" id="ent-trivia"   type="button">🧠 Trivia</button>
+          <button class="sh-scene-btn" id="ent-joke"     type="button">😂 Witz</button>
+          <button class="sh-scene-btn" id="ent-riddle"   type="button">❓ Rätsel</button>
+          <button class="sh-scene-btn" id="ent-fact"     type="button">💡 Fakt</button>
+        </div>
+      </div>
+
+      <p id="ent-status" class="sh-status"></p>
+
+      <div class="row">
+        <button id="ent-close" type="button" class="action-btn">Schließen</button>
+      </div>
+    </div>
+  </aside>
+
   <!-- ── TYPE-INPUT PANEL (slides up from bottom) ────────────── -->
   <aside id="text-panel" class="slide-panel" aria-hidden="true">
     <div class="panel-inner">
@@ -326,6 +373,7 @@
   <script type="module" src="scripts/camera.js"></script>
   <script type="module" src="scripts/smarthome.js"></script>
   <script type="module" src="scripts/productivity.js"></script>
+  <script type="module" src="scripts/entertainment.js"></script>
   <script type="module" src="scripts/app.js"></script>
 
   <!-- Register the service worker only when running over a secure

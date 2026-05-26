@@ -115,6 +115,14 @@ def morning_briefing() -> str:
     except Exception:
         pass
 
+    try:
+        from ..entertainment.birthdays import check_todays_birthdays as _birthdays
+        bd = _birthdays()
+        if bd:
+            lines.append(f"Geburtstag heute: {bd}!")
+    except Exception:
+        pass
+
     return " ".join(lines)
 
 

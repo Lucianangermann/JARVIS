@@ -223,6 +223,21 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         print(f"[PRODUCTIVITY] init failed: {exc}")
 
+    # Entertainment layer
+    try:
+        from .entertainment.entertainment_manager import EntertainmentManager
+        entertainment = EntertainmentManager(
+            Path("data/jarvis.db"),
+            app.state.brain.client,
+            getattr(app.state, "smarthome", None),
+        )
+        entertainment.start()
+        app.state.entertainment = entertainment
+        app.state.brain._entertainment = entertainment
+        print("[ENTERTAINMENT] wired to brain ✓")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ENTERTAINMENT] init failed: {exc}")
+
     # On macOS, periodically drain the main-thread NSRunLoop so Cocoa
     # framework callbacks (Speech.framework's SFSpeechRecognizer in
     # particular) actually get delivered. Apple posts those completions
@@ -1394,6 +1409,48 @@ def productivity_analytics_today(
     if pm is None:
         raise HTTPException(status_code=503, detail="Productivity layer unavailable.")
     return pm.analytics.daily_score()
+
+
+# --- Entertainment API ---------------------------------------------------- #
+
+@app.get("/entertainment/watchlist")
+def get_watchlist(
+    request: Request,
+    _: str = Depends(require_token),
+) -> JSONResponse:
+    ent = getattr(request.app.state, "entertainment", None)
+    if not ent:
+        return JSONResponse({"items": []})
+    items = ent.watchlist.get_list("want_to_watch")
+    return JSONResponse({"items": items})
+
+
+@app.post("/entertainment/watchlist/add")
+async def add_to_watchlist(
+    request: Request,
+    _: str = Depends(require_token),
+) -> JSONResponse:
+    body = await request.json()
+    ent = getattr(request.app.state, "entertainment", None)
+    if not ent:
+        return JSONResponse({"error": "not available"})
+    msg, err = ent.watchlist.add(
+        body.get("title", ""),
+        type=body.get("type", "unknown"),
+    )
+    return JSONResponse({"message": msg, "error": err})
+
+
+@app.get("/entertainment/gaming/stats")
+def gaming_stats(
+    request: Request,
+    _: str = Depends(require_token),
+) -> JSONResponse:
+    ent = getattr(request.app.state, "entertainment", None)
+    if not ent:
+        return JSONResponse({"stats": ""})
+    msg, _ = ent.gaming.get_stats()
+    return JSONResponse({"stats": msg})
 
 
 # --- Web UI --------------------------------------------------------------- #
