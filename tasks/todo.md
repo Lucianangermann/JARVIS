@@ -1,5 +1,59 @@
 # Todo
 
+## JARVIS Communication Layer — PLAN (not started)
+
+Goal: a communication hub under `server/communication/` (messaging, calls, email,
+notifications, social, translation, automation). Same build philosophy as the
+security layer: phased, best-effort (never crash JARVIS), confirm-before-send,
+verified after each phase.
+
+### Gap analysis — what we already HAVE vs need to BUILD
+| Subsystem | Status | Reuse |
+|---|---|---|
+| Email | PARTIAL | `tools/mail_tool.py`: `list_unread/read_message/send_message/get_unread_count` (multi-account loop, safe escaping). Extend: attachments, templates, account selection, analytics. |
+| iMessage | NEW | AppleScript-template pattern from `mac_control/tier2_apps.py` (argv injection-safe). No send/read exists yet. |
+| Telegram | NEW | Use Telegram **Bot HTTP API via `requests`** (already a dep) — NOT python-telegram-bot (avoids a second asyncio loop conflicting with FastAPI). sendMessage/getUpdates. |
+| Notifications | HAVE (extend) | `events.publish()` bus, `intelligence/proactive.py` priority model (high/medium/low + meeting/sleep suppression), `mac_control` `display notification`. Add: DND/quiet-hours, persistent history, unified `NotificationCenter`. |
+| Translation | HAVE (extend) | `vision/translator.py` = image OCR+translate. NEW = text↔text via the brain's Claude client (reuse `vision_manager.analyze_image` call pattern, text-only). |
+| Calls/FaceTime | NEW | `open_app()` foundation only. Write FaceTime/Contacts AppleScript. |
+| Social/Birthdays | PARTIAL | `entertainment/birthdays.py` (Contacts), `tools/news.py` (RSS). Reddit=RSS (free). Twitter/LinkedIn = no real free API → best-effort/stub. |
+| Reminders/follow-ups | HAVE | `tools/reminders_tool.py` + `productivity/task_manager.py` for callback reminders + follow-up tracking. |
+| Confirm-before-send | HAVE | `mac_control/confirmation.py` (stash/peek/consume, 30s TTL) — reuse for every message/email send. |
+| Mass-notify hook | HAVE | `security/emergency.py` `NotifyHandler` + main.py `_security_notify` — swap in real iMessage/Telegram transport now that we build it. |
+
+### Decisions LOCKED (user-confirmed 2026-06-10)
+- **Telegram transport:** Bot HTTP API via `requests` (no python-telegram-bot, no second asyncio loop). ✓
+- **WhatsApp:** DEFERRED — not built now; leave a clean adapter seam for later. ✓
+- **Social scope:** Reddit-RSS + birthdays reuse + Claude post-drafts (never auto-post). Twitter/LinkedIn = stubs returning a clear "API key / not configured" message. ✓
+- **Notification-center migration:** phased & low-risk — build center (DND/quiet-hours/history), route NEW comm + security/intelligence notifications through it; leave existing `tts.speak` calls in place for now. ✓
+- ⇒ Spec Phase 5 (WhatsApp) dropped. Build P1→P4 then P6 integration.
+
+### Build phases (mirrors spec order, trimmed to what's sane)
+- [x] **P1 Foundation:** ✅ `communication.db` (5 tables + 7-day content prune), `notification_center.py` (priority routing + DND/quiet-hours/meeting suppression + batching + history), `translation/translator.py` (Claude text↔text + detect). Verified: retention prune, DND lets only critical through, DE→EN + French detect + auto-translate incoming.
+- [x] **P2 Messaging:** ✅ `imessage.py` (AppleScript send + chat.db read, Full-Disk-Access-graceful), `telegram_bot.py` (REST send/poll/notify, chat_id auto-learn), `messaging_manager.py` (unified, confirm-before-send 30s TTL, broadcast rate-limit, Claude summarize/draft), `setup_telegram.py`, `applescript.py` (shared safe osa). Verified: chat.db parse + Apple-ts, **injection-safe (evil body → argv not script)**, Telegram mocked, confirm/broadcast/cancel/TTL.
+- [x] **P3 Calls & Email:** ✅ `call_manager.py` (FaceTime/tel via Contacts AppleScript, missed calls from CallHistory+db, callback→reminders_tool, voicemail honest-unsupported), `email_templates.py` (built-ins + user JSON + safe fill), `email_analyzer.py` (Claude importance/summary + newsletter/unsub heuristics), `email_manager.py` (extends mail_tool: multi-account, templates, argv-safe attachments, confirm-before-send). Verified: template fill+persist, Claude importance/summary, attachment validation, make_call scheme + callback reminder, all argv-safe.
+- [x] **P4 Automation & Social:** ✅ `comm_automation.py` (auto-reply rules w/ VIP exceptions + JSON persist, follow-up tracking, broadcast→messaging, status/OOO + auto-revert), `social_manager.py` (Reddit-RSS live, birthdays reuse, Claude drafts ≤char-limit, Twitter/LinkedIn honest stubs). Verified: VIP bypass, follow-up due/cleared, status+OOO persist, live Reddit, 280-char draft.
+- [ ] **P5 (optional) WhatsApp:** only if user opts in.
+- [x] **P6 Integration:** ✅ `communication_manager.py` (coordinator + NL routing + confirm-flow); brain `_communication` short-circuit (after security, before Claude) + `_run_communication_command`; main.py lifespan wiring (speak/ui/macos/meeting handlers, Telegram connect+poll) + security-alerts bridged through NotificationCenter; full `/communication/*` routes; PWA 💬 panel + communication.js + reused CSS; morning-briefing comm line; config block + .env.example + httpx pin; tests/test_communication.py (22). Verified end-to-end via TestClient: routes 200, `/chat` short-circuits "übersetze…"→"what time is it" + "neue nachrichten" without Claude, 401 w/o token. 117 tests pass, 246 collect, no regressions.
+
+## Communication Review
+**Delivered:** 18-module communication layer under `server/communication/` (messaging/calls/email/notifications/social/translation/automation + coordinator), wired into brain + main.py + PWA + intelligence. 22-test suite. WhatsApp deferred per decision.
+
+**Key reuse (not rebuilt):** `mail_tool` (email base), `reminders_tool` (callbacks), `birthdays` (social), `events`/proactive priority model (notifications), Claude client (translation/summaries/drafts), `mac_control` AppleScript safety pattern, confirmation TTL pattern.
+
+**Design:** never auto-send (confirm-before-send 30s TTL everywhere), message content pruned after 7 days, injection-safe AppleScript (argv not interpolation), Telegram via plain Bot HTTP API (no python-telegram-bot), honest stubs for Twitter/LinkedIn, all best-effort (never crash JARVIS). Security alerts now flow through NotificationCenter (gains DND/quiet-hours/telegram) while keeping their direct path.
+
+**Needs real-world setup (documented in .env.example):** Telegram bot token+chat_id (run setup_telegram), Full Disk Access for iMessage/call-history reads, Twitter paid API for live mentions.
+
+### Hard rules (from spec)
+- NEVER auto-send a message — always preview + confirm (reuse confirmation.py).
+- NEVER store message content > 7 days (prune job).
+- Translation uses existing Claude client (no extra cost).
+- Comm failures NEVER crash JARVIS (best-effort everywhere).
+- Notification center initialized BEFORE other comm systems.
+
+---
+
 ## JARVIS Security & Monitoring Layer (active)
 
 Complete security/monitoring layer under `server/security/`. Summary after each file; user can interrupt.

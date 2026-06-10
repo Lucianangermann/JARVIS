@@ -144,6 +144,33 @@ def morning_briefing() -> str:
     except Exception:
         pass
 
+    # Communication signal — overnight Telegram messages + missed calls from
+    # communication.db (concurrent WAL read; iMessage unread is surfaced live
+    # via the "neue nachrichten" command, not here).
+    try:
+        import time as _t
+        from ..communication.db import CommunicationDB
+        _cdb = CommunicationDB(_DATA_DIR / "communication.db")
+        _since = _t.time() - 43200
+        _tg = _cdb.query(
+            "SELECT COUNT(*) AS n FROM messages WHERE direction='in' "
+            "AND platform='telegram' AND timestamp >= ?", (_since,))
+        _miss = _cdb.query(
+            "SELECT COUNT(*) AS n FROM calls WHERE outcome='missed' "
+            "AND timestamp >= ?", (_since,))
+        _cdb.close()
+        _tn = _tg[0]["n"] if _tg else 0
+        _mn = _miss[0]["n"] if _miss else 0
+        if _tn or _mn:
+            bits = []
+            if _tn:
+                bits.append(f"{_tn} Telegram-Nachricht{'en' if _tn != 1 else ''}")
+            if _mn:
+                bits.append(f"{_mn} verpasste Anrufe")
+            lines.append("Kommunikation: " + ", ".join(bits) + ".")
+    except Exception:
+        pass
+
     return " ".join(lines)
 
 

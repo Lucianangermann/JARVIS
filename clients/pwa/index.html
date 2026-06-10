@@ -92,6 +92,7 @@
     <button class="hex-btn" id="act-productivity"  type="button" aria-label="Produktivität">💼</button>
     <button class="hex-btn" id="act-entertainment" type="button" aria-label="Entertainment">🎮</button>
     <button class="hex-btn" id="act-security"      type="button" aria-label="Sicherheit">🔒</button>
+    <button class="hex-btn" id="act-comm"          type="button" aria-label="Kommunikation">💬</button>
     <span class="tier-indicator" title="Permission tier" aria-label="Tier indicator">
       <span class="tier-dot"></span>
       <span class="tier-dot"></span>
@@ -351,6 +352,57 @@
     </div>
   </aside>
 
+  <!-- ── COMMUNICATION PANEL ─────────────────────────────────── -->
+  <aside id="comm-panel" class="slide-panel" aria-hidden="true">
+    <div class="panel-inner">
+      <h2>Kommunikation</h2>
+
+      <!-- Messages -->
+      <div class="sh-section">
+        <div class="sh-label">📨 Nachrichten
+          <button class="sh-btn" id="comm-unread-refresh" type="button"
+                  style="float:right;padding:2px 8px;">↻</button>
+        </div>
+        <div class="sec-meter"><span>iMessage</span>
+          <span id="comm-im-count" style="margin-left:auto;">—</span></div>
+        <div class="sec-meter"><span>Telegram</span>
+          <span id="comm-tg-count" style="margin-left:auto;">—</span></div>
+      </div>
+
+      <!-- Calls -->
+      <div class="sh-section">
+        <div class="sh-label">📞 Anrufe</div>
+        <button class="sh-btn" id="comm-missed" type="button">Verpasste Anrufe</button>
+      </div>
+
+      <!-- DND -->
+      <div class="sh-section">
+        <div class="sh-label">🔔 Nicht stören: <span id="comm-dnd-state">AUS</span></div>
+        <div class="sh-scene-grid">
+          <button class="sh-scene-btn" id="comm-dnd-on"  type="button">DND AN</button>
+          <button class="sh-scene-btn" id="comm-dnd-off" type="button">DND AUS</button>
+        </div>
+      </div>
+
+      <!-- Translate -->
+      <div class="sh-section">
+        <div class="sh-label">🌐 Übersetzen</div>
+        <input id="comm-tr-text" type="text" placeholder="Text eingeben…"
+               autocomplete="off" style="width:100%;margin-bottom:6px;">
+        <div class="sh-scene-grid">
+          <button class="sh-scene-btn comm-tr" data-to="en" type="button">DE→EN</button>
+          <button class="sh-scene-btn comm-tr" data-to="de" type="button">→DE</button>
+          <button class="sh-scene-btn comm-tr" data-to="fr" type="button">→FR</button>
+        </div>
+      </div>
+
+      <p id="comm-status" class="sh-status"></p>
+      <div class="row">
+        <button id="comm-close" type="button" class="action-btn">Schließen</button>
+      </div>
+    </div>
+  </aside>
+
   <!-- ── SECURITY PANEL ──────────────────────────────────────── -->
   <aside id="security-panel" class="slide-panel" aria-hidden="true">
     <div class="panel-inner">
@@ -442,6 +494,7 @@
   <script type="module" src="scripts/productivity.js"></script>
   <script type="module" src="scripts/entertainment.js"></script>
   <script type="module" src="scripts/security.js"></script>
+  <script type="module" src="scripts/communication.js"></script>
   <script type="module" src="scripts/app.js"></script>
 
   <!-- Register the service worker only when running over a secure

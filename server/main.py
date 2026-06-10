@@ -292,6 +292,69 @@ async def lifespan(app: FastAPI):
         print(f"[SECURITY] init failed, continuing without security: {exc}")
         security = None  # type: ignore[assignment]
 
+    # Communication layer. Best-effort like every other layer.
+    try:
+        from .communication import CommunicationManager
+
+        def _comm_speak(text: str) -> None:
+            if _VOICE_OK and tts is not None:
+                try:
+                    tts.speak(text)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[COMM] tts failed: {exc}")
+
+        def _comm_ui(event: dict) -> None:
+            try:
+                events.publish(event)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMM] ui publish failed: {exc}")
+
+        def _comm_macos(title: str, body: str) -> None:
+            # Route a macOS toast through the Tier-1 notification action.
+            try:
+                from .mac_control import tier2_apps
+                tier2_apps._send_notification(title=title, body=body)  # noqa: SLF001
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMM] macos notify failed: {exc}")
+
+        def _comm_meeting() -> bool:
+            intel = getattr(app.state, "intelligence", None)
+            if intel is None:
+                return False
+            try:
+                ctx = intel.get_context_for_brain() or ""
+                return "meeting" in ctx.lower() or "termin" in ctx.lower()
+            except Exception:  # noqa: BLE001
+                return False
+
+        communication = CommunicationManager(
+            db_path=Path("data/communication.db"),
+            client=app.state.brain.client,
+            speak_handler=_comm_speak,
+            ui_handler=_comm_ui,
+            macos_handler=_comm_macos,
+            meeting_probe=_comm_meeting,
+        )
+        communication.start()
+        app.state.communication = communication
+        app.state.brain._communication = communication
+        # Phased migration: let the security layer also push through the
+        # notification center (adds DND/quiet-hours/telegram to its alerts)
+        # without removing its existing direct speak path.
+        if security is not None and communication.notifications is not None:
+            try:
+                security._speak = (  # noqa: SLF001
+                    lambda msg, sev, _nc=communication.notifications:
+                    _nc.send("Sicherheit", msg,
+                             "critical" if sev in ("HIGH", "CRITICAL") else "medium",
+                             "security"))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMM] security→center bridge failed: {exc}")
+        print("[COMM] wired to brain ✓")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[COMM] init failed, continuing without communication: {exc}")
+        communication = None  # type: ignore[assignment]
+
     # On macOS, periodically drain the main-thread NSRunLoop so Cocoa
     # framework callbacks (Speech.framework's SFSpeechRecognizer in
     # particular) actually get delivered. Apple posts those completions
@@ -377,6 +440,11 @@ async def lifespan(app: FastAPI):
                 security.stop()
             except Exception as exc:  # noqa: BLE001
                 print(f"[SECURITY] stop error: {exc}")
+        if communication is not None:
+            try:
+                communication.stop()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMM] stop error: {exc}")
         if runloop_pump_task is not None:
             runloop_pump_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1510,6 +1578,237 @@ def gaming_stats(
         return JSONResponse({"stats": ""})
     msg, _ = ent.gaming.get_stats()
     return JSONResponse({"stats": msg})
+
+
+# --- Communication -------------------------------------------------------- #
+
+def _comm(request: Request) -> Any:
+    return getattr(request.app.state, "communication", None)
+
+
+def _require_comm(request: Request) -> Any:
+    cm = _comm(request)
+    if cm is None:
+        raise HTTPException(status_code=503, detail="Communication-Layer nicht verfügbar.")
+    return cm
+
+
+class MsgSendRequest(BaseModel):
+    platform: str = Field(default="imessage")
+    contact: str = Field(..., min_length=1)
+    message: str = Field(..., min_length=1)
+    confirm: bool = False
+
+
+class BroadcastRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    contacts: list[str]
+    platform: str = "imessage"
+    confirm: bool = False
+
+
+class CallRequest(BaseModel):
+    contact: str = Field(..., min_length=1)
+    method: str = "auto"
+
+
+class CallbackReminderRequest(BaseModel):
+    contact: str = Field(..., min_length=1)
+    when: str = "later"
+
+
+class EmailSendRequest(BaseModel):
+    to: str
+    subject: str
+    body: str
+    confirm: bool = False
+
+
+class TranslateRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+    target_lang: str = "en"
+    source_lang: str = "auto"
+
+
+class DndRequest(BaseModel):
+    enabled: bool
+    until: str | None = None
+
+
+class QuietHoursRequest(BaseModel):
+    start: str
+    end: str
+
+
+class AutoReplyRequest(BaseModel):
+    message: str | None = None
+    platforms: list[str] | None = None
+    exceptions: list[str] | None = None
+
+
+class OOORequest(BaseModel):
+    start_date: str
+    end_date: str
+    message: str | None = None
+
+
+class DraftRequest(BaseModel):
+    platform: str = "twitter"
+    topic: str = Field(..., min_length=1)
+    style: str = "professional"
+
+
+# ── messaging ───────────────────────────────────────────────────────────── #
+
+@app.get("/communication/messages/unread")
+async def comm_unread(request: Request, token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return await cm.messaging.get_all_unread()
+
+
+@app.post("/communication/messages/send")
+async def comm_send(body: MsgSendRequest, request: Request,
+                    token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    staged = await cm.messaging.send(body.platform, body.contact, body.message)
+    if body.confirm:
+        return {"result": await cm.messaging.confirm_pending()}
+    return staged
+
+
+@app.post("/communication/messages/broadcast")
+async def comm_broadcast(body: BroadcastRequest, request: Request,
+                         token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    staged = await cm.messaging.broadcast(body.message, body.contacts, [body.platform])
+    if body.confirm:
+        return {"result": await cm.messaging.confirm_pending()}
+    return staged
+
+
+@app.get("/communication/messages/{platform}/{contact}")
+async def comm_conversation(platform: str, contact: str, request: Request,
+                            token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return {"text": await cm.messaging.read_messages(platform, contact, 10)}
+
+
+# ── calls ───────────────────────────────────────────────────────────────── #
+
+@app.post("/communication/calls/make")
+async def comm_call(body: CallRequest, request: Request,
+                    token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return await cm.calls.make_call(body.contact, body.method)
+
+
+@app.get("/communication/calls/missed")
+async def comm_missed(request: Request, token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return {"spoken": await cm.calls.get_missed_calls()}
+
+
+@app.post("/communication/calls/callback-reminder")
+async def comm_callback(body: CallbackReminderRequest, request: Request,
+                        token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return {"spoken": await cm.calls.set_callback_reminder(body.contact, body.when)}
+
+
+# ── email ───────────────────────────────────────────────────────────────── #
+
+@app.get("/communication/email/summary")
+async def comm_email_summary(request: Request, token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return {"summary": await cm.email.get_all_accounts_summary()}
+
+
+@app.post("/communication/email/send")
+async def comm_email_send(body: EmailSendRequest, request: Request,
+                          token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    staged = await cm.email.send(body.to, body.subject, body.body)
+    if body.confirm:
+        return {"result": await cm.email.confirm_pending()}
+    return staged
+
+
+@app.get("/communication/email/templates")
+async def comm_email_templates(request: Request, token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return {"templates": cm.email.list_templates()}
+
+
+# ── notifications ───────────────────────────────────────────────────────── #
+
+@app.get("/communication/notifications/pending")
+async def comm_notif_pending(request: Request, token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return {"pending": cm.notifications.get_pending()}
+
+
+@app.post("/communication/notifications/dnd")
+async def comm_dnd(body: DndRequest, request: Request,
+                   token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return cm.notifications.set_dnd(body.enabled, body.until)
+
+
+@app.post("/communication/notifications/quiet-hours")
+async def comm_quiet(body: QuietHoursRequest, request: Request,
+                     token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return cm.notifications.set_quiet_hours(body.start, body.end)
+
+
+# ── translation ─────────────────────────────────────────────────────────── #
+
+@app.post("/communication/translate")
+async def comm_translate(body: TranslateRequest, request: Request,
+                         token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return {"translation": await cm.translator.translate(
+        body.text, body.target_lang, body.source_lang)}
+
+
+# ── social ──────────────────────────────────────────────────────────────── #
+
+@app.get("/communication/social/birthdays")
+async def comm_birthdays(request: Request, token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return {"spoken": await cm.social.get_birthday_reminders()}
+
+
+@app.post("/communication/social/draft")
+async def comm_draft(body: DraftRequest, request: Request,
+                     token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return await cm.social.draft_post(body.platform, body.topic, body.style)
+
+
+# ── automation ──────────────────────────────────────────────────────────── #
+
+@app.post("/communication/automation/auto-reply")
+async def comm_autoreply(body: AutoReplyRequest, request: Request,
+                         token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return await cm.automation.enable_auto_reply(
+        message=body.message or settings.AUTO_REPLY_MESSAGE,
+        platforms=body.platforms, exceptions=body.exceptions)
+
+
+@app.post("/communication/automation/out-of-office")
+async def comm_ooo(body: OOORequest, request: Request,
+                   token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return await cm.automation.enable_out_of_office(
+        body.start_date, body.end_date, body.message)
+
+
+@app.get("/communication/automation/followups")
+async def comm_followups(request: Request, token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return {"followups": await cm.automation.check_followups()}
 
 
 # --- Security & monitoring ------------------------------------------------ #

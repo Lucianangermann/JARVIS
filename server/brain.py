@@ -537,6 +537,12 @@ class Brain:
         # round-trip.
         self._security = None  # type: ignore[assignment]
 
+        # Communication layer. Wired by main.py after start(). Routed
+        # before Claude (after security) so messaging/calls/email/
+        # translation/notification commands — and the confirm-before-send
+        # flow — are deterministic.
+        self._communication = None  # type: ignore[assignment]
+
         # Long-term memory + self-learning. Owns short-term history (was
         # _histories), error history, profile, and the dynamic system-
         # prompt builder. Falls back to in-memory only if storage can't
@@ -604,6 +610,18 @@ class Brain:
                     self._emit_short_circuit_reply(text, speak_locally)
                     return text
             except Exception:  # noqa: BLE001 — security must never crash reply
+                pass
+
+        # Communication short-circuit — messaging / calls / email /
+        # translation / notifications / the confirm-before-send flow.
+        # Returns None for non-comm input, so normal turns fall through.
+        if self._communication is not None:
+            try:
+                text = self._run_communication_command(user_text)
+                if text:
+                    self._emit_short_circuit_reply(text, speak_locally)
+                    return text
+            except Exception:  # noqa: BLE001 — comms must never crash reply
                 pass
 
         # Briefing short-circuit: if the user typed/said one of the
@@ -1246,6 +1264,23 @@ class Brain:
             return _aio.run(coro)
         except Exception as exc:  # noqa: BLE001
             print(f"[Brain] security command failed: {exc}")
+            return None
+
+    def _run_communication_command(self, user_text: str) -> str | None:
+        """Run CommunicationManager.process_command (async) from the brain's
+        worker thread. Returns a spoken reply, or None to fall through.
+        Same loop-scheduling trick as _run_security_command."""
+        import asyncio as _aio
+        from . import events as _events
+        try:
+            coro = self._communication.process_command(user_text)
+            main_loop = _events._loop
+            if main_loop is not None and main_loop.is_running():
+                future = _aio.run_coroutine_threadsafe(coro, main_loop)
+                return future.result(timeout=25)
+            return _aio.run(coro)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Brain] communication command failed: {exc}")
             return None
 
     def _exec_smarthome_tool(self, tool_input: dict[str, Any]) -> tuple[str, bool]:

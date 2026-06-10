@@ -12,6 +12,14 @@ anthropic>=0.40
 # HTTP client (Windows client + tools)
 requests>=2.32
 websockets>=12.0
+# httpx is pulled in transitively by anthropic, but tools/news.py and the
+# communication layer (Reddit RSS) import it directly — list it explicitly.
+httpx>=0.27
+
+# --- Communication layer ---
+# No new hard deps: messaging (Telegram Bot API) uses requests; social
+# (Reddit RSS) uses httpx; translation reuses the Claude client. iMessage /
+# calls / email go through macOS AppleScript + chat.db (stdlib sqlite3).
 
 # Voice (STT + TTS) is optional — install separately if needed:
 #     pip install -r requirements-voice.txt

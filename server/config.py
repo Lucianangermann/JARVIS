@@ -199,6 +199,39 @@ class Settings:
     DISK_ALERT_THRESHOLD: float = float(os.getenv("DISK_ALERT_THRESHOLD", "85"))
     TEMP_ALERT_THRESHOLD: float = float(os.getenv("TEMP_ALERT_THRESHOLD", "85"))
 
+    # --- Communication layer ---
+    # Messaging. iMessage works via AppleScript (zero setup). WhatsApp is
+    # deferred (not built). Telegram is the reliable iPhone push channel —
+    # set up via `python -m server.communication.messaging.setup_telegram`.
+    IMESSAGE_ENABLED: bool = os.getenv("IMESSAGE_ENABLED", "1") == "1"
+    WHATSAPP_ENABLED: bool = os.getenv("WHATSAPP_ENABLED", "0") == "1"
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    TELEGRAM_NOTIFICATIONS: bool = os.getenv("TELEGRAM_NOTIFICATIONS", "1") == "1"
+
+    # Email (Apple Mail multi-account; addresses are informational hints).
+    EMAIL_ACCOUNTS: list[str] = _csv("EMAIL_ACCOUNTS", "icloud")
+    GMAIL_ADDRESS: str = os.getenv("GMAIL_ADDRESS", "")
+    OUTLOOK_ADDRESS: str = os.getenv("OUTLOOK_ADDRESS", "")
+
+    # Social
+    TWITTER_BEARER_TOKEN: str = os.getenv("TWITTER_BEARER_TOKEN", "")
+    LINKEDIN_ENABLED: bool = os.getenv("LINKEDIN_ENABLED", "0") == "1"
+    REDDIT_SUBREDDITS: list[str] = _csv("REDDIT_SUBREDDITS", "technology,programming")
+
+    # Translation
+    DEEPL_API_KEY: str = os.getenv("DEEPL_API_KEY", "")
+    DEFAULT_TRANSLATION_LANG: str = os.getenv("DEFAULT_TRANSLATION_LANG", "de")
+
+    # Notifications
+    QUIET_HOURS_START: str = os.getenv("QUIET_HOURS_START", "23:00")
+    QUIET_HOURS_END: str = os.getenv("QUIET_HOURS_END", "07:00")
+
+    # Automation
+    AUTO_REPLY_IN_FOCUS: bool = os.getenv("AUTO_REPLY_IN_FOCUS", "1") == "1"
+    AUTO_REPLY_MESSAGE: str = os.getenv(
+        "AUTO_REPLY_MESSAGE", "Bin gerade beschäftigt, melde mich später")
+
     # --- Paths ---
     LOG_DIR: Path = PROJECT_ROOT / "logs"
     REJECTED_LOG: Path = LOG_DIR / "rejected.log"
