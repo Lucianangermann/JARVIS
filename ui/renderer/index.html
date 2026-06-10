@@ -240,13 +240,57 @@
         </div>
       </div>
 
+      <!-- Security mini-panel (shown/hidden by 🔒 button) -->
+      <div id="sec-panel" class="sh-panel" hidden>
+        <div class="sh-row">
+          <span id="sec-health" style="font-size:11px;letter-spacing:.08em;color:var(--jarvis-primary);flex:1;">CPU — · RAM — · DISK — · AKKU —</span>
+          <button class="sh-close-btn" id="sec-panel-close" type="button">✕</button>
+        </div>
+        <div class="sh-row">
+          <button class="sh-btn" id="sec-arm"    type="button">🔒 ARM (WEG)</button>
+          <button class="sh-btn" id="sec-disarm" type="button">🔓 AUS</button>
+          <button class="sh-btn" id="sec-status" type="button">STATUS</button>
+        </div>
+        <div class="sh-row">
+          <button class="sh-btn" id="sec-door" type="button">📷 Wer an der Tür?</button>
+          <button class="sh-btn" id="sec-net"  type="button">🌐 Netzwerk</button>
+        </div>
+        <div class="sh-row">
+          <button class="sh-btn" id="sec-sos" type="button"
+                  style="flex:1;background:#3a0d0d;border-color:#ff3030;color:#ff6a6a;font-weight:700;">
+            🚨 SOS NOTFALL</button>
+        </div>
+        <div class="sh-row"><span id="sec-msg" style="font-size:10px;color:var(--jarvis-glow);min-height:1.1em;"></span></div>
+      </div>
+
+      <!-- Communication mini-panel (shown/hidden by 💬 button) -->
+      <div id="comm-panel-hud" class="sh-panel" hidden>
+        <div class="sh-row">
+          <span id="comm-unread" style="font-size:11px;letter-spacing:.08em;color:var(--jarvis-primary);flex:1;">iMessage — · Telegram —</span>
+          <button class="sh-close-btn" id="comm-panel-close" type="button">✕</button>
+        </div>
+        <div class="sh-row">
+          <button class="sh-btn" id="comm-missed" type="button">📞 Verpasst</button>
+          <button class="sh-btn" id="comm-dnd"    type="button">🔔 DND</button>
+        </div>
+        <div class="sh-row">
+          <input id="comm-tr" type="text" placeholder="Übersetzen…" autocomplete="off"
+                 style="flex:1;background:rgba(0,20,40,.6);border:1px solid rgba(0,212,255,.3);color:#cfefff;padding:4px 8px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:11px;" />
+          <button class="sh-btn comm-tr-go" data-to="en" type="button">→EN</button>
+          <button class="sh-btn comm-tr-go" data-to="de" type="button">→DE</button>
+        </div>
+        <div class="sh-row"><span id="comm-msg" style="font-size:10px;color:var(--jarvis-glow);min-height:1.1em;"></span></div>
+      </div>
+
       <!-- Bottom row: action buttons + input -->
       <div class="bottom-row">
         <div class="hex-buttons no-drag">
-          <button class="hex-btn" data-action="music"   title="Music">♪</button>
-          <button class="hex-btn" data-action="search"  title="Search">⌕</button>
-          <button class="hex-btn" data-action="home"    title="Smart Home">⌂</button>
-          <button class="hex-btn" data-action="cycle"   title="Cycle state (dev)">↻</button>
+          <button class="hex-btn" data-action="music"    title="Music">♪</button>
+          <button class="hex-btn" data-action="search"   title="Search">⌕</button>
+          <button class="hex-btn" data-action="home"     title="Smart Home">⌂</button>
+          <button class="hex-btn" data-action="security" title="Sicherheit">🔒</button>
+          <button class="hex-btn" data-action="comm"     title="Kommunikation">💬</button>
+          <button class="hex-btn" data-action="cycle"    title="Cycle state (dev)">↻</button>
           <button class="hex-btn kill" data-action="minimize" title="Minimize to orb">✕</button>
         </div>
         <div class="input-wrap">

@@ -855,7 +855,7 @@ class Brain:
                     elif block.name in {
                         "manage_tasks", "manage_focus",
                         "get_productivity_score", "add_knowledge_note",
-                        "get_email_smart_summary",
+                        "get_email_smart_summary", "meeting_control",
                     }:
                         result, is_error = self._exec_productivity(
                             block.name, block.input,
@@ -1566,6 +1566,38 @@ class Brain:
                 from .tools.mail_tool import list_unread
                 result, is_err = list_unread("INBOX")
                 return result, is_err
+
+            if tool_name == "meeting_control":
+                meeting = getattr(pm, "meeting", None)
+                if meeting is None:
+                    return "Meeting-Assistent nicht verfügbar.", True
+                # Ensure the summariser has a Claude client (lazy PMs build
+                # the meeting object without one).
+                if getattr(meeting, "_client", None) is None:
+                    meeting._client = self.client  # noqa: SLF001
+                action = inp.get("action", "")
+                if action == "start":
+                    r = meeting.start_recording(inp.get("title", "Meeting"))
+                    return (r.get("spoken") or r.get("error", "")), not r.get("ok")
+                if action == "status":
+                    return ("Eine Meeting-Aufnahme läuft." if meeting.is_recording()
+                            else "Es läuft keine Aufnahme."), False
+                if action in ("stop", "summarize"):
+                    import asyncio as _aio
+                    from . import events as _events
+                    if action == "summarize":
+                        coro = meeting.process_transcript(
+                            inp.get("transcript", ""), inp.get("title"))
+                    else:
+                        coro = meeting.end_meeting(inp.get("title"))
+                    main_loop = _events._loop
+                    if main_loop is not None and main_loop.is_running():
+                        r = _aio.run_coroutine_threadsafe(
+                            coro, main_loop).result(timeout=40)
+                    else:
+                        r = _aio.run(coro)
+                    return (r.get("spoken") or "Meeting verarbeitet."), not r.get("ok")
+                return f"Unbekannte action: {action}", True
 
             return f"Unbekanntes Productivity-Tool: {tool_name}", True
         except Exception as exc:  # noqa: BLE001

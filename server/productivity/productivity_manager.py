@@ -7,16 +7,22 @@ from typing import Any
 from .task_manager import TaskManager
 from .focus_manager import FocusManager
 from .analytics import ProductivityAnalytics
+from .meeting_assistant import MeetingAssistant
 
 
 class ProductivityManager:
-    """Ties TaskManager, FocusManager, and ProductivityAnalytics together."""
+    """Ties TaskManager, FocusManager, ProductivityAnalytics, and the
+    MeetingAssistant together."""
 
-    def __init__(self, db_path: Path | str) -> None:
+    def __init__(self, db_path: Path | str, client: Any = None) -> None:
         self._db_path = Path(db_path)
         self.tasks = TaskManager(self._db_path)
         self.focus = FocusManager(self._db_path)
         self.analytics = ProductivityAnalytics(self._db_path)
+        # Meeting assistant reuses the task manager (action items → tasks)
+        # and the brain's Claude client (summarisation). client may be None
+        # when lazily constructed; the brain sets it on the meeting object.
+        self.meeting = MeetingAssistant(task_manager=self.tasks, client=client)
 
     def start(self) -> None:
         print("[PRODUCTIVITY] ready")

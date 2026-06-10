@@ -215,7 +215,8 @@ async def lifespan(app: FastAPI):
     # Productivity layer
     try:
         from .productivity.productivity_manager import ProductivityManager
-        productivity = ProductivityManager(Path("data/jarvis.db"))
+        productivity = ProductivityManager(Path("data/jarvis.db"),
+                                           client=app.state.brain.client)
         productivity.start()
         app.state.productivity = productivity
         app.state.brain._productivity = productivity
@@ -350,6 +351,33 @@ async def lifespan(app: FastAPI):
                              "security"))
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMM] security→center bridge failed: {exc}")
+
+        # Emergency → Telegram: emergency contact notifications (SOS, fire,
+        # intrusion) now ALSO push to the owner's iPhone via the Telegram
+        # bot, the most reliable mobile channel. Keeps the existing
+        # log + event-bus path; degrades to a no-op if Telegram isn't set up.
+        emergency = getattr(security, "emergency", None) if security else None
+        if emergency is not None and communication.telegram is not None:
+            try:
+                _orig_notify = emergency._notify  # noqa: SLF001
+
+                def _emergency_notify_all(message: str, contacts: list[str],
+                                          _orig=_orig_notify,
+                                          _tg=communication.telegram) -> None:
+                    if _orig is not None:
+                        try:
+                            _orig(message, contacts)
+                        except Exception as exc:  # noqa: BLE001
+                            print(f"[COMM] emergency orig-notify failed: {exc}")
+                    try:
+                        if _tg.configured:
+                            _tg.notify_sync("NOTFALL", message, "critical")
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[COMM] emergency telegram push failed: {exc}")
+
+                emergency._notify = _emergency_notify_all  # noqa: SLF001
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMM] emergency→telegram bridge failed: {exc}")
         print("[COMM] wired to brain ✓")
     except Exception as exc:  # noqa: BLE001
         print(f"[COMM] init failed, continuing without communication: {exc}")

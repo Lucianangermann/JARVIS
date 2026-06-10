@@ -150,4 +150,37 @@ def productivity_tools() -> list[dict[str, Any]]:
                 "additionalProperties": False,
             },
         },
+        {
+            "name": "meeting_control",
+            "description": (
+                "Record and process meetings. action='start' begins "
+                "recording the meeting from the microphone; action='stop' "
+                "ends it, transcribes, summarises via AI, turns action items "
+                "into tasks, and saves a note; action='status' reports "
+                "whether a recording is running; action='summarize' "
+                "processes a transcript passed in 'transcript' without "
+                "recording. Use 'start'/'stop' for phrases like 'nimm das "
+                "Meeting auf' / 'beende das Meeting'."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["start", "stop", "status", "summarize"],
+                        "description": "The operation to perform.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Meeting title (for start/stop).",
+                    },
+                    "transcript": {
+                        "type": "string",
+                        "description": "Transcript text (for action='summarize').",
+                    },
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
     ]

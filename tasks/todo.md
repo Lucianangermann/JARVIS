@@ -1,5 +1,35 @@
 # Todo
 
+## Synergy Pack (active)
+
+Quick, reuse-heavy wins connecting existing layers.
+
+### 1. Emergency → Telegram push  ✅
+- [x] Bridge security.emergency notify_handler → communication.telegram (push to owner's iPhone)
+- [x] Keeps existing log + event-bus publish; adds Telegram as an extra channel
+- [x] Wired in main.py after BOTH security + communication built (wraps emergency._notify)
+- [x] Fixed: emergency now always invokes notify (owner push fires even with NO contacts configured)
+- [x] Verified via TestClient: SOS → Telegram sendMessage with 🚨 to owner chat_id; no-ops cleanly without token/chat_id
+
+### 2. Meeting assistant  ✅
+- [x] `productivity/meeting_assistant.py` — record (best-effort sounddevice chunks + STT) → Claude summary + action items + decisions → tasks (TaskManager) + Apple Note
+- [x] Reuses stt, brain.client, task_manager, notes_tool
+- [x] Exposed as Claude tool `meeting_control` (start/stop/status/summarize) in productivity tools + brain executor
+- [x] ProductivityManager wires `self.meeting` with brain client (main.py passes client)
+- [x] Fixed: stop_recording short-join (no 15s hang on "beende das Meeting")
+- [x] tests/test_meeting_assistant.py (6); verified end-to-end with real Claude (transcript → 2 action-item tasks); 51 tests pass, no regressions
+- [ ] Known limit: mic contention if voice_loop is recording simultaneously (best-effort; summarize path works on any transcript)
+
+### 3. Electron HUD Phase 1  ✅ (already built) + panels added
+- [x] FINDING: HUD Phase 1 static visuals already complete — emblem SVG (rings/ticks/dots/
+      bracket-arcs/wordmark), corner brackets, IDLE orb + particle aura, state-driven canvas
+      visualizer (setVisualizerState + per-state amplitude model), status bar, chat pane. No rebuild needed.
+- [x] Real gap filled instead: ported Security 🔒 + Communication 💬 panels into the Electron HUD
+      (were only in the PWA). New hex-buttons + compact panels (reuse .sh-panel CSS) + security.js/comm.js
+      (same window.jarvis.getConfig REST pattern as smarthome.js) + app.js wiring. JS syntax-checked.
+
+---
+
 ## JARVIS Communication Layer — PLAN (not started)
 
 Goal: a communication hub under `server/communication/` (messaging, calls, email,

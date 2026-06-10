@@ -18,6 +18,8 @@ import * as ws from "./ws.js";
 import * as perms from "./permissions.js";
 import * as pending from "./pending.js";
 import * as smarthome from "./smarthome.js";
+import * as security from "./security.js";
+import * as comm from "./comm.js";
 
 const STATES = ["idle", "active", "speaking", "processing"];
 
@@ -353,6 +355,12 @@ document.querySelectorAll(".hex-btn").forEach((btn) => {
       case "home":
         // Handled by smarthome.js (toggles the sh-panel).
         break;
+      case "security":
+        // Handled by security.js (toggles the sec-panel).
+        break;
+      case "comm":
+        // Handled by comm.js (toggles the comm-panel-hud).
+        break;
     }
   });
 });
@@ -453,6 +461,8 @@ window.jarvis?.onInterrupt?.(() => {
 
 // ---- smart home mini-panel ----------------------------------------
 smarthome.init();
+security.init();
+comm.init();
 
 // ---- seed the UI with some content so first paint isn't empty ----
 

@@ -135,7 +135,10 @@ class EmergencySystem:
                 and self._home_address not in message:
             message = f"{message} Adresse: {self._home_address}."
         delivered = False
-        if contacts and self._notify is not None:
+        # Always invoke the notify handler on an emergency, even with no
+        # contacts configured: the handler also drives the owner's own push
+        # channel (Telegram), which must fire regardless of the contact list.
+        if self._notify is not None:
             try:
                 self._notify(message, contacts)
                 delivered = True
