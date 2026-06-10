@@ -143,6 +143,9 @@ class ContextBuilder:
             past = self._past_context_block(current_query)
             if past:
                 dynamic.append(past)
+            knew = self._knowledge_block(current_query)
+            if knew:
+                dynamic.append(knew)
         dynamic.append(self._current_context_block(session_count))
 
         blocks: list[dict[str, Any]] = [
@@ -214,6 +217,31 @@ class ContextBuilder:
                 body = body[:220] + "…"
             bullets.append(f"- {body}")
         return "## Relevant Past Context\n" + "\n".join(bullets)
+
+    def _knowledge_block(self, query: str, *, limit: int = 4) -> str:
+        """Surface explicitly-saved knowledge ('merk dir …') relevant to the
+        current query, so JARVIS can answer 'was weiß ich über X' inline and
+        recall facts without a tool round-trip."""
+        if self.long_term is None or not self.long_term.available:
+            return ""
+        hits = self.long_term.search_knowledge(query, n_results=limit)
+        # Tighter cut than past-context (0.85): this block is injected on
+        # EVERY turn, so precision matters more than recall — only surface
+        # facts genuinely about the query. Calibrated against MiniLM cosine
+        # distances (relevant ≈0.4, unrelated ≳0.7). The recall_knowledge
+        # tool covers explicit "was weiß ich über X" lookups with a wider net.
+        hits = [h for h in hits if (h.get("distance") or 1.0) < 0.55]
+        if not hits:
+            return ""
+        bullets = []
+        for h in hits:
+            body = (h.get("document") or "").strip().replace("\n", " ")
+            cat = (h.get("metadata") or {}).get("category", "")
+            if len(body) > 220:
+                body = body[:220] + "…"
+            bullets.append(f"- {body}" + (f" ({cat})" if cat else ""))
+        return ("## Saved Knowledge (the user asked you to remember this)\n"
+                + "\n".join(bullets))
 
     def _current_context_block(self, session_count: int) -> str:
         now = _dt.datetime.now()

@@ -171,6 +171,19 @@ def morning_briefing() -> str:
     except Exception:
         pass
 
+    # Second Brain — flashcards due for review today (the heart of spaced
+    # repetition: without the daily nudge you never review).
+    try:
+        from ..knowledge.flashcards import FlashcardManager
+        _fm = FlashcardManager(_DATA_DIR / "knowledge.db")
+        _due = _fm.due_count()
+        _fm.close()
+        if _due:
+            lines.append(f"Lernen: {_due} Karteikarte"
+                         f"{'n' if _due != 1 else ''} stehen zur Wiederholung an.")
+    except Exception:
+        pass
+
     return " ".join(lines)
 
 

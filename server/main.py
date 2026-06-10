@@ -1008,6 +1008,89 @@ def memory_search(request: Request, q: str = "", n: int = 5,
     return {"query": q, "results": mem.search(q, n_results=n)}
 
 
+@app.get("/memory/knowledge/search")
+def memory_knowledge_search(request: Request, q: str = "", n: int = 5,
+                            category: str = "",
+                            token: str = Depends(require_token)) -> dict[str, Any]:
+    """Semantic search over explicitly-saved knowledge ('merk dir …')."""
+    mem = _memory(request)
+    if mem is None:
+        raise HTTPException(status_code=503, detail="memory unavailable")
+    q = (q or "").strip()
+    if not q:
+        return {"query": q, "results": []}
+    n = max(1, min(int(n), 20))
+    results = mem.long_term.search_knowledge(q, n_results=n)
+    if category:
+        results = [r for r in results
+                   if (r.get("metadata") or {}).get("category") == category]
+    return {"query": q, "results": results}
+
+
+@app.get("/memory/knowledge/list")
+def memory_knowledge_list(request: Request, category: str = "", limit: int = 50,
+                          token: str = Depends(require_token)) -> dict[str, Any]:
+    """List saved knowledge, newest first, optionally by category."""
+    mem = _memory(request)
+    if mem is None:
+        raise HTTPException(status_code=503, detail="memory unavailable")
+    limit = max(1, min(int(limit), 200))
+    return {"results": mem.long_term.list_knowledge(
+        category=category or None, limit=limit)}
+
+
+# ── flashcards (Second Brain SRS) ───────────────────────────────────────── #
+
+def _flashcards(request: Request) -> Any:
+    brain = getattr(request.app.state, "brain", None)
+    return brain._get_flashcards() if brain is not None else None  # noqa: SLF001
+
+
+class _FlashcardAddRequest(BaseModel):
+    front: str = Field(..., min_length=1)
+    back: str = Field(..., min_length=1)
+    category: str = "general"
+
+
+class _FlashcardReviewRequest(BaseModel):
+    quality: int | None = Field(default=None, ge=0, le=5)
+    feedback: str | None = None
+
+
+@app.get("/knowledge/flashcards/due")
+def flashcards_due(request: Request, limit: int = 20,
+                   token: str = Depends(require_token)) -> dict[str, Any]:
+    fc = _flashcards(request)
+    if fc is None:
+        raise HTTPException(status_code=503, detail="flashcards unavailable")
+    cards = fc.due_cards(limit=max(1, min(int(limit), 100)))
+    return {"due": fc.due_count(), "cards": cards}
+
+
+@app.post("/knowledge/flashcards")
+def flashcards_add(body: _FlashcardAddRequest, request: Request,
+                   token: str = Depends(require_token)) -> dict[str, Any]:
+    fc = _flashcards(request)
+    if fc is None:
+        raise HTTPException(status_code=503, detail="flashcards unavailable")
+    cid = fc.add_card(body.front, body.back, body.category)
+    return {"ok": cid is not None, "id": cid}
+
+
+@app.post("/knowledge/flashcards/{card_id}/review")
+def flashcards_review(card_id: int, body: _FlashcardReviewRequest, request: Request,
+                      token: str = Depends(require_token)) -> dict[str, Any]:
+    fc = _flashcards(request)
+    if fc is None:
+        raise HTTPException(status_code=503, detail="flashcards unavailable")
+    q = body.quality if body.quality is not None \
+        else fc.quality_from_feedback(body.feedback or "richtig")
+    result = fc.review_card(card_id, q)
+    if not result:
+        raise HTTPException(status_code=404, detail="card not found")
+    return result
+
+
 class _ForgetRequest(BaseModel):
     """A single entry id to drop from the vector store. The actual
     semantic equivalent — forgetting a single conversation — runs

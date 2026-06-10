@@ -855,6 +855,7 @@ class Brain:
                     elif block.name in {
                         "manage_tasks", "manage_focus",
                         "get_productivity_score", "add_knowledge_note",
+                        "recall_knowledge", "flashcards",
                         "get_email_smart_summary", "meeting_control",
                     }:
                         result, is_error = self._exec_productivity(
@@ -1462,6 +1463,22 @@ class Brain:
             return get_unread_count()
         return f"Unbekannte Aktion: {action}", True
 
+    def _get_flashcards(self) -> Any:
+        """Lazily build the flashcard manager (Second Brain SRS). Shares the
+        brain's Claude client for card generation."""
+        fc = getattr(self, "_flashcards", None)
+        if fc is None:
+            try:
+                from pathlib import Path as _Path
+                from .knowledge import FlashcardManager as _FM
+                _db = _Path(__file__).resolve().parents[1] / "data" / "knowledge.db"
+                fc = _FM(_db, client=self.client)
+                self._flashcards = fc
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Brain] flashcards init failed: {exc}")
+                self._flashcards = None
+        return self._flashcards
+
     def _exec_productivity(
         self, tool_name: str, inp: dict[str, Any],
     ) -> tuple[str, bool]:
@@ -1553,19 +1570,85 @@ class Brain:
                 category = inp.get("category", "idea")
                 if not content:
                     return "content ist erforderlich.", True
-                try:
-                    self.memory.long_term.store_knowledge(
-                        content, category=category,
-                    )
+                # NB: the method is save_knowledge (not store_knowledge —
+                # that older name never existed, so this used to silently
+                # fail and fall into the except below, "remembering" nothing).
+                entry_id = self.memory.long_term.save_knowledge(
+                    content, source="explicit", category=category,
+                )
+                if entry_id:
                     return f"Notiz gespeichert ({category}): {content[:60]}…", False
-                except Exception:
-                    print(f"[brain] knowledge note: {content[:40]}")
-                    return f"Notiz notiert ({category}).", False
+                # Embeddings/Chroma unavailable — be honest, don't pretend.
+                return ("Konnte die Notiz nicht dauerhaft speichern "
+                        "(Wissensspeicher nicht verfügbar)."), True
+
+            if tool_name == "recall_knowledge":
+                query = inp.get("query", "")
+                if not query:
+                    return "query ist erforderlich.", True
+                category = inp.get("category")
+                results = self.memory.long_term.search_knowledge(
+                    query, n_results=int(inp.get("n", 5)))
+                if category:
+                    results = [r for r in results
+                               if r.get("metadata", {}).get("category") == category]
+                if not results:
+                    return f"Ich weiß nichts über '{query}'.", False
+                facts = [r["document"] for r in results[:5]]
+                return ("Dazu weiß ich: " + " · ".join(facts)), False
 
             if tool_name == "get_email_smart_summary":
                 from .tools.mail_tool import list_unread
                 result, is_err = list_unread("INBOX")
                 return result, is_err
+
+            if tool_name == "flashcards":
+                fc = self._get_flashcards()
+                if fc is None:
+                    return "Karteikarten nicht verfügbar.", True
+                action = inp.get("action", "")
+                if action == "add":
+                    front, back = inp.get("front", ""), inp.get("back", "")
+                    if not front or not back:
+                        return "front und back sind erforderlich.", True
+                    cid = fc.add_card(front, back, inp.get("category", "general"))
+                    return (f"Karteikarte angelegt (id={cid}).", False) if cid \
+                        else ("Konnte Karte nicht speichern.", True)
+                if action == "due":
+                    return fc.spoken_due(), False
+                if action == "next":
+                    due = fc.due_cards(limit=1)
+                    if not due:
+                        return "Keine fälligen Karten.", False
+                    c = due[0]
+                    return f"Frage (Karte {c['id']}): {c['front']}", False
+                if action == "reveal":
+                    cid = inp.get("card_id")
+                    card = fc.get_card(int(cid)) if cid else None
+                    return (f"Antwort: {card['back']}", False) if card \
+                        else ("Karte nicht gefunden.", True)
+                if action == "grade":
+                    cid = inp.get("card_id")
+                    if not cid:
+                        return "card_id ist erforderlich.", True
+                    q = fc.quality_from_feedback(inp.get("feedback", "richtig"))
+                    r = fc.review_card(int(cid), q)
+                    if not r:
+                        return "Karte nicht gefunden.", True
+                    days = r["interval_days"]
+                    return (f"Gemerkt. Nächste Wiederholung in "
+                            f"{days:.0f} Tag{'en' if days != 1 else ''}.", False)
+                if action == "generate":
+                    text = inp.get("text", "")
+                    if not text:
+                        return "text ist erforderlich.", True
+                    ids = fc.generate_from_text(text, inp.get("category", "learning"))
+                    return (f"{len(ids)} Karteikarten erstellt." if ids
+                            else "Konnte keine Karten erstellen."), not ids
+                if action == "stats":
+                    s = fc.stats()
+                    return (f"{s['total']} Karten gesamt, {s['due']} fällig.", False)
+                return f"Unbekannte action: {action}", True
 
             if tool_name == "meeting_control":
                 meeting = getattr(pm, "meeting", None)

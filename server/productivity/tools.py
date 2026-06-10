@@ -117,7 +117,9 @@ def productivity_tools() -> list[dict[str, Any]]:
         {
             "name": "add_knowledge_note",
             "description": (
-                "Save a note, idea, learning, or decision to JARVIS memory. "
+                "Save a note, idea, learning, fact, or decision to JARVIS's "
+                "long-term knowledge (semantic memory). Use this whenever the "
+                "user says 'merk dir …' / 'remember …' / 'speichere …'. "
                 "category: idea / learning / reference / decision."
             ),
             "input_schema": {
@@ -134,6 +136,71 @@ def productivity_tools() -> list[dict[str, Any]]:
                     },
                 },
                 "required": ["content"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "recall_knowledge",
+            "description": (
+                "Semantic-search JARVIS's long-term knowledge for what the "
+                "user previously asked to remember. Use for 'was weiß ich "
+                "über …' / 'woran wolltest du mich erinnern' / 'what do I "
+                "know about …'. Returns the most relevant saved notes."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to look up in saved knowledge.",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["idea", "learning", "reference", "decision"],
+                        "description": "Optional: restrict to a category.",
+                    },
+                    "n": {
+                        "type": "integer",
+                        "description": "Max results (default 5).",
+                    },
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "flashcards",
+            "description": (
+                "Spaced-repetition flashcards (Second Brain). Actions: "
+                "'add' (front+back) to create a card; 'due' to report how "
+                "many cards are due; 'next' to get the next due card's "
+                "question (returns front + card_id); 'reveal' (card_id) to "
+                "get the answer; 'grade' (card_id + feedback like richtig/"
+                "falsch/einfach/schwer) to schedule the next review; "
+                "'generate' (text) to auto-create cards from a topic; "
+                "'stats' for totals. Use for 'erstelle eine Karteikarte', "
+                "'quiz mich', 'fällige Karten'."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["add", "due", "next", "reveal", "grade",
+                                 "generate", "stats"],
+                    },
+                    "front": {"type": "string", "description": "Question (for add)."},
+                    "back": {"type": "string", "description": "Answer (for add)."},
+                    "category": {"type": "string"},
+                    "card_id": {"type": "integer",
+                                "description": "Card id (reveal/grade)."},
+                    "feedback": {"type": "string",
+                                 "description": "Self-grade for 'grade': "
+                                                "richtig/falsch/einfach/schwer."},
+                    "text": {"type": "string",
+                             "description": "Topic/text for 'generate'."},
+                },
+                "required": ["action"],
                 "additionalProperties": False,
             },
         },

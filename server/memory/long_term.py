@@ -250,6 +250,32 @@ class LongTermMemory:
             log.warning("search_knowledge failed: %s", exc)
             return []
 
+    def list_knowledge(self, *, category: str | None = None,
+                       limit: int = 50) -> list[dict[str, Any]]:
+        """List saved knowledge, newest first, optionally filtered by
+        category. Chroma can't sort by metadata, so we fetch and sort in
+        Python (cheap for the small N we keep)."""
+        if not self.available:
+            return []
+        try:
+            where = {"category": category} if category else None
+            with self._lock:
+                got = self._kn.get(where=where,
+                                   include=["documents", "metadatas"])
+            ids = got.get("ids") or []
+            docs = got.get("documents") or []
+            metas = got.get("metadatas") or []
+            rows = [
+                {"id": i, "document": d, "metadata": m,
+                 "ts": (m or {}).get("ts", 0)}
+                for i, d, m in zip(ids, docs, metas)
+            ]
+            rows.sort(key=lambda r: r["ts"], reverse=True)
+            return rows[:limit]
+        except Exception as exc:  # noqa: BLE001
+            log.warning("list_knowledge failed: %s", exc)
+            return []
+
     def get_recent_sessions(self, *, days: int = 7,
                             limit: int = 20) -> list[dict[str, Any]]:
         """Return the most recent session summaries within the window.

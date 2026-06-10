@@ -1,5 +1,43 @@
 # Todo
 
+## Second Brain / Knowledge (active)
+
+Builds heavily on the existing memory layer (ChromaDB `knowledge` collection,
+`save_knowledge`/`search_knowledge`, local free embeddings). Decisions baked in:
+flashcards/SRS → new `server/knowledge/` package + `data/knowledge.db` SQLite
+(SM-2); remember/recall reuses `memory.long_term`.
+
+### Gap analysis (HAVE vs NEW)
+- HAVE: `long_term.save_knowledge/search_knowledge`, embeddings (local, free), memory lifecycle, OCR+document_scanner, notes_tool.
+- BUG: brain `add_knowledge_note` calls non-existent `store_knowledge()` → try/except swallows it → "remember" silently saves NOTHING. Fix first.
+- NEW: recall tool, knowledge→system-prompt injection, list/by-category, flashcards+SRS, document→knowledge, daily review, /memory/knowledge routes.
+
+### Phase 1 — Remember & Recall (make it actually work)  ✅
+- [x] Fixed brain bug: `store_knowledge` → `save_knowledge` (was silently saving NOTHING via swallowed AttributeError); now honest on failure
+- [x] `recall_knowledge` brain tool ("was weiß ich über X") + tool def + dispatch
+- [x] Inject relevant knowledge into system prompt (`context_builder._knowledge_block`, tightened distance <0.55 so it's empty for unrelated queries — calibrated against MiniLM)
+- [x] long_term: `list_knowledge` (newest-first, by-category)
+- [x] `/memory/knowledge/search` + `/memory/knowledge/list` routes (auth)
+- [x] Verified: add_knowledge_note now persists (count=1), recall works, list/search routes 200, prompt-injection relevant-only. tests/test_knowledge.py (5). 128 tests pass.
+
+### Phase 2 — Flashcards + Spaced Repetition  ✅
+- [x] `server/knowledge/flashcards.py` (SM-2 SRS, data/knowledge.db, thread-safe), add/review/due/schedule
+- [x] auto-generate cards from text via Claude (`generate_from_text`)
+- [x] brain tool `flashcards` (add/due/next/reveal/grade/generate/stats) + lazy `_get_flashcards`
+- [x] Verified: SM-2 progression 1→6→15.6d, fail-reset, feedback→quality, full quiz loop via brain; tests/test_flashcards.py (8)
+
+### Phase 3 — Document → Knowledge  (composable; dedicated flow deferred)
+- [x] DECISION: the pieces already compose — vision OCR (`vision.ocr.extract_text`) → `add_knowledge_note`
+      (now fixed) → optional `flashcards generate`. A dedicated vision-coupled ingest module is fragile +
+      hard to test headless, so deferred until needed rather than built speculatively.
+
+### Phase 4 — Integration  ✅
+- [x] Morning briefing hook: "N Karteikarten stehen zur Wiederholung an" (lightweight WAL read, no thread)
+- [x] Routes: `/knowledge/flashcards/due`, POST `/knowledge/flashcards`, POST `/knowledge/flashcards/{id}/review`
+- [x] Verified end-to-end via TestClient (add→due→review→0, 404, 401); 64 tests pass, no regressions
+
+---
+
 ## Synergy Pack (active)
 
 Quick, reuse-heavy wins connecting existing layers.
