@@ -1,5 +1,75 @@
 # Todo
 
+## JARVIS Security & Monitoring Layer (active)
+
+Complete security/monitoring layer under `server/security/`. Summary after each file; user can interrupt.
+
+**Constraints (hard rules):**
+- Security failures must NEVER crash JARVIS — best-effort try/except everywhere.
+- Smoke/Water/CO2 alerts + SOS are NEVER blocked by any filter or auth check.
+- PIN stored as bcrypt hash, never plaintext. Voice profiles local-only. Snapshots auto-deleted after retention.
+- Env: `.venv` Python 3.11, numpy<2.0, cv2 4.10. psutil 7.2.2 installed. resemblyzer TODO (Phase 2).
+
+### Phase 1 — Foundation ✅
+- [x] `security/__init__.py` — package exports
+- [x] `security/db.py` — SQLite schema + connection helper (security.db, 5 tables)
+- [x] `security/system_monitor.py` — psutil health + thresholds + background loop (works immediately)
+- [x] `security/access_control.py` — token-based guest/family/temp access
+- [x] Verify: real metrics returned, tables created (smoke test passed; fixed `arp -a` DNS hang → `-an`)
+
+### Phase 2 — Authentication ✅
+- [x] `security/voice_auth.py` — resemblyzer enroll/verify + bcrypt PIN fallback + guest mode
+- [x] `security/anomaly_detector.py` — pattern learning + per-IP rate limiting
+- [x] resemblyzer+torch installed (setuptools pinned <81 for webrtcvad/pkg_resources); config.py security block added
+- [x] Verify: enroll→0.36 reject other voice, PIN bcrypt, level gating, guest mode, burst/rate-limit/baseline all pass
+
+### Phase 3 — Monitoring ✅
+- [x] `security/camera_monitor.py` — extends vision motion_detector + Claude Vision + zones/schedule
+- [x] `security/home_security.py` — sensors via smarthome, arm/disarm, leaving checklist, smoke/water/CO2
+- [x] `security/digital_security.py` — network scan, API usage, HIBP, tailscale, ports, auth-log
+- [x] Verify: vision-JSON parse (+fences/non-json), alert levels, checklist, smoke/CO2 fire unconditionally,
+      net scan (multicast filtered, first-sighting-only alerts), ports, tailscale, auth-log block at 5
+
+### Phase 4 — Emergency ✅
+- [x] `security/emergency.py` — SOS / fire / intrusion / medical + notifications (always-available, never auth-gated)
+- [x] `security/security_manager.py` — central coordinator (start/process_request/process_command/briefing)
+- [x] Verify: emergency routing, full request pipeline (rate-limit deny), all trigger phrases, briefing
+- [x] Fixed: eager f-string on cpu_temp=None; camera auto-start now gated by CAMERA_ENABLED (force= override)
+
+### Phase 5 — Integration ✅
+- [x] Wire SecurityManager into main.py lifespan (+ speak/notify handlers) + brain._security + shutdown
+- [x] Brain security short-circuit (emergency-first, pre-Claude) + record_api_call at stream call site
+- [x] All `/security/*` API routes (voice/camera/home/digital/system/emergency/access) with auth
+- [x] PWA security panel (🔒 nav button, arm/disarm, health bars, camera, netscan, SOS) + security.js + CSS
+- [x] Intelligence morning-briefing hook (overnight security events, WAL concurrent read)
+- [x] `.env.example` block, requirements.txt (psutil/bcrypt) + requirements-voice.txt (resemblyzer/setuptools<81)
+- [x] tests/test_security.py — 23 tests, all pass; no regressions (224 collect, 72 mac_control pass)
+- [x] End-to-end TestClient: lifespan wires security, routes 200, /chat "system status" short-circuits, 401 w/o token
+- [x] Refinement: network scan fires ONE summary TTS alert, not one per device
+
+## Review
+**Delivered:** Complete 9-module security/monitoring layer (`server/security/`), wired into brain + main.py + PWA + intelligence, with a 23-test suite. All phases verified with real psutil/resemblyzer/SQLite + a full TestClient boot.
+
+**Bugs found & fixed during build:**
+1. `arp -a` hung 5s on reverse-DNS → `arp -an` (numeric).
+2. setuptools 82 removed `pkg_resources` that webrtcvad needs → pinned `setuptools<81`.
+3. Eager f-string `f"{cpu_temp:.0f}"` crashed monitor loop when temp=None (macOS) → safe format.
+4. Camera auto-started on arm/SOS ignoring `CAMERA_ENABLED` → gated with `force=` override.
+5. Network scan spoke one alert per unknown device → single summary alert.
+
+**Design decisions:**
+- Security failures never crash JARVIS (best-effort try/except everywhere; process_request fails OPEN for the single owner).
+- Emergency/safety paths (SOS, smoke/water/CO2) bypass all auth/guest gating and are checked first.
+- Voice auth: fail-open for owner when degraded (single-user trust model), real gate when enrolled+enabled.
+- Camera off by default (privacy); resemblyzer optional (PIN fallback).
+
+**Not wired (needs real-world config, documented in .env.example):**
+- Emergency SMS/WhatsApp transport (notify_handler currently logs + pushes PWA event).
+- Real door/window/smoke sensors (manual model + smarthome adapters; most adapters still stubs).
+- HaveIBeenPwned email lookup (needs paid API key).
+
+---
+
 ## macOS Full Control — v1 Plan
 
 Per user spec (4 tiers, kill switch, action logger, full Tier 4 with password). Built in checkpoints — summary after each, user can interrupt.

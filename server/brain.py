@@ -531,6 +531,12 @@ class Brain:
         # Singleton handle — wired by main.py after start().
         self._entertainment = None  # type: ignore[assignment]
 
+        # Security & monitoring layer. Wired by main.py after start().
+        # Routed BEFORE Claude (see reply()) so security/emergency trigger
+        # phrases are deterministic and an SOS never depends on an API
+        # round-trip.
+        self._security = None  # type: ignore[assignment]
+
         # Long-term memory + self-learning. Owns short-term history (was
         # _histories), error history, profile, and the dynamic system-
         # prompt builder. Falls back to in-memory only if storage can't
@@ -582,6 +588,22 @@ class Brain:
             try:
                 self.intelligence.record_command(user_text)
             except Exception:  # noqa: BLE001 — never crash on telemetry
+                pass
+
+        # Security short-circuit — checked FIRST, before everything else.
+        # Emergency triggers (SOS, Feueralarm, …) and security commands
+        # (arm/disarm, system status, network scan, …) are handled
+        # deterministically and must never depend on a Claude round-trip.
+        # process_command returns None for non-security input, so normal
+        # turns fall straight through. Emergency phrases inside it bypass
+        # all auth/guest gating by design.
+        if self._security is not None:
+            try:
+                text = self._run_security_command(user_text)
+                if text:
+                    self._emit_short_circuit_reply(text, speak_locally)
+                    return text
+            except Exception:  # noqa: BLE001 — security must never crash reply
                 pass
 
         # Briefing short-circuit: if the user typed/said one of the
@@ -1022,6 +1044,13 @@ class Brain:
                     except Exception:  # noqa: BLE001
                         pass
 
+        # Feed the digital-security API-usage monitor (spike detection).
+        if self._security is not None:
+            try:
+                self._security.digital.record_api_call()
+            except Exception:  # noqa: BLE001 — telemetry, never block the call
+                pass
+
         with self.client.messages.stream(
             model=settings.MODEL,
             max_tokens=1024,
@@ -1200,6 +1229,24 @@ class Brain:
         is_error = envelope.get("status") == "rejected"
         return (json.dumps(envelope, ensure_ascii=False), is_error)
 
+
+    def _run_security_command(self, user_text: str) -> str | None:
+        """Run SecurityManager.process_command (async) from the brain's
+        worker thread. Returns a spoken reply, or None to fall through to
+        the briefing/vision/Claude path. Same loop-scheduling trick as
+        _exec_smarthome_tool."""
+        import asyncio as _aio
+        from . import events as _events
+        try:
+            coro = self._security.process_command(user_text)
+            main_loop = _events._loop
+            if main_loop is not None and main_loop.is_running():
+                future = _aio.run_coroutine_threadsafe(coro, main_loop)
+                return future.result(timeout=20)
+            return _aio.run(coro)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Brain] security command failed: {exc}")
+            return None
 
     def _exec_smarthome_tool(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
         """Dispatch a smarthome_control tool_use to the SmartHomeManager.

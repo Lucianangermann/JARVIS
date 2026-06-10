@@ -238,6 +238,60 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         print(f"[ENTERTAINMENT] init failed: {exc}")
 
+    # Security & monitoring layer. Best-effort like every other layer:
+    # a boot failure logs and JARVIS keeps running (the brain's
+    # _security None-check makes the short-circuit a no-op).
+    try:
+        from .security import SecurityManager
+
+        def _security_speak(text: str, severity: str) -> None:
+            """Voice + HUD sink for security alerts. Pushes to every
+            client and speaks on the Mac. CRITICAL items always speak."""
+            print(f"[SECURITY/{severity}] {text}")
+            try:
+                events.publish({
+                    "type": "jarvis_notification",
+                    "priority": "high" if severity in ("HIGH", "CRITICAL") else "normal",
+                    "text": text,
+                })
+            except Exception as exc:  # noqa: BLE001
+                print(f"[SECURITY] publish failed: {exc}")
+            if _VOICE_OK and tts is not None:
+                try:
+                    tts.speak(text)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[SECURITY] tts failed: {exc}")
+
+        def _security_notify(message: str, contacts: list[str]) -> None:
+            """Emergency-contact transport. We don't ship an SMS gateway,
+            so this pushes a high-priority event (which the PWA surfaces)
+            and logs the intended recipients. Swap in iMessage/WhatsApp
+            here when a transport is configured."""
+            print(f"[SECURITY] emergency notify → {contacts}: {message}")
+            try:
+                events.publish({
+                    "type": "emergency_notification",
+                    "text": message,
+                    "contacts": contacts,
+                })
+            except Exception as exc:  # noqa: BLE001
+                print(f"[SECURITY] notify publish failed: {exc}")
+
+        security = SecurityManager(
+            db_path=Path("data/security.db"),
+            vision_manager=getattr(app.state, "vision", None),
+            smarthome=getattr(app.state, "smarthome", None),
+            speak_handler=_security_speak,
+            notify_handler=_security_notify,
+        )
+        security.start()
+        app.state.security = security
+        app.state.brain._security = security
+        print("[SECURITY] wired to brain ✓")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[SECURITY] init failed, continuing without security: {exc}")
+        security = None  # type: ignore[assignment]
+
     # On macOS, periodically drain the main-thread NSRunLoop so Cocoa
     # framework callbacks (Speech.framework's SFSpeechRecognizer in
     # particular) actually get delivered. Apple posts those completions
@@ -318,6 +372,11 @@ async def lifespan(app: FastAPI):
                 intelligence.stop()
             except Exception as exc:  # noqa: BLE001
                 print(f"[INTEL] stop error: {exc}")
+        if security is not None:
+            try:
+                security.stop()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[SECURITY] stop error: {exc}")
         if runloop_pump_task is not None:
             runloop_pump_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1451,6 +1510,259 @@ def gaming_stats(
         return JSONResponse({"stats": ""})
     msg, _ = ent.gaming.get_stats()
     return JSONResponse({"stats": msg})
+
+
+# --- Security & monitoring ------------------------------------------------ #
+
+def _security(request: Request) -> Any:
+    return getattr(request.app.state, "security", None)
+
+
+def _require_security(request: Request) -> Any:
+    sec = _security(request)
+    if sec is None:
+        raise HTTPException(status_code=503, detail="Security-Layer nicht verfügbar.")
+    return sec
+
+
+class VoiceEnrollRequest(BaseModel):
+    # base64-encoded WAV/PCM samples (16 kHz int16). Optional — omitting
+    # them triggers interactive mic enrollment server-side.
+    samples_b64: list[str] | None = None
+
+
+class CameraStartRequest(BaseModel):
+    camera_index: int = 0
+    sensitivity: str = Field(default="medium")
+    force: bool = True  # explicit API call overrides CAMERA_ENABLED
+
+
+class ArmRequest(BaseModel):
+    mode: str = Field(default="away")
+
+
+class TempAccessRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    level: str = Field(default="guest")
+    duration_hours: int = Field(default=2, ge=1, le=72)
+    allowed_commands: list[str] | None = None
+
+
+class BreachCheckRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=254)
+
+
+def _b64_to_bytes(s: str) -> bytes:
+    import base64
+    return base64.b64decode(s)
+
+
+# ── voice auth ──────────────────────────────────────────────────────────── #
+
+@app.post("/security/voice/enroll")
+async def security_voice_enroll(
+    body: VoiceEnrollRequest, request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    samples = ([_b64_to_bytes(s) for s in body.samples_b64]
+               if body.samples_b64 else None)
+    return await sec.voice_auth.enroll_owner(samples=samples)
+
+
+@app.post("/security/voice/verify")
+async def security_voice_verify(
+    request: Request, audio: UploadFile,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    data = await audio.read()
+    return await sec.voice_auth.verify_speaker(data)
+
+
+# ── camera ──────────────────────────────────────────────────────────────── #
+
+@app.post("/security/camera/start")
+async def security_camera_start(
+    body: CameraStartRequest, request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return await sec.camera.start_monitoring(
+        camera_index=body.camera_index, sensitivity=body.sensitivity,
+        force=body.force,
+    )
+
+
+@app.post("/security/camera/stop")
+async def security_camera_stop(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return sec.camera.stop_monitoring()
+
+
+@app.get("/security/camera/snapshot")
+async def security_camera_snapshot(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return {"description": await sec.camera.whos_at_door()}
+
+
+@app.get("/security/camera/events")
+async def security_camera_events(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    import time as _t
+    return {"events": sec.db.camera_events_since(_t.time() - 86400),
+            "summary": await sec.camera.get_daily_summary()}
+
+
+# ── home security ───────────────────────────────────────────────────────── #
+
+@app.get("/security/home/status")
+async def security_home_status(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return await sec.home.get_security_status()
+
+
+@app.post("/security/home/arm")
+async def security_home_arm(
+    body: ArmRequest, request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return {"spoken": await sec.home.arm_system(body.mode)}
+
+
+@app.post("/security/home/disarm")
+async def security_home_disarm(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return {"spoken": await sec.home.disarm_system()}
+
+
+@app.get("/security/home/checklist")
+async def security_home_checklist(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return {"spoken": await sec.home.leaving_checklist()}
+
+
+# ── digital security ────────────────────────────────────────────────────── #
+
+@app.get("/security/digital/network")
+async def security_digital_network(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return await sec.digital.check_network()
+
+
+@app.get("/security/digital/report")
+async def security_digital_report(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return {"report": await sec.digital.daily_security_report()}
+
+
+@app.post("/security/digital/breach-check")
+async def security_digital_breach(
+    body: BreachCheckRequest, request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return await sec.digital.check_data_breaches(body.email)
+
+
+# ── system monitor ──────────────────────────────────────────────────────── #
+
+@app.get("/security/system/health")
+async def security_system_health(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return sec.system.get_system_health().to_dict()
+
+
+@app.get("/security/system/processes")
+async def security_system_processes(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return {"processes": sec.system.get_top_processes(5)}
+
+
+@app.get("/security/system/jarvis-health")
+async def security_system_jarvis(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return sec.system.check_jarvis_health()
+
+
+# ── emergency ───────────────────────────────────────────────────────────── #
+
+@app.post("/security/emergency/sos")
+async def security_emergency_sos(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return await sec.emergency.trigger_sos()
+
+
+@app.post("/security/emergency/cancel")
+async def security_emergency_cancel(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return await sec.emergency.cancel_alarm()
+
+
+@app.get("/security/emergency/contacts")
+async def security_emergency_contacts(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return {"contacts": sec.emergency.get_contacts()}
+
+
+# ── access control ──────────────────────────────────────────────────────── #
+
+@app.post("/security/access/temp")
+async def security_access_temp(
+    body: TempAccessRequest, request: Request,
+    token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return await sec.access.create_temp_access(
+        name=body.name, level=body.level,
+        duration_hours=body.duration_hours,
+        allowed_commands=body.allowed_commands,
+    )
+
+
+@app.delete("/security/access/revoke")
+async def security_access_revoke(
+    name: str, request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return {"revoked": await sec.access.revoke_access(name)}
+
+
+@app.get("/security/access/sessions")
+async def security_access_sessions(
+    request: Request, token: str = Depends(require_token),
+) -> dict[str, Any]:
+    sec = _require_security(request)
+    return {"sessions": await sec.access.get_active_sessions()}
 
 
 # --- Web UI --------------------------------------------------------------- #

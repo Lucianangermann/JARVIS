@@ -123,6 +123,27 @@ def morning_briefing() -> str:
     except Exception:
         pass
 
+    # Security overnight summary. Read the events table directly (a
+    # concurrent WAL reader) instead of building a second SecurityManager,
+    # which would spawn a duplicate monitor thread.
+    try:
+        import time as _t
+        from ..security.db import SecurityDB
+        _sdb = SecurityDB(_DATA_DIR / "security.db")
+        _rows = _sdb.query(
+            "SELECT COUNT(*) AS n FROM security_events "
+            "WHERE timestamp >= ? AND severity IN ('HIGH','CRITICAL')",
+            (_t.time() - 43200,),
+        )
+        _sdb.close()
+        _n = _rows[0]["n"] if _rows else 0
+        lines.append(
+            f"Sicherheit: {_n} relevante Ereignisse über Nacht."
+            if _n else "Sicherheit: keine Vorkommnisse über Nacht."
+        )
+    except Exception:
+        pass
+
     return " ".join(lines)
 
 

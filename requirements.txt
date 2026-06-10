@@ -55,3 +55,15 @@ opencv-python<4.11
 # package is small but needs the native libzbar — on macOS install
 # via `brew install zbar`. We don't list it as a hard dep because
 # barcode scanning gracefully no-ops if it's missing.
+
+# --- Security & monitoring layer ---
+# psutil powers system_monitor (CPU/RAM/disk/battery/network) and the
+# open-port scan in digital_security. Pure-Python with a small C
+# extension; builds cleanly everywhere. Zero-config — the moment it's
+# installed, /security/system/* works.
+psutil>=5.9
+# bcrypt hashes the fallback PIN for voice_auth (never stored plaintext).
+bcrypt>=4.1
+# Speaker verification (resemblyzer) is OPTIONAL and heavier — it pulls
+# torch + librosa. Install it only if you want voice authentication via
+# requirements-voice.txt. voice_auth degrades to PIN-only without it.

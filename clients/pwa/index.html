@@ -91,6 +91,7 @@
     <button class="hex-btn" id="act-smarthome"     type="button" aria-label="Smart Home">🏠</button>
     <button class="hex-btn" id="act-productivity"  type="button" aria-label="Produktivität">💼</button>
     <button class="hex-btn" id="act-entertainment" type="button" aria-label="Entertainment">🎮</button>
+    <button class="hex-btn" id="act-security"      type="button" aria-label="Sicherheit">🔒</button>
     <span class="tier-indicator" title="Permission tier" aria-label="Tier indicator">
       <span class="tier-dot"></span>
       <span class="tier-dot"></span>
@@ -350,6 +351,72 @@
     </div>
   </aside>
 
+  <!-- ── SECURITY PANEL ──────────────────────────────────────── -->
+  <aside id="security-panel" class="slide-panel" aria-hidden="true">
+    <div class="panel-inner">
+      <h2>Sicherheit</h2>
+
+      <!-- Alarm arm/disarm -->
+      <div class="sh-section">
+        <div class="sh-label">🔒 Alarm: <span id="sec-arm-state">—</span></div>
+        <div class="sh-scene-grid">
+          <button class="sh-scene-btn" id="sec-arm-away"  type="button">ARM: WEG</button>
+          <button class="sh-scene-btn" id="sec-arm-night" type="button">ARM: NACHT</button>
+          <button class="sh-scene-btn" id="sec-disarm"    type="button">DEAKTIVIEREN</button>
+          <button class="sh-scene-btn" id="sec-checklist" type="button">CHECKLISTE</button>
+        </div>
+      </div>
+
+      <!-- System health bars -->
+      <div class="sh-section">
+        <div class="sh-label">System Gesundheit
+          <button class="sh-btn" id="sec-health-refresh" type="button"
+                  style="float:right;padding:2px 8px;">↻</button>
+        </div>
+        <div class="sec-meter"><span>CPU</span>
+          <div class="sec-bar"><div id="sec-cpu-fill" class="sec-fill"></div></div>
+          <span id="sec-cpu-val">—</span></div>
+        <div class="sec-meter"><span>RAM</span>
+          <div class="sec-bar"><div id="sec-ram-fill" class="sec-fill"></div></div>
+          <span id="sec-ram-val">—</span></div>
+        <div class="sec-meter"><span>DISK</span>
+          <div class="sec-bar"><div id="sec-disk-fill" class="sec-fill"></div></div>
+          <span id="sec-disk-val">—</span></div>
+        <div class="sec-meter"><span>AKKU</span>
+          <div class="sec-bar"><div id="sec-batt-fill" class="sec-fill"></div></div>
+          <span id="sec-batt-val">—</span></div>
+      </div>
+
+      <!-- Camera -->
+      <div class="sh-section">
+        <div class="sh-label">Kamera</div>
+        <div class="sh-scene-grid">
+          <button class="sh-scene-btn" id="sec-door"      type="button">📷 Tür anzeigen</button>
+          <button class="sh-scene-btn" id="sec-cam-toggle" type="button">👁️ Monitoring</button>
+        </div>
+      </div>
+
+      <!-- Network -->
+      <div class="sh-section">
+        <div class="sh-label">Digital</div>
+        <button class="sh-btn" id="sec-netscan" type="button">Netzwerk scannen</button>
+      </div>
+
+      <!-- SOS -->
+      <div class="sh-section">
+        <button class="action-btn" id="sec-sos" type="button"
+                style="width:100%;background:#3a0d0d;border-color:#ff3030;color:#ff6a6a;font-weight:bold;">
+          🚨 SOS NOTFALL</button>
+      </div>
+
+      <p id="sec-status" class="sh-status"></p>
+
+      <div class="row">
+        <button id="sec-close" type="button" class="action-btn">Schließen</button>
+      </div>
+    </div>
+  </aside>
+
   <!-- ── TYPE-INPUT PANEL (slides up from bottom) ────────────── -->
   <aside id="text-panel" class="slide-panel" aria-hidden="true">
     <div class="panel-inner">
@@ -374,6 +441,7 @@
   <script type="module" src="scripts/smarthome.js"></script>
   <script type="module" src="scripts/productivity.js"></script>
   <script type="module" src="scripts/entertainment.js"></script>
+  <script type="module" src="scripts/security.js"></script>
   <script type="module" src="scripts/app.js"></script>
 
   <!-- Register the service worker only when running over a secure

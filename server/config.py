@@ -151,6 +151,54 @@ class Settings:
     # Tier-4 (full system) gate. NEVER logged. Empty string disables Tier 4.
     JARVIS_SUDO_PASSWORD: str = os.getenv("JARVIS_SUDO_PASSWORD", "")
 
+    # --- Security & monitoring layer ---
+    # Master switch for speaker verification. Off until you've enrolled a
+    # voice profile (resemblyzer). When off, verify_speaker() allows
+    # everyone — auth is simply not enforced. When on but the encoder /
+    # profile is missing, the layer fails OPEN for the owner (single-user
+    # trust model — better than bricking your own assistant) and logs it.
+    VOICE_AUTH_ENABLED: bool = os.getenv("VOICE_AUTH_ENABLED", "0") == "1"
+    # Cosine-similarity cut for "this is the owner". resemblyzer same-
+    # speaker scores typically land 0.75–0.90; 0.85 is the spec default.
+    VOICE_AUTH_THRESHOLD: float = float(os.getenv("VOICE_AUTH_THRESHOLD", "0.85"))
+    # Fallback PIN, stored as a bcrypt hash (NEVER plaintext). Generate one
+    # with `python -m server.security.voice_auth --set-pin`. Empty disables
+    # the PIN challenge path.
+    JARVIS_PIN: str = os.getenv("JARVIS_PIN", "")
+
+    # Camera — disabled by default; explicit opt-in (privacy).
+    CAMERA_ENABLED: bool = os.getenv("CAMERA_ENABLED", "0") == "1"
+    CAMERA_INDEX: int = int(os.getenv("CAMERA_INDEX", "0"))
+    CAMERA_SENSITIVITY: str = os.getenv("CAMERA_SENSITIVITY", "medium")
+    CAMERA_NIGHT_MODE: bool = os.getenv("CAMERA_NIGHT_MODE", "1") == "1"
+    CAMERA_SNAPSHOT_RETENTION_DAYS: int = int(
+        os.getenv("CAMERA_SNAPSHOT_RETENTION_DAYS", "7")
+    )
+
+    # Home security
+    HOME_SECURITY_ENABLED: bool = os.getenv("HOME_SECURITY_ENABLED", "0") == "1"
+    SMOKE_DETECTORS: list[str] = _csv("SMOKE_DETECTORS", "kitchen,living_room")
+    WATER_SENSORS: list[str] = _csv("WATER_SENSORS", "bathroom,kitchen")
+
+    # Digital security
+    NETWORK_SCAN_ENABLED: bool = os.getenv("NETWORK_SCAN_ENABLED", "1") == "1"
+    HAVEIBEENPWNED_CHECK: bool = os.getenv("HAVEIBEENPWNED_CHECK", "0") == "1"
+    API_USAGE_ALERT_THRESHOLD: int = int(
+        os.getenv("API_USAGE_ALERT_THRESHOLD", "500")
+    )
+
+    # Emergency
+    EMERGENCY_CONTACTS: list[str] = _csv("EMERGENCY_CONTACTS", "")
+    HOME_ADDRESS: str = os.getenv("HOME_ADDRESS", "")
+    SOS_KEYWORD: str = os.getenv("SOS_KEYWORD", "hilfe hilfe").lower()
+
+    # System monitor
+    SYSTEM_MONITOR_INTERVAL: int = int(os.getenv("SYSTEM_MONITOR_INTERVAL", "60"))
+    CPU_ALERT_THRESHOLD: float = float(os.getenv("CPU_ALERT_THRESHOLD", "90"))
+    RAM_ALERT_THRESHOLD: float = float(os.getenv("RAM_ALERT_THRESHOLD", "85"))
+    DISK_ALERT_THRESHOLD: float = float(os.getenv("DISK_ALERT_THRESHOLD", "85"))
+    TEMP_ALERT_THRESHOLD: float = float(os.getenv("TEMP_ALERT_THRESHOLD", "85"))
+
     # --- Paths ---
     LOG_DIR: Path = PROJECT_ROOT / "logs"
     REJECTED_LOG: Path = LOG_DIR / "rejected.log"

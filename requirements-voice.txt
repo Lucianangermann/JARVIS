@@ -16,3 +16,11 @@ pyttsx3>=2.90
 sounddevice>=0.4.7
 numpy>=1.26
 scipy>=1.13
+
+# --- Speaker verification for the security layer (voice_auth) ---
+# resemblyzer = local GE2E speaker embeddings (~17 MB model, CPU-only).
+# Reuses the torch that whisper already pulled in, so no extra GB here.
+resemblyzer>=0.1.4
+# resemblyzer → webrtcvad still imports the legacy `pkg_resources`, which
+# setuptools removed in 81. Pin below that so the import doesn't break.
+setuptools<81

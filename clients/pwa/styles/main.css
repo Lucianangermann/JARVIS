@@ -318,3 +318,36 @@ button:focus-visible, input:focus-visible {
   margin: 4px 0 0;
   text-transform: none;
 }
+
+/* Security panel — system-health meters */
+.sec-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+.sec-meter > span:first-child {
+  width: 40px;
+  color: rgba(0, 212, 255, 0.7);
+}
+.sec-meter > span:last-child {
+  width: 56px;
+  text-align: right;
+  color: var(--jarvis-primary);
+}
+.sec-bar {
+  flex: 1;
+  height: 8px;
+  background: rgba(0, 212, 255, 0.12);
+  border: 1px solid rgba(0, 212, 255, 0.25);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.sec-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--jarvis-primary);
+  transition: width 0.4s ease, background 0.4s ease;
+}
