@@ -43,7 +43,9 @@ async def _run() -> None:
 
     chat_id = ""
     for _ in range(60):  # ~60s
-        msgs = tg.poll_once()
+        # learn_chat_id=True is safe HERE (interactive setup) — the user is
+        # the one messaging the bot right now.
+        tg.poll_once(learn_chat_id=True)
         if tg.chat_id:
             chat_id = tg.chat_id
             break

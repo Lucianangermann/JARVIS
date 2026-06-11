@@ -10,6 +10,7 @@ automatic — they stage a preview and require confirmation.
 from __future__ import annotations
 
 import os
+import secrets
 import time
 from pathlib import Path
 from typing import Any
@@ -85,11 +86,8 @@ class ExtendedEmailManager:
         if filled is None:
             return {"needs_confirm": False,
                     "preview": f"Vorlage '{name}' nicht gefunden."}
-        self._pending = {
-            "kind": "send", "to": to, "subject": filled["subject"],
-            "body": filled["body"], "attachment": None, "ts": time.time(),
-        }
-        return {"needs_confirm": True,
+        pid = self._stage(to, filled["subject"], filled["body"], None)
+        return {"needs_confirm": True, "pending_id": pid,
                 "preview": (f"Sende E-Mail an {to}: Betreff "
                             f"\"{filled['subject']}\". Bestätigen?")}
 
@@ -106,24 +104,26 @@ class ExtendedEmailManager:
             return {"needs_confirm": False,
                     "preview": (f"Datei zu groß ({size/1e6:.1f} MB, "
                                 f"max 25 MB).")}
-        self._pending = {
-            "kind": "send", "to": to, "subject": subject, "body": body,
-            "attachment": str(path), "ts": time.time(),
-        }
-        return {"needs_confirm": True,
+        pid = self._stage(to, subject, body, str(path))
+        return {"needs_confirm": True, "pending_id": pid,
                 "preview": (f"Sende '{path.name}' an {to}. Bestätigen?")}
 
     # ── plain send (staged) ────────────────────────────────────────────── #
 
     async def send(self, to: str, subject: str, body: str) -> dict[str, Any]:
-        self._pending = {
-            "kind": "send", "to": to, "subject": subject, "body": body,
-            "attachment": None, "ts": time.time(),
-        }
-        return {"needs_confirm": True,
+        pid = self._stage(to, subject, body, None)
+        return {"needs_confirm": True, "pending_id": pid,
                 "preview": f"Sende E-Mail an {to}: \"{subject}\". Bestätigen?"}
 
     # ── confirmation ───────────────────────────────────────────────────── #
+
+    def _stage(self, to: str, subject: str, body: str,
+               attachment: str | None) -> str:
+        pid = secrets.token_hex(8)
+        self._pending = {"kind": "send", "to": to, "subject": subject,
+                         "body": body, "attachment": attachment,
+                         "ts": time.time(), "id": pid}
+        return pid
 
     def has_pending(self) -> bool:
         if self._pending is None:
@@ -133,9 +133,11 @@ class ExtendedEmailManager:
             return False
         return True
 
-    async def confirm_pending(self) -> str:
+    async def confirm_pending(self, pending_id: str | None = None) -> str:
         if not self.has_pending():
             return "Es gibt nichts zu bestätigen."
+        if pending_id is not None and self._pending.get("id") != pending_id:
+            return "Bestätigungs-ID passt nicht."
         p = self._pending
         self._pending = None
         try:

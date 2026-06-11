@@ -91,11 +91,12 @@ class CommunicationManager:
     # ── lifecycle ──────────────────────────────────────────────────────── #
 
     def start(self) -> None:
-        import asyncio
         tg_state = "not configured"
         if self.telegram is not None and self.telegram.configured:
             try:
-                info = asyncio.run(self.telegram.connect())
+                # start() runs inside the already-running event loop, so we
+                # MUST NOT asyncio.run() here — use the sync connect.
+                info = self.telegram.connect_blocking()
                 if info.get("connected"):
                     tg_state = f"connected (@{info['bot']})"
                     self.telegram.start_polling(self._on_telegram_message)

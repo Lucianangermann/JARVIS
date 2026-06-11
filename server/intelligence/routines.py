@@ -109,9 +109,12 @@ def morning_briefing() -> str:
     try:
         from ..productivity.productivity_manager import ProductivityManager as _PM
         _pm = _PM(_DATA_DIR / "jarvis.db")
-        addon = _pm.morning_brief_addon()
-        if addon:
-            lines.append(addon)
+        try:
+            addon = _pm.morning_brief_addon()
+            if addon:
+                lines.append(addon)
+        finally:
+            _pm.stop()  # close the 3 jarvis.db connections it opened
     except Exception:
         pass
 
@@ -311,9 +314,12 @@ def evening_briefing() -> str:
     try:
         from ..productivity.productivity_manager import ProductivityManager as _PM
         _pm = _PM(_DATA_DIR / "jarvis.db")
-        addon = _pm.evening_brief_addon()
-        if addon:
-            lines.append(addon)
+        try:
+            addon = _pm.evening_brief_addon()
+            if addon:
+                lines.append(addon)
+        finally:
+            _pm.stop()
     except Exception:
         pass
 

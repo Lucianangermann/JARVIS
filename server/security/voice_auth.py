@@ -235,20 +235,27 @@ class VoiceAuthenticator:
         except Exception as exc:  # noqa: BLE001
             print(f"[VoiceAuth] sounddevice unavailable: {exc}")
             return []
+        from .. import mic_lock
+        if not mic_lock.try_acquire("voice_auth"):
+            print(f"[VoiceAuth] mic busy ({mic_lock.owner()}) — cannot enroll")
+            return []
         clips: list[bytes] = []
         dur = 3.0
-        for i in range(n):
-            print(f"[VoiceAuth] Sample {i+1}/{n} — sprich jetzt "
-                  f"({dur:.0f}s)…")
-            try:
-                rec = sd.rec(
-                    int(dur * _SAMPLE_RATE), samplerate=_SAMPLE_RATE,
-                    channels=1, dtype="int16",
-                )
-                sd.wait()
-                clips.append(rec.astype(np.int16).tobytes())
-            except Exception as exc:  # noqa: BLE001
-                print(f"[VoiceAuth] recording failed: {exc}")
+        try:
+            for i in range(n):
+                print(f"[VoiceAuth] Sample {i+1}/{n} — sprich jetzt "
+                      f"({dur:.0f}s)…")
+                try:
+                    rec = sd.rec(
+                        int(dur * _SAMPLE_RATE), samplerate=_SAMPLE_RATE,
+                        channels=1, dtype="int16",
+                    )
+                    sd.wait()
+                    clips.append(rec.astype(np.int16).tobytes())
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[VoiceAuth] recording failed: {exc}")
+        finally:
+            mic_lock.release("voice_auth")
         return clips
 
     # ── verification ───────────────────────────────────────────────────── #

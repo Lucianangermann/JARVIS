@@ -224,24 +224,10 @@ class FlashcardManager:
 
     @staticmethod
     def _parse_cards(raw: str) -> list[dict[str, str]]:
-        import json
-        text = raw.strip()
-        if "```" in text:
-            for p in text.split("```"):
-                p = p.strip()
-                if p.startswith("{") or p.startswith("json"):
-                    text = p[4:].strip() if p.startswith("json") else p
-                    break
-        if not text.startswith("{"):
-            i, j = text.find("{"), text.rfind("}")
-            if i != -1 and j != -1:
-                text = text[i:j + 1]
-        try:
-            data = json.loads(text)
-            cards = data.get("cards", []) if isinstance(data, dict) else []
-            return [c for c in cards if isinstance(c, dict) and c.get("front")]
-        except Exception:  # noqa: BLE001
-            return []
+        from ..common.claude_json import parse_json_block
+        data = parse_json_block(raw) or {}
+        cards = data.get("cards", [])
+        return [c for c in cards if isinstance(c, dict) and c.get("front")]
 
     # ── stats / spoken ─────────────────────────────────────────────────── #
 

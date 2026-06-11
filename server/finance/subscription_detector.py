@@ -52,23 +52,10 @@ class SubscriptionDetector:
 
     @staticmethod
     def _parse(raw: str) -> list[dict[str, Any]]:
-        text = raw.strip()
-        if "```" in text:
-            for p in text.split("```"):
-                p = p.strip()
-                if p.startswith("{") or p.startswith("json"):
-                    text = p[4:].strip() if p.startswith("json") else p
-                    break
-        if not text.startswith("{"):
-            i, j = text.find("{"), text.rfind("}")
-            if i != -1 and j != -1:
-                text = text[i:j + 1]
-        try:
-            data = json.loads(text)
-            subs = data.get("subscriptions", []) if isinstance(data, dict) else []
-            return [s for s in subs if isinstance(s, dict) and s.get("name")]
-        except Exception:  # noqa: BLE001
-            return []
+        from ..common.claude_json import parse_json_block
+        data = parse_json_block(raw) or {}
+        subs = data.get("subscriptions", [])
+        return [s for s in subs if isinstance(s, dict) and s.get("name")]
 
     def scan_mail(self, limit: int = 30) -> list[dict[str, Any]]:
         """Best-effort: pull recent Apple Mail and detect subscriptions."""

@@ -1,5 +1,20 @@
 # Todo
 
+## System Review Fixes (done)
+
+Four parallel review agents (correctness / architecture / security / resources)
+→ fixed in batches; 72 tests pass, full boot verified.
+
+**Batch A — bugs/perf:** Telegram boot bug (`asyncio.run` in running loop → silent dead inbound) → sync `connect_blocking`; Telegram chat_id-hijack guard (learn only in setup); Telegram long-poll (25s) vs 3s short-poll; blocking-in-async → `to_thread` (`/finance/*`, digital_security subprocess/HTTP); embedding/ChromaDB warmup off the boot path (was ~10s stall); Cocoa pump gated behind `_VOICE_OK`; Productivity/Entertainment `stop()` + lifespan finally + briefing conn-leak fix.
+
+**Batch B — retention/confirm/mic:** message-content 7-day prune throttled-daily (not just boot); camera snapshot prune hourly while running; confirm-before-send hardened with server `pending_id` + separate `/confirm` (closed `confirm=true` bypass) for messaging+email; `server/mic_lock.py` coordinates meeting/voice-auth, meeting declines under `JARVIS_LOCAL_VOICE=1`.
+
+**Batch C — voice-auth wired:** `process_request` now runs on the `/audio` path (real speaker-verify gate, no-op when off); error path logs durably + fails CLOSED for `critical`.
+
+**Batch D — dedup (partial):** intelligence briefings/proactive routed through NotificationCenter (DND/quiet-hours); shared `common/claude_json.py` replaced 4 identical fence-parsers. DEFERRED (risk vs pure-maintainability): shared `ThreadSafeDB` base, brain dispatch table, full `osa()` migration — recommend a separate focused pass.
+
+---
+
 ## Finance Layer (active)
 
 New `server/finance/` package. Clean slate (no existing finance code). Reuses:

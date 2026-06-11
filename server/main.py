@@ -378,6 +378,27 @@ async def lifespan(app: FastAPI):
                 emergency._notify = _emergency_notify_all  # noqa: SLF001
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMM] emergency→telegram bridge failed: {exc}")
+
+        # Route intelligence briefings + proactive notifications through the
+        # NotificationCenter too, so they respect DND / quiet-hours (a 7am
+        # briefing or a low-priority nudge no longer speaks during quiet
+        # hours). Re-points the handlers now that the center exists.
+        if intelligence is not None and communication.notifications is not None:
+            try:
+                _nc = communication.notifications
+
+                def _intel_notify(text: str, priority: str, _nc=_nc) -> None:
+                    _nc.send("JARVIS", text,
+                             priority if priority in ("high", "critical") else "medium",
+                             "proactive")
+
+                def _intel_briefing(text: str, _nc=_nc) -> None:
+                    _nc.send("Briefing", text, "medium", "intelligence")
+
+                intelligence.set_notification_handler(_intel_notify)
+                intelligence.set_briefing_handler(_intel_briefing)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[COMM] intelligence→center bridge failed: {exc}")
         print("[COMM] wired to brain ✓")
     except Exception as exc:  # noqa: BLE001
         print(f"[COMM] init failed, continuing without communication: {exc}")
@@ -411,8 +432,12 @@ async def lifespan(app: FastAPI):
     # zero-second date is non-blocking — it just processes whatever's
     # already pending and returns immediately, so the ~20 ms sleep is
     # the cost ceiling.
+    # Only run the 20ms Cocoa pump (≈50 wakeups/s, a real battery cost) when
+    # the voice stack is installed — it exists solely to deliver
+    # Speech.framework STT callbacks. A headless/text-only server (no voice
+    # deps) doesn't need it and shouldn't pay for it.
     runloop_pump_task: asyncio.Task | None = None
-    if os.uname().sysname == "Darwin":
+    if os.uname().sysname == "Darwin" and _VOICE_OK:
         try:
             from Foundation import NSDate, NSRunLoop  # type: ignore[import-not-found]
 
@@ -497,6 +522,16 @@ async def lifespan(app: FastAPI):
                 finance.stop()
             except Exception as exc:  # noqa: BLE001
                 print(f"[FINANCE] stop error: {exc}")
+        # Productivity + entertainment hold SQLite connections; close them so
+        # WAL is flushed (accessed via app.state to avoid unbound-name issues
+        # if their init failed).
+        for _mgr_name in ("productivity", "entertainment"):
+            _m = getattr(app.state, _mgr_name, None)
+            if _m is not None and hasattr(_m, "stop"):
+                try:
+                    _m.stop()
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[{_mgr_name.upper()}] stop error: {exc}")
         if runloop_pump_task is not None:
             runloop_pump_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -705,6 +740,24 @@ async def audio(
 
     tag = _client_tag(request)
     print(f"[CLIENT: {tag}] [YOU·audio] {transcript}")
+
+    # Voice authentication actually runs HERE — the audio path is the only
+    # place we have both the spoken command and its audio. The security
+    # pipeline (speaker verify → anomaly → per-command permission level)
+    # gates the turn. No-op when VOICE_AUTH_ENABLED=false (verify returns
+    # allow); a real gate once an owner profile is enrolled.
+    sec = getattr(request.app.state, "security", None)
+    if sec is not None:
+        try:
+            ip = request.client.host if request.client else "audio"
+            verdict = await sec.process_request(transcript, audio=raw, ip=ip)
+            if not verdict.get("allowed", True):
+                msg = f"Zugriff verweigert: {verdict.get('reason', 'nicht autorisiert')}."
+                print(f"[SECURITY] audio turn denied: {verdict.get('reason')}")
+                return ChatResponse(reply=msg, transcript=transcript)
+        except Exception as exc:  # noqa: BLE001 — never block on the gate
+            print(f"[SECURITY] audio gate error (allowing): {exc}")
+
     reply = request.app.state.brain.reply(token, transcript)
     print(f"[JARVIS] {reply}")
     return ChatResponse(reply=reply, transcript=transcript)
@@ -1773,7 +1826,7 @@ async def finance_set_budget(body: BudgetRequest, request: Request,
 async def finance_watchlist(request: Request,
                             token: str = Depends(require_token)) -> dict[str, Any]:
     fm = _require_finance(request)
-    return {"watchlist": fm.market.refresh_prices()}
+    return {"watchlist": await asyncio.to_thread(fm.market.refresh_prices)}
 
 
 @app.post("/finance/watchlist")
@@ -1797,14 +1850,16 @@ async def finance_watch_remove(symbol: str, request: Request,
 async def finance_portfolio(request: Request,
                             token: str = Depends(require_token)) -> dict[str, Any]:
     fm = _require_finance(request)
-    return fm.market.portfolio_value()
+    return await asyncio.to_thread(fm.market.portfolio_value)
 
 
 @app.get("/finance/price/{symbol}")
 async def finance_price(symbol: str, request: Request,
                         token: str = Depends(require_token)) -> dict[str, Any]:
     fm = _require_finance(request)
-    p = fm.market.fetch_price(symbol)
+    # fetch_price does a blocking httpx.get — offload so it can't freeze the
+    # event loop (and every WS client / voice reply) for up to 8s.
+    p = await asyncio.to_thread(fm.market.fetch_price, symbol)
     if p is None:
         raise HTTPException(status_code=404, detail=f"no price for {symbol}")
     return p
@@ -1827,14 +1882,16 @@ class MsgSendRequest(BaseModel):
     platform: str = Field(default="imessage")
     contact: str = Field(..., min_length=1)
     message: str = Field(..., min_length=1)
-    confirm: bool = False
 
 
 class BroadcastRequest(BaseModel):
     message: str = Field(..., min_length=1)
     contacts: list[str]
     platform: str = "imessage"
-    confirm: bool = False
+
+
+class ConfirmRequest(BaseModel):
+    pending_id: str = Field(..., min_length=1)
 
 
 class CallRequest(BaseModel):
@@ -1851,7 +1908,6 @@ class EmailSendRequest(BaseModel):
     to: str
     subject: str
     body: str
-    confirm: bool = False
 
 
 class TranslateRequest(BaseModel):
@@ -1900,20 +1956,24 @@ async def comm_unread(request: Request, token: str = Depends(require_token)) -> 
 async def comm_send(body: MsgSendRequest, request: Request,
                     token: str = Depends(require_token)) -> dict[str, Any]:
     cm = _require_comm(request)
-    staged = await cm.messaging.send(body.platform, body.contact, body.message)
-    if body.confirm:
-        return {"result": await cm.messaging.confirm_pending()}
-    return staged
+    # Always stages and returns a pending_id. The actual send requires a
+    # second call to /messages/confirm referencing that id — a real two-step,
+    # not a caller-set boolean that fires in the same request.
+    return await cm.messaging.send(body.platform, body.contact, body.message)
 
 
 @app.post("/communication/messages/broadcast")
 async def comm_broadcast(body: BroadcastRequest, request: Request,
                          token: str = Depends(require_token)) -> dict[str, Any]:
     cm = _require_comm(request)
-    staged = await cm.messaging.broadcast(body.message, body.contacts, [body.platform])
-    if body.confirm:
-        return {"result": await cm.messaging.confirm_pending()}
-    return staged
+    return await cm.messaging.broadcast(body.message, body.contacts, [body.platform])
+
+
+@app.post("/communication/messages/confirm")
+async def comm_confirm(body: ConfirmRequest, request: Request,
+                       token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return {"result": await cm.messaging.confirm_pending(body.pending_id)}
 
 
 @app.get("/communication/messages/{platform}/{contact}")
@@ -1957,10 +2017,15 @@ async def comm_email_summary(request: Request, token: str = Depends(require_toke
 async def comm_email_send(body: EmailSendRequest, request: Request,
                           token: str = Depends(require_token)) -> dict[str, Any]:
     cm = _require_comm(request)
-    staged = await cm.email.send(body.to, body.subject, body.body)
-    if body.confirm:
-        return {"result": await cm.email.confirm_pending()}
-    return staged
+    # Two-step: stages + returns pending_id; confirm via /email/confirm.
+    return await cm.email.send(body.to, body.subject, body.body)
+
+
+@app.post("/communication/email/confirm")
+async def comm_email_confirm(body: ConfirmRequest, request: Request,
+                             token: str = Depends(require_token)) -> dict[str, Any]:
+    cm = _require_comm(request)
+    return {"result": await cm.email.confirm_pending(body.pending_id)}
 
 
 @app.get("/communication/email/templates")

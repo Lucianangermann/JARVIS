@@ -13,6 +13,7 @@ reply drafting — no extra dependency, no extra key.
 from __future__ import annotations
 
 import asyncio
+import secrets
 import time
 from typing import Any
 
@@ -139,17 +140,23 @@ class MessagingManager:
 
     # ── send (staged) ──────────────────────────────────────────────────── #
 
+    def _stage(self, kind: str, sends: list[tuple[str, str, str]]) -> str:
+        """Stage a pending send and return its server-issued id. The id lets
+        the API enforce a genuine two-step (a confirm must reference the id
+        from a prior response), instead of a caller-set boolean that both
+        stages and fires in one request."""
+        pending_id = secrets.token_hex(8)
+        self._pending = {"kind": kind, "sends": sends, "ts": time.time(),
+                         "id": pending_id}
+        return pending_id
+
     async def send(self, platform: str, contact: str, message: str) -> dict[str, Any]:
-        """Stage a send for confirmation. Returns a preview; the actual
-        send happens on confirm_pending()."""
-        self._pending = {
-            "kind": "send",
-            "sends": [(platform, contact, message)],
-            "ts": time.time(),
-        }
+        """Stage a send for confirmation. Returns a preview + pending_id;
+        the actual send happens on confirm_pending(pending_id)."""
+        pid = self._stage("send", [(platform, contact, message)])
         preview = (f"Sende an {contact} via {platform}: \"{message}\". "
                    f"Bestätigen?")
-        return {"needs_confirm": True, "preview": preview}
+        return {"needs_confirm": True, "preview": preview, "pending_id": pid}
 
     async def reply_to_last(self, platform: str, instructions: str) -> dict[str, Any]:
         """Draft a reply to the last received message via Claude, stage it."""
@@ -167,12 +174,8 @@ class MessagingManager:
             return {"needs_confirm": False,
                     "preview": "Keine empfangene Nachricht zum Antworten gefunden."}
         draft = await self._draft_reply(last.get("message", ""), instructions)
-        self._pending = {
-            "kind": "send",
-            "sends": [(platform, last["sender"], draft)],
-            "ts": time.time(),
-        }
-        return {"needs_confirm": True,
+        pid = self._stage("send", [(platform, last["sender"], draft)])
+        return {"needs_confirm": True, "pending_id": pid,
                 "preview": f"Antwort an {last['sender']}: \"{draft}\". Bestätigen?"}
 
     async def _draft_reply(self, original: str, instructions: str) -> str:
@@ -197,9 +200,9 @@ class MessagingManager:
                         platforms: list[str] | None = None) -> dict[str, Any]:
         platforms = platforms or ["imessage"]
         sends = [(p, c, message) for c in contacts for p in platforms]
-        self._pending = {"kind": "broadcast", "sends": sends, "ts": time.time()}
+        pid = self._stage("broadcast", sends)
         names = ", ".join(contacts)
-        return {"needs_confirm": True,
+        return {"needs_confirm": True, "pending_id": pid,
                 "preview": f"Sende an {len(contacts)} Kontakte: {names}. Bestätigen?"}
 
     # ── confirmation ───────────────────────────────────────────────────── #
@@ -212,9 +215,14 @@ class MessagingManager:
             return False
         return True
 
-    async def confirm_pending(self) -> str:
+    async def confirm_pending(self, pending_id: str | None = None) -> str:
         if not self.has_pending():
             return "Es gibt nichts zu bestätigen."
+        # API path passes the id from the prior /send response; it must match
+        # the staged send. The voice path passes None (same in-process session
+        # — "ja" right after the preview), which is already a two-step.
+        if pending_id is not None and self._pending.get("id") != pending_id:
+            return "Bestätigungs-ID passt nicht."
         pending = self._pending
         self._pending = None
         sends = pending["sends"]

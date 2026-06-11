@@ -109,6 +109,7 @@ class CommunicationDB:
         self._db_path = Path(db_path)
         self._lock = threading.Lock()
         self._conn: sqlite3.Connection | None = None
+        self._last_prune = 0.0
         try:
             self._db_path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
@@ -122,6 +123,7 @@ class CommunicationDB:
                 self._conn.execute(idx)
             self._conn.commit()
             self.prune_message_content()  # enforce retention on every boot
+            self._last_prune = time.time()
             print(f"[CommunicationDB] ready at {self._db_path}")
         except Exception as exc:  # noqa: BLE001
             print(f"[CommunicationDB] init failed: {exc}")
@@ -163,6 +165,12 @@ class CommunicationDB:
         delivered: bool = False,
         read: bool = False,
     ) -> int | None:
+        # Enforce the 7-day content-retention rule on a long-lived server,
+        # not just at boot: throttled to once/day, piggybacked on message
+        # activity so no extra thread is needed.
+        if time.time() - self._last_prune > 86400:
+            self._last_prune = time.time()
+            self.prune_message_content()
         return self._execute(
             """INSERT INTO messages
                (timestamp, platform, direction, contact, content,

@@ -27,6 +27,22 @@ class ProductivityManager:
     def start(self) -> None:
         print("[PRODUCTIVITY] ready")
 
+    def stop(self) -> None:
+        """Close the sub-managers' SQLite connections (WAL flush) at
+        shutdown. The pomodoro thread is a daemon and self-terminates."""
+        try:
+            if getattr(self.focus, "is_running", lambda: False)():
+                self.focus.stop_pomodoro()
+        except Exception:  # noqa: BLE001
+            pass
+        for sub in (self.tasks, self.focus, self.analytics):
+            conn = getattr(sub, "_conn", None)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
     # ── Briefing addons ───────────────────────────────────────────────────── #
 
     def morning_brief_addon(self) -> str:

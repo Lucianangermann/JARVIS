@@ -64,11 +64,17 @@ class LongTermMemory:
 
         try:
             self._open()
-            # Force the embedding model to load now — otherwise the
-            # first session_start() takes ~10s to warm up.
+            # The embedding model takes ~10s to load. Warm it in a daemon
+            # thread instead of blocking here — otherwise Brain() (and thus
+            # the whole lifespan/boot) stalls ~10s before the server accepts
+            # any connection. `available` reflects importability immediately;
+            # the loader (_get_model) is lock-guarded, so a concurrent first
+            # real encode and this warmup can't double-load.
             if embeddings.is_available():
-                embeddings.encode("warmup")
                 self.available = True
+                threading.Thread(
+                    target=lambda: embeddings.encode("warmup"),
+                    name="jarvis-embed-warmup", daemon=True).start()
         except Exception as exc:  # noqa: BLE001
             log.warning("long-term memory disabled: %s", exc)
             self.available = False

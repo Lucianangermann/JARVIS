@@ -175,8 +175,15 @@ class CameraMonitor:
         threshold = _SENSITIVITY[self._sensitivity]
         if self._night_mode:
             threshold *= 0.5  # more sensitive at night
+        last_prune = time.monotonic()
         try:
             while not self._stop.is_set():
+                # Enforce snapshot retention hourly while running, not only
+                # on stop (a continuously-monitoring camera would otherwise
+                # never prune).
+                if time.monotonic() - last_prune > 3600:
+                    last_prune = time.monotonic()
+                    self._prune_snapshots()
                 if not self._within_schedule():
                     if self._stop.wait(timeout=30):
                         break
@@ -240,30 +247,13 @@ class CameraMonitor:
     @staticmethod
     def _parse(raw: str) -> DetectionResult:
         """Pull the JSON object out of Claude's reply (tolerates fences)."""
+        from ..common.claude_json import parse_json_block
         result = DetectionResult(raw=raw)
         if not raw:
             return result
-        text = raw.strip()
-        if "```" in text:
-            # strip ```json … ``` fences
-            parts = text.split("```")
-            for p in parts:
-                p = p.strip()
-                if p.startswith("{") or p.startswith("json"):
-                    text = p[4:].strip() if p.startswith("json") else p
-                    break
-        # Fall back to the first {...} span.
-        if not text.startswith("{"):
-            i, j = text.find("{"), text.rfind("}")
-            if i != -1 and j != -1:
-                text = text[i:j + 1]
-        try:
-            data = json.loads(text)
-            dets = data.get("detections", []) if isinstance(data, dict) else []
-            result.detections = [d for d in dets if isinstance(d, dict)]
-        except Exception:  # noqa: BLE001
-            # Non-JSON reply: keep raw, no structured detections.
-            pass
+        data = parse_json_block(raw) or {}
+        dets = data.get("detections", [])
+        result.detections = [d for d in dets if isinstance(d, dict)]
         return result
 
     # ── detection handling ─────────────────────────────────────────────── #

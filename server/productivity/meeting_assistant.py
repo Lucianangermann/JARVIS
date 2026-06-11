@@ -70,6 +70,16 @@ class MeetingAssistant:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False,
                     "error": f"Aufnahme nicht verfügbar (Voice-Stack fehlt): {exc}"}
+        # Mic coordination: don't race the wake-word loop or another capture.
+        import os as _os
+        from .. import mic_lock
+        if _os.getenv("JARVIS_LOCAL_VOICE", "0") == "1":
+            return {"ok": False,
+                    "error": "Sprachschleife aktiv — Mikrofon belegt, "
+                             "Aufnahme nicht möglich."}
+        if not mic_lock.try_acquire("meeting"):
+            return {"ok": False,
+                    "error": f"Mikrofon belegt ({mic_lock.owner()})."}
         self._title = title
         self._buffer = []
         self._started_at = time.time()
@@ -111,6 +121,11 @@ class MeetingAssistant:
     def stop_recording(self) -> str:
         self._stop.set()
         self._recording = False
+        try:
+            from .. import mic_lock
+            mic_lock.release("meeting")
+        except Exception:  # noqa: BLE001
+            pass
         if self._thread is not None:
             # Short join so "beende das Meeting" returns promptly — the
             # in-flight chunk (still inside a blocking sd.wait) is dropped;
@@ -179,22 +194,12 @@ class MeetingAssistant:
 
     @staticmethod
     def _parse_json(raw: str) -> dict[str, Any]:
-        text = raw.strip()
-        if "```" in text:
-            for part in text.split("```"):
-                p = part.strip()
-                if p.startswith("{") or p.startswith("json"):
-                    text = p[4:].strip() if p.startswith("json") else p
-                    break
-        if not text.startswith("{"):
-            i, j = text.find("{"), text.rfind("}")
-            if i != -1 and j != -1:
-                text = text[i:j + 1]
-        try:
-            data = json.loads(text)
-            return data if isinstance(data, dict) else {}
-        except Exception:  # noqa: BLE001
-            return {"summary": raw[:300], "action_items": [], "decisions": []}
+        from ..common.claude_json import parse_json_block
+        data = parse_json_block(raw)
+        if data is not None:
+            return data
+        # Non-JSON reply: keep the prose as the summary rather than losing it.
+        return {"summary": raw[:300], "action_items": [], "decisions": []}
 
     def _save_note(self, title: str, summary: str, items: list[str],
                    decisions: list[str], transcript: str) -> None:

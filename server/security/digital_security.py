@@ -11,6 +11,7 @@ backed by the ``known_devices`` table.
 """
 from __future__ import annotations
 
+import asyncio
 import socket
 import ssl
 import subprocess
@@ -63,7 +64,8 @@ class DigitalSecurityMonitor:
         *trusted* in known_devices — merely having been seen before does
         not make a device safe. We alert only on the FIRST sighting of an
         untrusted device, then record it, so repeat scans don't re-nag."""
-        devices = [d for d in self._arp_devices() if self._is_real_host(d)]
+        raw = await asyncio.to_thread(self._arp_devices)  # blocking subprocess
+        devices = [d for d in raw if self._is_real_host(d)]
         untrusted: list[dict[str, Any]] = []
         new_unknowns: list[dict[str, Any]] = []
         for d in devices:
@@ -188,13 +190,14 @@ class DigitalSecurityMonitor:
             return {"checked": False,
                     "reason": "HIBP API key required for email lookup"}
         try:
-            resp = requests.get(
-                f"https://haveibeenpwned.com/api/v3/breachedaccount/{email}",
-                headers={"hibp-api-key": api_key,
-                         "user-agent": "JARVIS-Security"},
-                params={"truncateResponse": "true"},
-                timeout=8,
-            )
+            resp = await asyncio.to_thread(
+                lambda: requests.get(
+                    f"https://haveibeenpwned.com/api/v3/breachedaccount/{email}",
+                    headers={"hibp-api-key": api_key,
+                             "user-agent": "JARVIS-Security"},
+                    params={"truncateResponse": "true"},
+                    timeout=8,
+                ))
             if resp.status_code == 404:
                 return {"checked": True, "breaches": []}
             if resp.status_code != 200:
@@ -213,8 +216,8 @@ class DigitalSecurityMonitor:
 
     async def check_tailscale_status(self) -> dict[str, Any]:
         try:
-            out = subprocess.run(
-                ["tailscale", "status", "--json"],
+            out = await asyncio.to_thread(
+                subprocess.run, ["tailscale", "status", "--json"],
                 capture_output=True, text=True, timeout=6, check=False,
             )
             if out.returncode != 0 or not out.stdout:
@@ -241,10 +244,10 @@ class DigitalSecurityMonitor:
     # ── open ports ─────────────────────────────────────────────────────── #
 
     async def scan_for_open_ports(self) -> dict[str, Any]:
-        listening = self._listening_ports()
+        listening = await asyncio.to_thread(self._listening_ports)
         unexpected = sorted(p for p in listening if p not in _EXPECTED_PORTS)
         # JARVIS server port exposed beyond loopback?
-        exposed = self._jarvis_port_exposed()
+        exposed = await asyncio.to_thread(self._jarvis_port_exposed)
         if exposed:
             # Bound to all interfaces (0.0.0.0) — reachable on the LAN /
             # Tailscale, which is the intended PWA setup, so this is an
@@ -308,7 +311,7 @@ class DigitalSecurityMonitor:
     async def check_ssl_certificates(self, domains: list[str]) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         for domain in domains:
-            results.append(self._check_one_cert(domain))
+            results.append(await asyncio.to_thread(self._check_one_cert, domain))
         for r in results:
             if r.get("days_left") is not None and r["days_left"] <= 30:
                 msg = (f"SSL-Zertifikat für {r['domain']} läuft in "

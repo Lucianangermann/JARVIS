@@ -23,6 +23,17 @@ class EntertainmentManager:
     def start(self) -> None:
         print("[ENTERTAINMENT] ready")
 
+    def stop(self) -> None:
+        """Close sub-manager SQLite connections at shutdown (WAL flush).
+        GamingMode's smart-home threads are daemons and self-terminate."""
+        for sub in (self.watchlist, self.games, self.gaming):
+            conn = getattr(sub, "_conn", None)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
     def morning_brief_addon(self) -> str:
         """Return a birthday reminder string for the morning briefing."""
         try:

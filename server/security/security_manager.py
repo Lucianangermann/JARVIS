@@ -181,9 +181,24 @@ class SecurityManager:
                     "confidence": confidence, "level": level}
         except Exception as exc:  # noqa: BLE001
             print(f"[SecurityManager] process_request failed: {exc}")
-            # Fail OPEN for the single owner — never lock JARVIS up on a bug.
+            # Durable audit so a recurring crash that disables the gate is
+            # visible, not just printed.
+            try:
+                self.db.log_event("auth_pipeline_error", "HIGH",
+                                  "security_manager", f"{command[:60]}: {exc}")
+            except Exception:  # noqa: BLE001
+                pass
+            # Fail CLOSED for critical-level commands (memory wipe, security
+            # settings, tier-4) — a pipeline bug must not auto-authorise the
+            # most dangerous actions. Everything else fails open for the
+            # single owner so a bug never bricks normal use.
+            level = (self.voice_auth.command_security_level(command)
+                     if self.voice_auth is not None else "low")
+            if level == "critical":
+                return {"allowed": False, "reason": f"pipeline error (fail-closed): {exc}",
+                        "confidence": 0.0, "level": level}
             return {"allowed": True, "reason": f"pipeline error: {exc}",
-                    "confidence": 0.0, "level": "low"}
+                    "confidence": 0.0, "level": level}
 
     def _deny(self, command: str, ip: str, reason: str,
               confidence: float = 0.0) -> dict[str, Any]:

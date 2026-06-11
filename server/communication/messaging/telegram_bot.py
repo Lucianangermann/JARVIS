@@ -61,13 +61,14 @@ class TelegramController:
 
     # ── low-level call ─────────────────────────────────────────────────── #
 
-    def _call(self, method: str, **params: Any) -> dict[str, Any] | None:
+    def _call(self, method: str, http_timeout: float | None = None,
+              **params: Any) -> dict[str, Any] | None:
         if not self.configured:
             return None
         try:
             resp = requests.post(
                 _API.format(token=self._token, method=method),
-                json=params, timeout=_TIMEOUT,
+                json=params, timeout=http_timeout or _TIMEOUT,
             )
             data = resp.json()
             if not data.get("ok"):
@@ -80,7 +81,11 @@ class TelegramController:
 
     # ── connect ────────────────────────────────────────────────────────── #
 
-    async def connect(self) -> dict[str, Any]:
+    def connect_blocking(self) -> dict[str, Any]:
+        """Synchronous connect. Call this from sync code (e.g. the lifespan
+        start()) — the previous ``asyncio.run(connect())`` raised
+        RuntimeError inside the already-running event loop and silently
+        killed the inbound channel."""
         if not self.configured:
             return {"connected": False, "reason": "no token / requests missing"}
         me = self._call("getMe")
@@ -89,6 +94,9 @@ class TelegramController:
         self._bot_name = me.get("username")
         print(f"[TELEGRAM] Bot connected: @{self._bot_name}")
         return {"connected": True, "bot": self._bot_name}
+
+    async def connect(self) -> dict[str, Any]:
+        return self.connect_blocking()
 
     # ── sending ────────────────────────────────────────────────────────── #
 
@@ -134,10 +142,20 @@ class TelegramController:
 
     # ── inbound polling ────────────────────────────────────────────────── #
 
-    def poll_once(self) -> list[dict[str, Any]]:
-        """Fetch new updates since the last offset. Returns normalised
-        message dicts and advances the cursor."""
-        result = self._call("getUpdates", offset=self._offset, timeout=0)
+    def poll_once(self, long_poll_s: int = 0,
+                  learn_chat_id: bool = False) -> list[dict[str, Any]]:
+        """Fetch new updates since the last offset. ``long_poll_s`` uses
+        Telegram server-side long-polling (block up to N s, return instantly
+        on a message) — far fewer requests than short-polling. ``learn_chat_id``
+        is only set by the interactive setup helper: auto-binding the owner
+        chat_id from any inbound message during normal operation would let a
+        stranger who messages the bot hijack the owner's push channel."""
+        # The HTTP timeout must exceed the long-poll window or requests aborts
+        # the connection before Telegram replies. The Telegram-side `timeout`
+        # param (long-poll seconds) rides in the JSON body via **params.
+        http_timeout = (long_poll_s + 5) if long_poll_s else _TIMEOUT
+        result = self._call("getUpdates", http_timeout=http_timeout,
+                            offset=self._offset, timeout=long_poll_s)
         if not result:
             return []
         msgs: list[dict[str, Any]] = []
@@ -147,8 +165,9 @@ class TelegramController:
             if not msg:
                 continue
             chat = msg.get("chat", {})
-            # Auto-learn the owner chat_id on first inbound message.
-            if not self._chat_id:
+            # Bind the owner chat_id ONLY during interactive setup, never in
+            # the background poller (hijack guard).
+            if learn_chat_id and not self._chat_id:
                 self._chat_id = str(chat.get("id", ""))
                 print(f"[Telegram] learned chat_id: {self._chat_id}")
             text = msg.get("text", "")
@@ -161,8 +180,11 @@ class TelegramController:
                 self._db.log_message("telegram", "in", sender, text)
         return msgs
 
-    def start_polling(self, handler: MessageHandler, interval_s: float = 3.0) -> None:
-        """Background long-poll loop; calls ``handler(msg)`` per message."""
+    def start_polling(self, handler: MessageHandler, long_poll_s: int = 25) -> None:
+        """Background loop using Telegram server-side long-polling: blocks up
+        to ``long_poll_s`` per request and returns instantly on a message, so
+        it's ~1 request per long_poll window instead of 20/min — far gentler
+        on battery and lower latency than short-polling."""
         if not self.configured or (self._poll_thread and self._poll_thread.is_alive()):
             return
         self._stop.clear()
@@ -170,14 +192,14 @@ class TelegramController:
         def _loop() -> None:
             while not self._stop.is_set():
                 try:
-                    for msg in self.poll_once():
+                    for msg in self.poll_once(long_poll_s=long_poll_s):
                         try:
                             handler(msg)
                         except Exception as exc:  # noqa: BLE001
                             print(f"[Telegram] handler failed: {exc}")
                 except Exception as exc:  # noqa: BLE001
                     print(f"[Telegram] poll loop error: {exc}")
-                self._stop.wait(interval_s)
+                    self._stop.wait(2.0)  # back off only on error
 
         self._poll_thread = threading.Thread(
             target=_loop, name="jarvis-telegram", daemon=True)
