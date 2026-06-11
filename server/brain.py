@@ -548,6 +548,9 @@ class Brain:
         # (see _tool_dispatch). Replaces a long elif chain.
         self._tool_handlers: dict[str, Any] | None = None
 
+        # Lazy agentic planner (multi-layer day planning). See _get_planner.
+        self._planner: Any = None
+
         # Singleton handle — wired by main.py after start().
         self._entertainment = None  # type: ignore[assignment]
 
@@ -643,6 +646,17 @@ class Brain:
                     return text
             except Exception:  # noqa: BLE001 — comms must never crash reply
                 pass
+
+        # Planning short-circuit — compound, multi-layer requests ("plane
+        # meinen Tag", "mach mich startklar"). Gathers facts across layers and
+        # synthesises one plan. Returns None for non-planning input.
+        try:
+            text = self._run_plan(user_text)
+            if text:
+                self._emit_short_circuit_reply(text, speak_locally)
+                return text
+        except Exception:  # noqa: BLE001 — planning must never crash reply
+            pass
 
         # Briefing short-circuit: if the user typed/said one of the
         # known trigger phrases, hand the matching routine's output
@@ -1324,6 +1338,54 @@ class Brain:
             h[n] = lambda inp, _n=n: self._exec_entertainment(_n, inp)
         self._tool_handlers = h
         return h
+
+    _PLAN_DAY_HINTS = ("plane meinen tag", "plane meinen morgen", "plane den tag",
+                       "tagesplan", "plan my day", "plane meinen abend",
+                       "wie plane ich meinen tag", "plan für heute")
+    _LEAVE_HINTS = ("mach mich startklar", "bereit zum gehen", "ich gehe gleich",
+                    "verlasse gleich das haus", "fertig machen zum gehen")
+
+    def _get_planner(self) -> Any:
+        planner = getattr(self, "_planner", None)
+        if planner is None:
+            try:
+                from .intelligence.planner import Planner
+                planner = Planner(client=self.client,
+                                  productivity=self._productivity,
+                                  finance=self._finance, security=self._security)
+                self._planner = planner
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Brain] planner init failed: {exc}")
+                self._planner = None
+        else:
+            # Refresh manager refs (they're wired after Brain() construction).
+            planner._productivity = self._productivity
+            planner._finance = self._finance
+            planner._security = self._security
+        return self._planner
+
+    def _run_plan(self, user_text: str) -> str | None:
+        """Route compound planning requests to the Planner (async) from the
+        brain worker thread. Returns a synthesised plan or None."""
+        c = (user_text or "").lower()
+        is_day = any(h in c for h in self._PLAN_DAY_HINTS)
+        is_leave = any(h in c for h in self._LEAVE_HINTS)
+        if not (is_day or is_leave):
+            return None
+        planner = self._get_planner()
+        if planner is None:
+            return None
+        import asyncio as _aio
+        from . import events as _events
+        coro = planner.prepare_to_leave() if is_leave else planner.plan_day()
+        try:
+            main_loop = _events._loop
+            if main_loop is not None and main_loop.is_running():
+                return _aio.run_coroutine_threadsafe(coro, main_loop).result(timeout=30)
+            return _aio.run(coro)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Brain] plan failed: {exc}")
+            return None
 
     def _run_communication_command(self, user_text: str) -> str | None:
         """Run CommunicationManager.process_command (async) from the brain's

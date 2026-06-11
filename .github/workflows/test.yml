@@ -44,4 +44,5 @@ jobs:
             tests/test_flashcards.py \
             tests/test_meeting_assistant.py \
             tests/test_crypto.py \
-            tests/test_brain.py
+            tests/test_brain.py \
+            tests/test_planner.py

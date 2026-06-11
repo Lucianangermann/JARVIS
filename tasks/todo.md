@@ -10,8 +10,9 @@ Four directions: agentic planning, LLM resilience, self-monitoring, reproducibil
 - [x] Model escalation: `_pick_model` routes "denk gründlich nach / step by step / ausführlich" turns to MODEL_HARD (Sonnet); threaded through tool loop → stream.
 - [x] Friendlier German failure message after retries exhausted. tests/test_brain.py +3 (10 total).
 
-### Batch 2 — agentic multi-step planning
-- [ ] Orchestrate compound requests ("plane meinen Morgen", "mach mich startklar")
+### Batch 2 — agentic multi-step planning  ✅
+- [x] `intelligence/planner.py` Planner — gathers facts across calendar/weather/tasks/finance (best-effort each), then Claude SYNTHESISES one prioritised plan (vs the briefing's concatenation). `plan_day()` + `prepare_to_leave()` (checklist + travel + offer-to-arm).
+- [x] Brain planning short-circuit (`_run_plan`) on "plane meinen Tag" / "mach mich startklar" + lazy `_get_planner` (refreshes manager refs). tests/test_planner.py (4). Verified synthesis + facts-in-prompt + no-client fallback.
 
 ### Batch 3 — self-monitoring + owner-alerting
 - [ ] Watchdog auto-restart of failed subsystems; Telegram self-alert; /health; metrics
