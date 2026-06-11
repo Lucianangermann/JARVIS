@@ -431,6 +431,24 @@ async def lifespan(app: FastAPI):
     finance = _wire_subsystem(app, "FINANCE", _build_finance,
                               brain_attr="_finance", state_attr="finance")
 
+    # Watchdog — revives dead always-on threads + alerts the owner (through
+    # the NotificationCenter → Telegram) on repeated failures.
+    watchdog = None
+    try:
+        from .common.watchdog import Watchdog
+        _wd_nc = getattr(communication, "notifications", None) \
+            if communication is not None else None
+        _wd_alert = (
+            (lambda msg, prio, _nc=_wd_nc: _nc.send("Watchdog", msg,
+                "critical" if prio in ("high", "critical") else "medium",
+                "watchdog"))
+            if _wd_nc is not None else None)
+        watchdog = Watchdog(app, alert=_wd_alert)
+        watchdog.start()
+        app.state.watchdog = watchdog
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Watchdog] init failed: {exc}")
+
     # On macOS, periodically drain the main-thread NSRunLoop so Cocoa
     # framework callbacks (Speech.framework's SFSpeechRecognizer in
     # particular) actually get delivered. Apple posts those completions
@@ -530,6 +548,11 @@ async def lifespan(app: FastAPI):
                 finance.stop()
             except Exception as exc:  # noqa: BLE001
                 print(f"[FINANCE] stop error: {exc}")
+        if watchdog is not None:
+            try:
+                watchdog.stop()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Watchdog] stop error: {exc}")
         # Productivity + entertainment hold SQLite connections; close them so
         # WAL is flushed (accessed via app.state to avoid unbound-name issues
         # if their init failed).
@@ -658,6 +681,16 @@ class Tier4ConfirmRequest(BaseModel):
 @app.get("/")
 def health() -> dict[str, Any]:
     return {"name": "JARVIS", "model": settings.MODEL, "ok": True}
+
+
+@app.get("/health")
+def health_full(request: Request,
+                token: str = Depends(require_token)) -> dict[str, Any]:
+    """Aggregated subsystem health: managers present, their always-on
+    threads alive, memory online. status='degraded' if any thread that
+    should be running has died (the watchdog will try to revive it)."""
+    from .common.watchdog import collect_health
+    return collect_health(request.app)
 
 
 @app.post("/chat", response_model=ChatResponse)

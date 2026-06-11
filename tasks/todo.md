@@ -14,8 +14,10 @@ Four directions: agentic planning, LLM resilience, self-monitoring, reproducibil
 - [x] `intelligence/planner.py` Planner — gathers facts across calendar/weather/tasks/finance (best-effort each), then Claude SYNTHESISES one prioritised plan (vs the briefing's concatenation). `plan_day()` + `prepare_to_leave()` (checklist + travel + offer-to-arm).
 - [x] Brain planning short-circuit (`_run_plan`) on "plane meinen Tag" / "mach mich startklar" + lazy `_get_planner` (refreshes manager refs). tests/test_planner.py (4). Verified synthesis + facts-in-prompt + no-client fallback.
 
-### Batch 3 — self-monitoring + owner-alerting
-- [ ] Watchdog auto-restart of failed subsystems; Telegram self-alert; /health; metrics
+### Batch 3 — self-monitoring + owner-alerting  ✅
+- [x] `common/watchdog.py`: Watchdog revives dead always-on threads (system_monitor, telegram_poll) via their idempotent start(); alerts the owner through the NotificationCenter→Telegram after repeated revivals of the same subsystem.
+- [x] `collect_health` + `/health` route — aggregated subsystem status (managers present, threads alive, memory online; degraded if a thread that should run died).
+- [x] Wired into lifespan (+ stop in finally). tests/test_watchdog.py (3). Verified: /health aggregates + 401, killed thread revived, alert after N failures.
 
 ### Batch 4 — reproducibility + e2e
 - [ ] Lockfile; startup config validation; e2e pipeline tests
