@@ -19,8 +19,10 @@ Four directions: agentic planning, LLM resilience, self-monitoring, reproducibil
 - [x] `collect_health` + `/health` route — aggregated subsystem status (managers present, threads alive, memory online; degraded if a thread that should run died).
 - [x] Wired into lifespan (+ stop in finally). tests/test_watchdog.py (3). Verified: /health aggregates + 401, killed thread revived, alert after N failures.
 
-### Batch 4 — reproducibility + e2e
-- [ ] Lockfile; startup config validation; e2e pipeline tests
+### Batch 4 — reproducibility + e2e  ✅
+- [x] `requirements.lock` — 284 exactly-pinned packages (pip freeze of the known-good venv) for reproducible installs; requirements.txt stays the loose source of truth.
+- [x] `common/config_check.py` validate_config() — soft warnings for enabled-but-incomplete config (voice-auth on w/o profile, Telegram on w/o token/chat_id, no emergency contacts, no DB key) + feature_summary line. Called in run().
+- [x] `tests/test_e2e.py` (6, in CI) — real TestClient pipeline: /, /health (+401), security short-circuit /chat (no Claude), invalid token 401, guest delegated-access refusal, per-IP rate gate. 98 passed total.
 
 ---
 

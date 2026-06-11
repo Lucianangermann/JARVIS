@@ -2505,6 +2505,12 @@ def run() -> None:
     from .common.logging_setup import configure_logging
     configure_logging(settings.LOG_DIR)
 
+    # Soft config validation: warn about enabled-but-incomplete settings
+    # (e.g. voice-auth on with no profile, Telegram on with no token).
+    from .common.config_check import feature_summary, validate_config
+    validate_config()
+    print(feature_summary())
+
     kwargs: dict[str, Any] = dict(
         host=settings.HOST,
         port=settings.PORT,
