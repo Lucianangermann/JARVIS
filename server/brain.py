@@ -2284,16 +2284,21 @@ _WS = re.compile(r"\s+")
 
 
 def _dedupe_paragraphs(text: str) -> str:
-    """Drop consecutive identical paragraphs.
+    """Drop consecutive identical paragraphs AND inline half-duplicates.
 
-    Haiku occasionally emits the same sentence twice when uncertain —
-    sometimes as two identical text blocks, sometimes as one block with
-    the content duplicated and separated by a blank line. The TTS then
-    reads it twice. This collapses adjacent paragraphs whose
-    whitespace-normalised form matches.
+    Haiku occasionally emits the same content twice:
+    (a) as two identical text blocks separated by \\n\\n  → paragraph dedup
+    (b) as one block with the first half identical to the second half,
+        no blank-line separator  → half-dedup (only if both halves are
+        substantial, ≥80 chars, and normalised-equal)
+
+    The TTS reads whatever lands here, so both cases cause the user to
+    hear (and see) the answer twice.
     """
     if not text:
         return text
+
+    # ── pass 1: paragraph dedup ─────────────────────────────────────── #
     paras = _PARAGRAPH_SPLIT.split(text)
     out: list[str] = []
     last_norm: str | None = None
@@ -2303,7 +2308,27 @@ def _dedupe_paragraphs(text: str) -> str:
             continue
         out.append(p)
         last_norm = norm
-    return "\n\n".join(out)
+    text = "\n\n".join(out)
+
+    # ── pass 2: inline half-dedup ────────────────────────────────────── #
+    # If the text is long enough that it could be two copies glued together,
+    # try splitting at every midpoint ±10% and check if both halves are
+    # normalised-equal. Only collapse when the halves are substantial (≥80
+    # normalised chars each) so we never accidentally halve a short reply.
+    n = len(text)
+    if n >= 160:
+        mid = n // 2
+        for offset in range(-n // 10, n // 10 + 1):
+            split = mid + offset
+            if split < 40 or split > n - 40:
+                continue
+            first  = _WS.sub(" ", text[:split]).strip().lower()
+            second = _WS.sub(" ", text[split:]).strip().lower()
+            if len(first) >= 80 and first == second:
+                text = text[:split].strip()
+                break
+
+    return text
 
 
 def _join_text(resp: Message) -> str:

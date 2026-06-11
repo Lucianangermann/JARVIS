@@ -76,12 +76,26 @@ function isPinnedToBottom() {
  *  user starts a new message, or voice loop returns to listening). */
 let liveJarvisBubble = null;
 
+/** Timestamp (ms) of the last finalizeJarvisBubble call. jarvis_partial
+ *  events that arrive within STALE_PARTIAL_MS after finalization are
+ *  dropped — they are leftover queue entries from the just-finished turn
+ *  that would otherwise create a duplicate second bubble. */
+let lastFinalizedAt = 0;
+const STALE_PARTIAL_MS = 800;
+
 /** Streaming append: each partial extends the same JARVIS bubble.
  *  The first partial of a turn creates the bubble; subsequent
  *  partials extend its body text. No typewriter — partials arrive
  *  at natural typing pace from Claude's stream already. */
 function appendJarvisPartial(text) {
   if (!text) return;
+  // Drop stale partials that arrive shortly after finalization. These
+  // are events that were queued in the WebSocket fanout before the
+  // jarvis_reply event but processed by the client after it — they
+  // would create a second bubble with identical content.
+  if (liveJarvisBubble === null && Date.now() - lastFinalizedAt < STALE_PARTIAL_MS) {
+    return;
+  }
   const stick = isPinnedToBottom();
   if (liveJarvisBubble === null) {
     const msg = document.createElement("div");
@@ -119,6 +133,7 @@ function finalizeJarvisBubble(fullText) {
     liveJarvisBubble.classList.remove("cursor");
   }
   liveJarvisBubble = null;
+  lastFinalizedAt = Date.now();
 }
 
 /** Called on interrupt / listening transitions — closes any
@@ -129,6 +144,7 @@ function abandonJarvisBubble() {
     liveJarvisBubble.classList.remove("cursor");
   }
   liveJarvisBubble = null;
+  lastFinalizedAt = Date.now();
 }
 
 /** Append a message to the chat pane with a typewriter effect.
