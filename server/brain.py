@@ -442,6 +442,27 @@ def _apple_tools() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "send_imessage",
+            "description": (
+                "Send a TEXT message to a person via iMessage/SMS (Messages.app). "
+                "Use this for ANY request to text, message, or write to someone — "
+                "e.g. 'schreib/schreibe/schick/sende ... eine Nachricht/iMessage/SMS' "
+                "or 'text X'. This is the texting channel. apple_mail is for EMAIL "
+                "only — never send a text message as an email. The recipient is a "
+                "contact name, phone number, or iMessage email. The user is asked to "
+                "confirm before it actually sends, so just call this with the details."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string", "description": "Recipient: contact name, phone number (+49…), or iMessage email"},
+                    "message": {"type": "string", "description": "The text message body to send"},
+                },
+                "required": ["to", "message"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "safari_control",
             "description": (
                 "Control Safari: open a URL, search the web (opens DuckDuckGo), "
@@ -1370,6 +1391,7 @@ class Brain:
             "apple_music":       self._exec_apple_music,
             "apple_notes":       self._exec_apple_notes,
             "apple_mail":        self._exec_apple_mail,
+            "send_imessage":     self._exec_send_imessage,
             "safari_control":    self._exec_safari_control,
             "finance":           self._exec_finance,
         }
@@ -1636,6 +1658,34 @@ class Brain:
                 return "title und content sind erforderlich.", True
             return append_to_note(title, content)
         return f"Unbekannte Aktion: {action}", True
+
+    def _exec_send_imessage(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        """Send a text via iMessage through the communication layer's
+        confirm-before-send flow. Closes the misroute where texting requests
+        fell through to apple_mail (email) because the brain had no real
+        texting tool — Claude would email instead and even claim it sent an
+        'iMessage via Apple Mail'."""
+        comm = getattr(self, "_communication", None)
+        messaging = getattr(comm, "messaging", None) if comm is not None else None
+        if messaging is None:
+            return "Nachrichten-Versand ist nicht verfügbar.", True
+        inp = tool_input or {}
+        to = (inp.get("to") or "").strip()
+        message = (inp.get("message") or "").strip()
+        if not to or not message:
+            return "to und message sind erforderlich.", True
+        import asyncio as _aio
+        from . import events as _events
+        try:
+            coro = messaging.send("imessage", to, message)
+            main_loop = _events._loop
+            if main_loop is not None and main_loop.is_running():
+                r = _aio.run_coroutine_threadsafe(coro, main_loop).result(timeout=25)
+            else:
+                r = _aio.run(coro)
+        except Exception as exc:  # noqa: BLE001
+            return f"iMessage-Versand fehlgeschlagen: {exc}", True
+        return r.get("preview", "Nachricht vorbereitet. Bestätigen?"), False
 
     def _exec_apple_mail(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
         from .tools.mail_tool import list_unread, read_message, send_message, get_unread_count

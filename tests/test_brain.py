@@ -59,6 +59,41 @@ def test_communication_short_circuit_routes(brain: Brain) -> None:
         brain._communication = None
 
 
+def test_send_imessage_tool_stages_via_messaging(brain: Brain) -> None:
+    """A texting request must go through iMessage (Messages.app), not fall
+    back to email. Regression: brain had no texting tool, so Claude emailed."""
+    staged = {}
+
+    class _Msg:
+        async def send(self, platform, contact, message):
+            staged.update(platform=platform, contact=contact, message=message)
+            return {"needs_confirm": True,
+                    "preview": f'Sende an {contact} via {platform}: "{message}". Bestätigen?'}
+
+    class _Comm:
+        messaging = _Msg()
+
+    brain._communication = _Comm()
+    try:
+        out, is_err = brain._exec_send_imessage({"to": "+49172", "message": "Test"})
+    finally:
+        brain._communication = None
+    assert is_err is False
+    assert staged == {"platform": "imessage", "contact": "+49172", "message": "Test"}
+    assert "via imessage" in out and "Bestätigen" in out
+
+
+def test_send_imessage_requires_to_and_message(brain: Brain) -> None:
+    class _Comm:
+        messaging = object()
+    brain._communication = _Comm()
+    try:
+        out, is_err = brain._exec_send_imessage({"to": "", "message": "hi"})
+    finally:
+        brain._communication = None
+    assert is_err is True and "erforderlich" in out
+
+
 def test_short_circuit_swallows_handler_errors(brain: Brain) -> None:
     class _Boom:
         async def process_command(self, text):
