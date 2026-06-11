@@ -73,7 +73,19 @@ _INSTRUCTIONS = (
     "headings, no code fences in the spoken reply. (Long-form "
     "detail is fine when the user explicitly asks for it.)\n"
     "- End every sentence with a clear terminator (. ! ?) so the "
-    "TTS pipeline can flush each sentence the moment it's complete."
+    "TTS pipeline can flush each sentence the moment it's complete.\n"
+    "\n"
+    "## Handling Large Files and Multi-Step Document Tasks\n"
+    "When asked to create a document FROM a large file (PDF, script, etc.):\n"
+    "1. Read the file ONCE. Extract ONLY the key content (e.g. Lernziele, "
+    "headings) — do NOT quote the full text verbatim.\n"
+    "2. IMMEDIATELY write a compact outline/notes file (e.g. "
+    "'lernziele_notizen.txt') so the key content is on disk before writing "
+    "the full document. This survives any context reset.\n"
+    "3. Then write the full document section by section, reading your notes "
+    "file (small!) rather than re-reading the original large file.\n"
+    "4. If a file read was truncated ('[... N weitere Zeichen]'), work with "
+    "what you have — do NOT re-read the full file just to get more text."
 )
 
 

@@ -913,7 +913,7 @@ class Brain:
     # the context window rapidly — a 200-KB PDF tool_result alone can use
     # 50k+ tokens on every subsequent turn. We truncate once the turn is
     # complete so the history retains WHAT was done without all the raw data.
-    _TOOL_RESULT_MAX = 800  # chars kept per tool_result content item
+    _TOOL_RESULT_MAX = 2_000  # chars kept per tool_result in history (after turn)
 
     def _truncate_tool_results(self, history: list[dict[str, Any]]) -> None:
         """Trim oversized tool_result blobs in-place. Runs after a turn
@@ -1049,11 +1049,28 @@ class Brain:
                         metrics.record_tool(block.name, error=bool(is_error))
                     except Exception:  # noqa: BLE001
                         pass
+                    # Limit large tool results before they reach Claude.
+                    # A 4.5 MB PDF can produce 100k+ chars of text — sending
+                    # that verbatim to Claude fills the 200k context window on
+                    # a single read and causes an immediate overflow crash.
+                    # 12 000 chars ≈ 3 000 tokens: enough for all Lernziele
+                    # in a typical school script while leaving ample room for
+                    # the conversation, system prompt, and write operations.
+                    inline_result = result
+                    if (isinstance(result, str)
+                            and not is_error
+                            and len(result) > _MAX_INLINE_TOOL_RESULT):
+                        inline_result = (
+                            result[:_MAX_INLINE_TOOL_RESULT]
+                            + f"\n\n[... {len(result) - _MAX_INLINE_TOOL_RESULT} weitere Zeichen "
+                            f"nicht angezeigt — verwende read_file mit einem engeren Bereich "
+                            f"oder fasse das Bisherige zuerst zusammen.]"
+                        )
                     tool_results.append(
                         {
                             "type": "tool_result",
                             "tool_use_id": block.id,
-                            "content": result,
+                            "content": inline_result,
                             "is_error": is_error,
                         }
                     )
@@ -2366,6 +2383,11 @@ class Brain:
 
 
 _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n+")
+# Maximum chars sent to Claude per tool_result inline. Prevents a single
+# large file read (e.g. a 4.5 MB PDF → 100k+ chars) from consuming the
+# entire 200k context window on one turn. 12 000 chars ≈ 3 000 tokens —
+# enough for all Lernziele in a typical school script.
+_MAX_INLINE_TOOL_RESULT = 12_000
 _WS = re.compile(r"\s+")
 
 
