@@ -431,6 +431,25 @@ async def lifespan(app: FastAPI):
     finance = _wire_subsystem(app, "FINANCE", _build_finance,
                               brain_attr="_finance", state_attr="finance")
 
+    # Deferred-action store — reminders JARVIS fires itself (speak/UI/Telegram)
+    # at a scheduled time, delivered through the NotificationCenter.
+    triggers = None
+    try:
+        from .intelligence.triggers import TriggerStore
+        _trg_nc = getattr(communication, "notifications", None) \
+            if communication is not None else None
+        _deliver = (
+            (lambda msg, prio, _nc=_trg_nc: _nc.send("Erinnerung", msg,
+                prio if prio in ("high", "critical") else "medium", "trigger"))
+            if _trg_nc is not None else None)
+        triggers = TriggerStore(Path("data/triggers.db"), deliver=_deliver)
+        triggers.start()
+        app.state.triggers = triggers
+        app.state.brain._triggers = triggers
+        print("[TRIGGERS] wired to brain ✓")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[TRIGGERS] init failed: {exc}")
+
     # Watchdog — revives dead always-on threads + alerts the owner (through
     # the NotificationCenter → Telegram) on repeated failures.
     watchdog = None
@@ -553,6 +572,11 @@ async def lifespan(app: FastAPI):
                 watchdog.stop()
             except Exception as exc:  # noqa: BLE001
                 print(f"[Watchdog] stop error: {exc}")
+        if triggers is not None:
+            try:
+                triggers.stop()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[TRIGGERS] stop error: {exc}")
         # Productivity + entertainment hold SQLite connections; close them so
         # WAL is flushed (accessed via app.state to avoid unbound-name issues
         # if their init failed).

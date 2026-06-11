@@ -551,6 +551,10 @@ class Brain:
         # Lazy agentic planner (multi-layer day planning). See _get_planner.
         self._planner: Any = None
 
+        # Lazy deferred-action store (time-scheduled reminders JARVIS fires
+        # itself). main.py wires a real one with a NotificationCenter sink.
+        self._triggers: Any = None
+
         # Singleton handle — wired by main.py after start().
         self._entertainment = None  # type: ignore[assignment]
 
@@ -1346,7 +1350,8 @@ class Brain:
             h[n] = lambda inp, _n=n: self._exec_vision_tool(_n, inp)
         for n in ("manage_tasks", "manage_focus", "get_productivity_score",
                   "add_knowledge_note", "recall_knowledge", "flashcards",
-                  "get_email_smart_summary", "meeting_control"):
+                  "get_email_smart_summary", "meeting_control",
+                  "schedule_action"):
             h[n] = lambda inp, _n=n: self._exec_productivity(_n, inp)
         for n in ("play_mood_music", "manage_watchlist", "play_game",
                   "manage_gaming_mode", "get_birthdays", "get_news_briefing"):
@@ -1614,6 +1619,23 @@ class Brain:
                 self._flashcards = None
         return self._flashcards
 
+    def _get_triggers(self) -> Any:
+        """Lazy deferred-action store. main.py wires a real one with a
+        NotificationCenter sink + a running checker; the lazy fallback
+        (tests/standalone) prints when a trigger fires."""
+        trg = getattr(self, "_triggers", None)
+        if trg is None:
+            try:
+                from pathlib import Path as _Path
+                from .intelligence.triggers import TriggerStore
+                _db = _Path(__file__).resolve().parents[1] / "data" / "triggers.db"
+                trg = TriggerStore(_db)
+                self._triggers = trg
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Brain] triggers init failed: {exc}")
+                self._triggers = None
+        return self._triggers
+
     def _get_finance(self) -> Any:
         """Lazily build the finance manager. Shares the brain's Claude client
         (categorisation). No notification center on the lazy path — price
@@ -1861,6 +1883,46 @@ class Brain:
                     s = fc.stats()
                     return (f"{s['total']} Karten gesamt, {s['due']} fällig.", False)
                 return f"Unbekannte action: {action}", True
+
+            if tool_name == "schedule_action":
+                import time as _t
+                trg = self._get_triggers()
+                if trg is None:
+                    return "Erinnerungs-Planer nicht verfügbar.", True
+                action = inp.get("action", "schedule")
+                if action == "list":
+                    return trg.spoken_pending(), False
+                if action == "cancel":
+                    tid = inp.get("id")
+                    if not tid:
+                        return "id ist erforderlich.", True
+                    ok = trg.cancel(int(tid))
+                    return ("Erinnerung gelöscht." if ok else "Nicht gefunden."), not ok
+                # schedule
+                message = inp.get("message", "")
+                if not message:
+                    return "message ist erforderlich.", True
+                fire_at: float | None = None
+                if inp.get("delay_minutes") is not None:
+                    fire_at = _t.time() + float(inp["delay_minutes"]) * 60
+                elif inp.get("at"):
+                    try:
+                        hh, mm = (int(x) for x in str(inp["at"]).split(":"))
+                        now = _t.localtime()
+                        import time as _tt
+                        target = _tt.struct_time((now.tm_year, now.tm_mon,
+                            now.tm_mday, hh, mm, 0, now.tm_wday, now.tm_yday,
+                            now.tm_isdst))
+                        fire_at = _tt.mktime(target)
+                        if fire_at <= _t.time():
+                            fire_at += 86400  # already past → tomorrow
+                    except Exception:  # noqa: BLE001
+                        return "Konnte die Zeit nicht verstehen.", True
+                if fire_at is None:
+                    return "Sag mir, wann (in X Minuten oder um HH:MM).", True
+                trg.add(fire_at, message)
+                when = _t.strftime("%H:%M", _t.localtime(fire_at))
+                return f"Erinnerung um {when} gesetzt: {message}.", False
 
             if tool_name == "meeting_control":
                 meeting = getattr(pm, "meeting", None)

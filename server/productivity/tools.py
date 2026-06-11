@@ -205,6 +205,34 @@ def productivity_tools() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "schedule_action",
+            "description": (
+                "Schedule a deferred reminder that JARVIS itself will speak / "
+                "push (via Telegram) at a future time — for 'erinnere mich in "
+                "2 Stunden an X', 'um 18 Uhr Y', 'morgen früh Z'. YOU compute "
+                "the timing: pass delay_minutes (minutes from now) OR at "
+                "(today/tomorrow 'HH:MM'). action='schedule' (default) needs "
+                "message; 'list' shows pending; 'cancel' needs id."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["schedule", "list", "cancel"]},
+                    "message": {"type": "string",
+                                "description": "What to remind about."},
+                    "delay_minutes": {"type": "integer",
+                                      "description": "Minutes from now."},
+                    "at": {"type": "string",
+                           "description": "Clock time 'HH:MM' (today, or "
+                                          "tomorrow if already past)."},
+                    "id": {"type": "integer", "description": "Trigger id (cancel)."},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "get_email_smart_summary",
             "description": (
                 "Get a smart summary of unread emails from Apple Mail. "

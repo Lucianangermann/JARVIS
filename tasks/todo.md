@@ -13,7 +13,8 @@ Three directions: streaming + conditional actions, metrics + OS-resilience, deep
 - [ ] Token-stream /chat + WS replies for snappier UX
 
 ### Batch C — conditional/deferred actions
-- [ ] Trigger store: time/event-conditioned actions ("wenn ich heimkomme", "in 2h")
+- [x] `intelligence/triggers.py` TriggerStore (ThreadSafeDB) — time-scheduled actions JARVIS fires itself via the NotificationCenter (voice/UI/Telegram), not passive Apple Reminders. Background checker delivers + marks fired.
+- [x] `schedule_action` tool (Claude computes delay_minutes / at 'HH:MM') + brain executor (schedule/list/cancel) + lifespan wiring (NC sink + checker). tests/test_triggers.py (5). Verified add/fire/cancel + brain schedule.
 
 ### Batch D — deeper personalization
 - [ ] Routine learning, response preferences, relationship modelling
