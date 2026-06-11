@@ -487,6 +487,34 @@ def _apple_tools() -> list[dict[str, Any]]:
                 "additionalProperties": False,
             },
         },
+        {
+            "name": "get_calendar",
+            "description": (
+                "Read calendar events from macOS Calendar.app. "
+                "Use this whenever the user asks about appointments, schedule, "
+                "upcoming events, 'was habe ich heute/morgen/diese Woche', "
+                "'welche Termine', 'wann ist mein nächster Termin' etc. "
+                "NO password or confirmation needed — this is read-only. "
+                "action='today': events for today. "
+                "action='next': the single next upcoming event. "
+                "action='range': events between date_from and date_to "
+                "(ISO 8601 dates: 'YYYY-MM-DD')."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["today", "next", "range"],
+                        "description": "today=today's events, next=next event, range=date range",
+                    },
+                    "date_from": {"type": "string", "description": "Start date YYYY-MM-DD (for range)"},
+                    "date_to":   {"type": "string", "description": "End date YYYY-MM-DD (for range)"},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
     ]
 
 
@@ -1395,6 +1423,7 @@ class Brain:
             "apple_notes":       self._exec_apple_notes,
             "apple_mail":        self._exec_apple_mail,
             "send_imessage":     self._exec_send_imessage,
+            "get_calendar":      self._exec_get_calendar,
             "safari_control":    self._exec_safari_control,
             "finance":           self._exec_finance,
         }
@@ -1661,6 +1690,42 @@ class Brain:
                 return "title und content sind erforderlich.", True
             return append_to_note(title, content)
         return f"Unbekannte Aktion: {action}", True
+
+    def _exec_get_calendar(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        """Read calendar events — no confirmation, no password, purely local."""
+        from .tools.calendar_tool import get_today_events, get_next_event, get_events
+        from datetime import datetime, timedelta
+        inp = tool_input or {}
+        action = inp.get("action", "today")
+        try:
+            if action == "today":
+                events = get_today_events()
+            elif action == "next":
+                ev = get_next_event()
+                events = [ev] if ev else []
+            elif action == "range":
+                from .tools.calendar_tool import _LOCAL_TZ
+                df = inp.get("date_from", "")
+                dt = inp.get("date_to", "")
+                if not df:
+                    return "date_from ist erforderlich für range.", True
+                start = datetime.fromisoformat(df).replace(tzinfo=_LOCAL_TZ)
+                end   = (datetime.fromisoformat(dt).replace(tzinfo=_LOCAL_TZ)
+                         if dt else start + timedelta(days=7))
+                events = get_events(start, end)
+            else:
+                return f"Unbekannte Aktion: {action}", True
+        except Exception as exc:  # noqa: BLE001
+            return f"Kalender-Zugriff fehlgeschlagen: {exc}", True
+        if not events:
+            return "Keine Termine gefunden.", False
+        lines = []
+        for ev in events:
+            start_str = ev.start.strftime("%A %d.%m. %H:%M")
+            end_str   = ev.end.strftime("%H:%M")
+            loc = f" ({ev.location})" if ev.location else ""
+            lines.append(f"{start_str}–{end_str}: {ev.title}{loc}")
+        return "\n".join(lines), False
 
     def _exec_send_imessage(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
         """Send a text via iMessage through the communication layer's
