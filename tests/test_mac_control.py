@@ -192,26 +192,33 @@ def test_tier3_dispatch_returns_pending_then_consume_runs(sandbox_dir):
     assert target.exists() and target.read_text() == "hello"
 
 
-def test_tier3_auto_confirm_reads_inline_writes_confirm(sandbox_dir, monkeypatch):
-    """With MAC_TIER3_AUTO_CONFIRM=True, READ-only file actions skip the
-    pending step — but WRITE actions (create/edit/move/trash) ALWAYS require
-    an explicit okay, since overwriting the user's files without confirmation
-    is too dangerous."""
+def test_tier3_auto_confirm_reads_and_writes_inline_destructive_still_confirm(
+        sandbox_dir, monkeypatch):
+    """With MAC_TIER3_AUTO_CONFIRM=True:
+    - READ actions run inline (no pending).
+    - CREATE/EDIT actions also run inline — the user's explicit task request
+      IS the "okay"; requiring a HUD click for every write blocks document
+      creation workflows (JARVIS fell back to Apple Notes instead of create_file).
+    - DESTRUCTIVE actions (rename, move, trash) ALWAYS pend — they can cause
+      irreversible data loss."""
     monkeypatch.setattr(settings, "MAC_TIER3_AUTO_CONFIRM", True)
     target = sandbox_dir / "auto.txt"
     target.write_text("hallo", encoding="utf-8")
     # A read runs inline.
     read_env = dispatcher.dispatch("read_file", {"path": str(target)})
     assert read_env["status"] == "ok" and read_env["tier"] == 3
-    # A write still pends for confirmation.
+    # A create also runs inline (user explicitly asked for it).
     write_env = dispatcher.dispatch("create_file",
                                     {"path": str(sandbox_dir / "neu.txt"),
                                      "content": "x"})
-    assert write_env["status"] == "pending"
-    # An edit also pends.
+    assert write_env["status"] == "ok", f"create_file should run inline, got: {write_env}"
+    # An edit also runs inline.
     edit_env = dispatcher.dispatch("edit_file",
                                    {"path": str(target), "content": "neu"})
-    assert edit_env["status"] == "pending"
+    assert edit_env["status"] == "ok", f"edit_file should run inline, got: {edit_env}"
+    # Destructive actions (trash) still pend — irreversible.
+    trash_env = dispatcher.dispatch("trash", {"path": str(target)})
+    assert trash_env["status"] == "pending"
 
 
 def test_tier3_cancel_does_not_run(sandbox_dir):

@@ -105,15 +105,16 @@ def dispatch(name: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
             return _run_inline(action, params)
         return _stash_pending(action, params, requires_password=False)
 
-    # Tier 3 — files. Read-only actions (list/read) run inline when
-    # MAC_TIER3_AUTO_CONFIRM is on. WRITE actions (create/edit/rename/move/
-    # trash) ALWAYS require an explicit confirmation regardless of the
-    # auto-confirm setting — overwriting or moving the user's files without
-    # an "okay" is too dangerous to skip.
+    # Tier 3 — files.
+    # With MAC_TIER3_AUTO_CONFIRM on, reads AND content-writes (create_file,
+    # edit_file, create_dir) run inline — the user's explicit task request
+    # ("erstelle ein Dokument") is already the "okay", so requiring a HUD
+    # click for every write blocks multi-step document creation tasks.
+    # Destructive actions (rename, move, trash) ALWAYS require explicit
+    # confirmation regardless — these can cause irreversible data loss.
     if action.tier == Tier.FILES:
-        write_actions = {"create_file", "edit_file", "create_dir",
-                         "rename", "move", "trash"}
-        if settings.MAC_TIER3_AUTO_CONFIRM and name not in write_actions:
+        destructive_actions = {"rename", "move", "trash"}
+        if settings.MAC_TIER3_AUTO_CONFIRM and name not in destructive_actions:
             return _run_inline(action, params)
         return _stash_pending(action, params, requires_password=False)
 
