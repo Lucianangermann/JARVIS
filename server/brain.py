@@ -987,7 +987,7 @@ class Brain:
         would bypass AEC and the mic would re-ingest JARVIS' own
         voice (the same failure mode that killed barge-in).
         """
-        for _ in range(8):  # generous bound; tools are cheap
+        for _ in range(20):  # multi-step tasks (create+confirm per section) need room
             # Cancel-aware: if a /interrupt fired between turns we
             # don't want to start a new Claude call. Cheap check.
             if self._cancel_check():
@@ -1088,7 +1088,9 @@ class Brain:
             history.append({"role": "assistant", "content": resp.content})
             return _join_text(resp) or "I can't help with that."
 
-        return "I'm spinning on tool calls — try rephrasing."
+        return ("Die Aufgabe brauchte zu viele Schritte in einer Runde. "
+                "Ich habe angefangen — prüf die Bestätigungs-Karte im HUD "
+                "und sag mir dann kurz wo ich weitermachen soll.")
 
     def _cancel_check(self) -> bool:
         """True iff a /interrupt is currently armed. Reads through to
