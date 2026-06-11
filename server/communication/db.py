@@ -139,13 +139,15 @@ class CommunicationDB(ThreadSafeDB):
         if time.time() - self._last_prune > 86400:
             self._last_prune = time.time()
             self.prune_message_content()
+        from ..common.crypto import cipher
         return self._execute(
             """INSERT INTO messages
                (timestamp, platform, direction, contact, content,
                 translated_content, delivered, read)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (time.time(), platform, direction, contact, content,
-             translated_content, int(delivered), int(read)),
+            (time.time(), platform, direction, contact,
+             cipher.encrypt(content), cipher.encrypt(translated_content),
+             int(delivered), int(read)),
         )
 
     def recent_messages(
@@ -162,7 +164,12 @@ class CommunicationDB(ThreadSafeDB):
             params.append(contact)
         sql += " ORDER BY timestamp DESC LIMIT ?"
         params.append(limit)
-        return self.query(sql, tuple(params))
+        rows = self.query(sql, tuple(params))
+        from ..common.crypto import cipher
+        for r in rows:
+            r["content"] = cipher.decrypt(r.get("content"))
+            r["translated_content"] = cipher.decrypt(r.get("translated_content"))
+        return rows
 
     def mark_replied(self, message_id: int) -> None:
         self._execute("UPDATE messages SET replied=1 WHERE id=?", (message_id,))

@@ -72,6 +72,9 @@ opencv-python<4.11
 psutil>=5.9
 # bcrypt hashes the fallback PIN for voice_auth (never stored plaintext).
 bcrypt>=4.1
+# cryptography (Fernet) encrypts sensitive at-rest DB content (message bodies,
+# expense notes) when JARVIS_DB_KEY is set — see server/common/crypto.py.
+cryptography>=42.0
 # Speaker verification (resemblyzer) is OPTIONAL and heavier — it pulls
 # torch + librosa. Install it only if you want voice authentication via
 # requirements-voice.txt. voice_auth degrades to PIN-only without it.

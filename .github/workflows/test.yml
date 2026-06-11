@@ -33,7 +33,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install fastapi "uvicorn[standard]" pydantic python-dotenv \
             python-multipart anthropic requests httpx websockets \
-            psutil bcrypt "numpy<2.0" pytest
+            psutil bcrypt cryptography "numpy<2.0" pytest
 
       - name: Run portable test suite
         run: |
@@ -42,4 +42,5 @@ jobs:
             tests/test_communication.py \
             tests/test_finance.py \
             tests/test_flashcards.py \
-            tests/test_meeting_assistant.py
+            tests/test_meeting_assistant.py \
+            tests/test_crypto.py

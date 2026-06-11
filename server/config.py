@@ -161,6 +161,11 @@ class Settings:
     # Cosine-similarity cut for "this is the owner". resemblyzer same-
     # speaker scores typically land 0.75–0.90; 0.85 is the spec default.
     VOICE_AUTH_THRESHOLD: float = float(os.getenv("VOICE_AUTH_THRESHOLD", "0.85"))
+    # Optional at-rest field encryption for sensitive DB content (message
+    # bodies, expense notes). A Fernet key — generate one with
+    # `python -m server.common.crypto`. Empty = off (plaintext, default).
+    JARVIS_DB_KEY: str = os.getenv("JARVIS_DB_KEY", "")
+
     # Fallback PIN, stored as a bcrypt hash (NEVER plaintext). Generate one
     # with `python -m server.security.voice_auth --set-pin`. Empty disables
     # the PIN challenge path.

@@ -94,16 +94,24 @@ class FinanceDB(ThreadSafeDB):
     def add_expense(self, amount: float, category: str, merchant: str | None,
                     description: str | None, currency: str = "EUR",
                     source: str = "manual", ts: float | None = None) -> int | None:
+        # merchant/description are free-text PII → encrypt at rest (category
+        # stays plaintext because it's grouped/queried).
+        from ..common.crypto import cipher
         return self.execute(
             """INSERT INTO expenses (ts, amount, currency, category, merchant,
                description, source) VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (ts if ts is not None else time.time(), amount, currency, category,
-             merchant, description, source),
+             cipher.encrypt(merchant), cipher.encrypt(description), source),
         )
 
     def expenses_since(self, since_ts: float) -> list[dict[str, Any]]:
-        return self.query(
+        from ..common.crypto import cipher
+        rows = self.query(
             "SELECT * FROM expenses WHERE ts >= ? ORDER BY ts DESC", (since_ts,))
+        for r in rows:
+            r["merchant"] = cipher.decrypt(r.get("merchant"))
+            r["description"] = cipher.decrypt(r.get("description"))
+        return rows
 
     def expenses_by_category(self, since_ts: float) -> list[dict[str, Any]]:
         return self.query(

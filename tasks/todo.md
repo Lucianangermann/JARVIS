@@ -13,8 +13,10 @@ Four directions chosen. Executing in batches, commit per batch.
 - [x] Per-IP rate-limit + IP-block (anomaly/digital) wired as `security_rate_gate` dependency on /chat + /audio.
 - [x] Delegated access live: `authorize_chat` accepts owner OR guest temp token; guest commands restricted to allowed level + audited. Verified: guest lights allowed, guest email refused, owner unaffected, bad token 401, rate-gate 429.
 
-### Batch 3 — DB encryption at rest
-- [ ] Encrypt sensitive content in communication.db (messages/contacts) + finance.db
+### Batch 3 — DB encryption at rest  ✅
+- [x] `server/common/crypto.py` FieldCipher (Fernet, opt-in via JARVIS_DB_KEY, `enc:` prefix for graceful legacy-plaintext migration).
+- [x] communication.db: message content/translated_content encrypted at rest; finance.db: expense merchant/description encrypted (queryable columns stay plaintext — full-file needs SQLCipher).
+- [x] config + .env.example + requirements (cryptography); tests/test_crypto.py (5); CI runs it. Verified: raw row ciphertext, reads decrypt, off-without-key passthrough, wrong-key graceful.
 
 ### Batch 4 — test_brain.py + lifespan registry
 - [ ] Direct tests for brain.py (short-circuits, dispatch table, memory hooks)
