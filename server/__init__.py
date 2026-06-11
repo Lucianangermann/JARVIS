@@ -27,9 +27,21 @@ import os
 #    Disabling lets osascript / say work while Whisper threads are
 #    alive in the parent. Documented escape hatch from Apple's own
 #    docs for exactly this scenario.
+#
+# 4) OMP_NUM_THREADS=1
+#    KMP_DUPLICATE_LIB_OK silences the Error #15 abort but does NOT stop
+#    the SIGSEGV when faster-whisper's (CTranslate2/libiomp) and torch's
+#    (sentence-transformers/libomp) OpenMP pools both spin up worker
+#    threads in one process — the server crashed at
+#    `loading faster-whisper model='medium'` exactly here. Verified: with
+#    the KMP flag alone the process still segfaults; pinning OMP to a
+#    single thread is the one setting that keeps both runtimes from
+#    colliding (2/4 threads still crash). Single-thread STT is slower but
+#    correct; drop WHISPER_MODEL to 'small' if latency hurts.
 for _k, _v in (
     ("KMP_DUPLICATE_LIB_OK", "TRUE"),
     ("KMP_INIT_AT_FORK", "FALSE"),
     ("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES"),
+    ("OMP_NUM_THREADS", "1"),
 ):
     os.environ.setdefault(_k, _v)
