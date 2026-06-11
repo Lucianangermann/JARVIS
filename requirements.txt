@@ -8,6 +8,8 @@ python-multipart>=0.0.9
 
 # Claude API
 anthropic>=0.40
+# PDF text extraction for the file-read action (mac_control tier3_files).
+pypdf>=4.0
 
 # HTTP client (Windows client + tools)
 requests>=2.32

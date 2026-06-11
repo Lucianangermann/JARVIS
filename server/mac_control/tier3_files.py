@@ -74,6 +74,8 @@ BLOCKED_DIRS: tuple[Path, ...] = _build_prefix_set(_BLOCKED_LITERAL)
 
 MAX_READ_BYTES = 100 * 1024
 MAX_WRITE_BYTES = 100 * 1024
+MAX_PDF_TEXT = 200 * 1024   # cap on extracted PDF text returned to Claude
+MAX_PDF_PAGES = 80          # don't extract an unbounded number of pages
 
 
 # --- helpers --------------------------------------------------------------- #
@@ -144,6 +146,41 @@ def _list_dir(*, path: str = "~/Desktop", **_kw) -> str:
     return f"{d}:\n" + "\n".join(items[:200])  # cap at 200 entries
 
 
+def _read_pdf(f: Path) -> str:
+    """Extract text from a PDF (pypdf). Returns a clear note for scanned /
+    image-only PDFs (no extractable text) rather than garbage."""
+    try:
+        from pypdf import PdfReader
+    except Exception:  # noqa: BLE001
+        return ("PDF-Lesen ist nicht verfügbar (pypdf nicht installiert: "
+                "`pip install pypdf`).")
+    try:
+        reader = PdfReader(str(f))
+        if getattr(reader, "is_encrypted", False):
+            try:
+                reader.decrypt("")  # try empty password
+            except Exception:  # noqa: BLE001
+                return "Die PDF ist passwortgeschützt — kann nicht gelesen werden."
+        parts: list[str] = []
+        for i, page in enumerate(reader.pages):
+            if i >= MAX_PDF_PAGES:
+                parts.append(f"…(weitere Seiten ab {MAX_PDF_PAGES} ausgelassen)")
+                break
+            t = (page.extract_text() or "").strip()
+            if t:
+                parts.append(t)
+        text = "\n\n".join(parts).strip()
+        if not text:
+            return ("Die PDF enthält keinen extrahierbaren Text — sie ist "
+                    "wahrscheinlich gescannt (Bild-PDF). Ich könnte sie per "
+                    "Bilderkennung lesen, falls gewünscht.")
+        if len(text) > MAX_PDF_TEXT:
+            text = text[:MAX_PDF_TEXT] + "\n…(Text gekürzt)"
+        return text
+    except Exception as exc:  # noqa: BLE001
+        return f"PDF-Lesen fehlgeschlagen: {exc}"
+
+
 def _read_file(*, path: str = "", **_kw) -> str:
     try:
         f = _validate_path(path, must_exist=True)
@@ -151,13 +188,21 @@ def _read_file(*, path: str = "", **_kw) -> str:
         return str(exc)
     if not f.is_file():
         return f"Keine Datei: {f}"
+    # PDFs: extract text rather than reading raw bytes as UTF-8.
+    if f.suffix.lower() == ".pdf":
+        return _read_pdf(f)
     if f.stat().st_size > MAX_READ_BYTES:
         return f"Datei zu groß ({f.stat().st_size} B, Limit {MAX_READ_BYTES})."
     try:
-        text = f.read_text(encoding="utf-8", errors="replace")
+        raw = f.read_bytes()
     except OSError as exc:
         return f"Lesen fehlgeschlagen: {exc}"
-    return text
+    # Detect binary (NUL byte in the head) so we don't return garbage for
+    # images/archives/office docs.
+    if b"\x00" in raw[:8192]:
+        return (f"Binärdatei ({f.suffix or 'ohne Endung'}) — kann nicht als "
+                f"Text gelesen werden.")
+    return raw.decode("utf-8", errors="replace")
 
 
 def _create_file(*, path: str = "", content: str = "", **_kw) -> str:
@@ -176,6 +221,34 @@ def _create_file(*, path: str = "", content: str = "", **_kw) -> str:
     except OSError as exc:
         return f"Schreiben fehlgeschlagen: {exc}"
     return f"Datei erstellt: {f} ({len(content)} Zeichen)."
+
+
+def _edit_file(*, path: str = "", content: str = "", mode: str = "overwrite",
+               **_kw) -> str:
+    """Edit an EXISTING text file: overwrite it, or append to it. (New files
+    use create_file; PDFs can't be edited as text.)"""
+    if not isinstance(content, str):
+        return "content muss ein String sein."
+    if len(content.encode("utf-8")) > MAX_WRITE_BYTES:
+        return f"Inhalt zu groß (Limit {MAX_WRITE_BYTES} B)."
+    try:
+        f = _validate_path(path, must_exist=True)
+    except SandboxError as exc:
+        return str(exc)
+    if not f.is_file():
+        return f"Keine Datei: {f}"
+    if f.suffix.lower() == ".pdf":
+        return "PDF-Dateien können nicht als Text bearbeitet werden."
+    try:
+        if mode == "append":
+            with f.open("a", encoding="utf-8") as fh:
+                fh.write(content)
+            return f"An {f.name} angehängt ({len(content)} Zeichen)."
+        # overwrite (default)
+        f.write_text(content, encoding="utf-8")
+        return f"{f.name} überschrieben ({len(content)} Zeichen)."
+    except OSError as exc:
+        return f"Bearbeiten fehlgeschlagen: {exc}"
 
 
 def _create_dir(*, path: str = "", **_kw) -> str:
@@ -279,6 +352,7 @@ _TIER3: tuple[tuple[str, callable, callable], ...] = (
     ("list_dir",    _list_dir,    lambda **p: f"Ordnerinhalt anzeigen: {p.get('path', '~/Desktop')}"),
     ("read_file",   _read_file,   lambda **p: f"Datei lesen: {p.get('path', '')}"),
     ("create_file", _create_file, lambda **p: f"Datei anlegen: {p.get('path', '')} ({len(p.get('content','') or '')} Z.)"),
+    ("edit_file",   _edit_file,   lambda **p: f"Datei bearbeiten ({p.get('mode','overwrite')}): {p.get('path','')} ({len(p.get('content','') or '')} Z.)"),
     ("create_dir",  _create_dir,  lambda **p: f"Ordner anlegen: {p.get('path', '')}"),
     ("rename",      _rename,      lambda **p: f"Umbenennen: {p.get('path','')} → {p.get('new_name','')}"),
     ("move",        _move,        lambda **p: f"Verschieben: {p.get('src','')} → {p.get('dst','')}"),

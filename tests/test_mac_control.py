@@ -192,16 +192,26 @@ def test_tier3_dispatch_returns_pending_then_consume_runs(sandbox_dir):
     assert target.exists() and target.read_text() == "hello"
 
 
-def test_tier3_auto_confirm_runs_inline(sandbox_dir, monkeypatch):
-    """With MAC_TIER3_AUTO_CONFIRM=True the dispatcher must skip the
-    pending step — the user's explicit command IS the confirmation."""
+def test_tier3_auto_confirm_reads_inline_writes_confirm(sandbox_dir, monkeypatch):
+    """With MAC_TIER3_AUTO_CONFIRM=True, READ-only file actions skip the
+    pending step — but WRITE actions (create/edit/move/trash) ALWAYS require
+    an explicit okay, since overwriting the user's files without confirmation
+    is too dangerous."""
     monkeypatch.setattr(settings, "MAC_TIER3_AUTO_CONFIRM", True)
     target = sandbox_dir / "auto.txt"
-    env = dispatcher.dispatch("create_file",
-                              {"path": str(target), "content": "auto"})
-    assert env["status"] == "ok"
-    assert env["tier"] == 3
-    assert target.exists() and target.read_text() == "auto"
+    target.write_text("hallo", encoding="utf-8")
+    # A read runs inline.
+    read_env = dispatcher.dispatch("read_file", {"path": str(target)})
+    assert read_env["status"] == "ok" and read_env["tier"] == 3
+    # A write still pends for confirmation.
+    write_env = dispatcher.dispatch("create_file",
+                                    {"path": str(sandbox_dir / "neu.txt"),
+                                     "content": "x"})
+    assert write_env["status"] == "pending"
+    # An edit also pends.
+    edit_env = dispatcher.dispatch("edit_file",
+                                   {"path": str(target), "content": "neu"})
+    assert edit_env["status"] == "pending"
 
 
 def test_tier3_cancel_does_not_run(sandbox_dir):

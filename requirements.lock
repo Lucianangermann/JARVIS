@@ -238,6 +238,7 @@ pyobjc-framework-VideoToolbox==12.1
 pyobjc-framework-Virtualization==12.1
 pyobjc-framework-Vision==12.1
 pyobjc-framework-WebKit==12.1
+pypdf==6.13.2
 PyPika==0.51.1
 pyproject_hooks==1.2.0
 pytest==9.0.3
