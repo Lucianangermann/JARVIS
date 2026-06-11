@@ -465,7 +465,17 @@ class Brain:
     """Conversation manager + agentic tool loop around Claude Haiku."""
 
     def __init__(self) -> None:
-        self.client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        # max_retries lets the SDK auto-retry transient errors (429/500/529 +
+        # connection drops) with exponential backoff — incl. the initial
+        # streaming request. timeout bounds a hung call.
+        self.client = Anthropic(
+            api_key=settings.ANTHROPIC_API_KEY,
+            max_retries=settings.CLAUDE_MAX_RETRIES,
+            timeout=settings.CLAUDE_TIMEOUT_S,
+        )
+        # Cost guard: timestamps of recent Claude calls (rolling-hour cap).
+        from collections import deque
+        self._claude_calls: deque[float] = deque(maxlen=4096)
         self._histories: dict[str, list[dict[str, Any]]] = {}
         self._lock = threading.Lock()  # FastAPI runs handlers in a threadpool
 
@@ -703,6 +713,15 @@ class Brain:
         except Exception:  # noqa: BLE001 — voice loop not running, ignore
             pass
 
+        # Cost guard: refuse before making another Claude call if we've blown
+        # the rolling-hour cap (backstop against a runaway loop).
+        if not self._cost_guard_ok():
+            return ("Ich habe gerade ungewöhnlich viele Anfragen verarbeitet "
+                    "und pausiere kurz, um Kosten zu schonen. Versuch es gleich "
+                    "noch einmal.")
+
+        model = self._pick_model(user_text)
+
         with self._lock:
             # First message of a session triggers the memory warmup
             # (bumps session counter, semantic-searches the user's
@@ -722,11 +741,16 @@ class Brain:
             try:
                 final_text = self._run_tool_loop(history, session_id=session_id,
                                                   user_text=user_text,
-                                                  speak_locally=speak_locally)
+                                                  speak_locally=speak_locally,
+                                                  model=model)
             except Exception as exc:  # noqa: BLE001 — surface to user
                 # Roll back the user turn so a retry doesn't double it up.
+                # (The SDK already retried transient errors per
+                # CLAUDE_MAX_RETRIES; reaching here means it still failed.)
                 history.pop()
-                return f"Sorry — something went wrong contacting Claude: {exc}"
+                print(f"[Brain] Claude call failed after retries: {exc}")
+                return ("Entschuldige, ich konnte gerade keine Verbindung zu "
+                        "Claude herstellen. Bitte versuch es gleich noch einmal.")
 
             # If a /interrupt fired during streaming the reply we
             # have here is a fragment — don't pollute conversation
@@ -768,7 +792,8 @@ class Brain:
     def _run_tool_loop(self, history: list[dict[str, Any]],
                        *, session_id: str = "",
                        user_text: str = "",
-                       speak_locally: bool = True) -> str:
+                       speak_locally: bool = True,
+                       model: str | None = None) -> str:
         """Manual agentic loop: call Claude, run any tools, feed results back.
 
         ``user_text`` is the current user turn — drives the memory
@@ -817,7 +842,8 @@ class Brain:
                     ]
 
             resp = self._stream_one_turn(history, system_blocks,
-                                          speak_locally=speak_locally)
+                                          speak_locally=speak_locally,
+                                          model=model)
 
             # Stop conditions: normal end_turn, or pause_turn (server-side
             # tool wants another round-trip — just resend with the assistant
@@ -985,7 +1011,8 @@ class Brain:
 
     def _stream_one_turn(self, history: list[dict[str, Any]],
                          system_blocks: list[dict[str, Any]],
-                         *, speak_locally: bool = True) -> "Message":
+                         *, speak_locally: bool = True,
+                         model: str | None = None) -> "Message":
         """Issue one ``messages.stream()`` call, push completed
         sentences to TTS + HUD as text deltas arrive, then return the
         final Message so the existing tool_use / end_turn switch can
@@ -1034,7 +1061,9 @@ class Brain:
                     except Exception:  # noqa: BLE001
                         pass
 
-        # Feed the digital-security API-usage monitor (spike detection).
+        # Feed the digital-security API-usage monitor (spike detection) + the
+        # brain's own cost-guard counter.
+        self._record_claude_call()
         if self._security is not None:
             try:
                 self._security.digital.record_api_call()
@@ -1042,7 +1071,7 @@ class Brain:
                 pass
 
         with self.client.messages.stream(
-            model=settings.MODEL,
+            model=model or settings.MODEL,
             max_tokens=1024,
             system=system_blocks,
             tools=self._tools,
@@ -1237,6 +1266,33 @@ class Brain:
         except Exception as exc:  # noqa: BLE001
             print(f"[Brain] security command failed: {exc}")
             return None
+
+    # ── LLM resilience ─────────────────────────────────────────────────── #
+
+    def _cost_guard_ok(self) -> bool:
+        """False if we've exceeded the rolling-hour Claude-call cap — a
+        backstop against a runaway tool loop burning the API budget."""
+        import time as _t
+        now = _t.time()
+        recent = sum(1 for ts in self._claude_calls if now - ts <= 3600)
+        return recent < settings.MAX_CLAUDE_CALLS_PER_HOUR
+
+    def _record_claude_call(self) -> None:
+        import time as _t
+        self._claude_calls.append(_t.time())
+
+    # Words that escalate a turn to the stronger model.
+    _ESCALATE_HINTS = ("gründlich", "denk nach", "denk mal nach", "think hard",
+                       "ausführlich", "analysiere genau", "überlege genau",
+                       "schritt für schritt", "step by step")
+
+    def _pick_model(self, user_text: str) -> str:
+        """Escalate to MODEL_HARD when the user signals a hard reasoning task;
+        otherwise the fast default model handles the turn."""
+        c = (user_text or "").lower()
+        if any(h in c for h in self._ESCALATE_HINTS):
+            return settings.MODEL_HARD
+        return settings.MODEL
 
     def _tool_dispatch(self) -> dict[str, Any]:
         """Tool-name → ``handler(input) -> (result, is_error)`` table, built

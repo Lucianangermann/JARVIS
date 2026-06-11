@@ -1,5 +1,26 @@
 # Todo
 
+## Depth Improvements (active)
+
+Four directions: agentic planning, LLM resilience, self-monitoring, reproducibility+e2e.
+
+### Batch 1 — LLM resilience  ✅
+- [x] Anthropic client: max_retries (SDK auto-retries 429/500/connection) + timeout (config CLAUDE_MAX_RETRIES/CLAUDE_TIMEOUT_S).
+- [x] Cost guard: rolling-hour Claude-call cap (MAX_CLAUDE_CALLS_PER_HOUR) checked in reply() → refuses without an API call when a runaway loop would blow the budget.
+- [x] Model escalation: `_pick_model` routes "denk gründlich nach / step by step / ausführlich" turns to MODEL_HARD (Sonnet); threaded through tool loop → stream.
+- [x] Friendlier German failure message after retries exhausted. tests/test_brain.py +3 (10 total).
+
+### Batch 2 — agentic multi-step planning
+- [ ] Orchestrate compound requests ("plane meinen Morgen", "mach mich startklar")
+
+### Batch 3 — self-monitoring + owner-alerting
+- [ ] Watchdog auto-restart of failed subsystems; Telegram self-alert; /health; metrics
+
+### Batch 4 — reproducibility + e2e
+- [ ] Lockfile; startup config validation; e2e pipeline tests
+
+---
+
 ## System Improvements (active)
 
 Four directions chosen. Executing in batches, commit per batch.

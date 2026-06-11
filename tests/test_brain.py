@@ -76,3 +76,27 @@ def test_empty_input_short_circuits_before_claude(brain: Brain) -> None:
     # Whitespace-only input returns immediately without any API call.
     assert brain.reply("sess", "   ") == "I didn't catch that."
     assert brain.reply("sess", "") == "I didn't catch that."
+
+
+def test_client_has_retries_and_timeout(brain: Brain) -> None:
+    from server.config import settings
+    assert brain.client.max_retries == settings.CLAUDE_MAX_RETRIES
+    assert brain.client.timeout == settings.CLAUDE_TIMEOUT_S
+
+
+def test_model_escalation(brain: Brain) -> None:
+    from server.config import settings
+    assert brain._pick_model("wie spät ist es") == settings.MODEL
+    assert brain._pick_model("denk gründlich nach darüber") == settings.MODEL_HARD
+    assert brain._pick_model("erkläre das step by step") == settings.MODEL_HARD
+
+
+def test_cost_guard_blocks_and_reply_refuses(brain: Brain) -> None:
+    from server.config import settings
+    assert brain._cost_guard_ok() is True
+    for _ in range(settings.MAX_CLAUDE_CALLS_PER_HOUR + 1):
+        brain._record_claude_call()
+    assert brain._cost_guard_ok() is False
+    # reply() must refuse without making a Claude call (returns the pause msg).
+    assert "pausiere" in brain.reply("s", "irgendwas")
+    brain._claude_calls.clear()  # reset for other tests in the module

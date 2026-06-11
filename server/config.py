@@ -51,6 +51,14 @@ class Settings:
 
     # --- Model ---
     MODEL: str = os.getenv("MODEL", "claude-haiku-4-5-20251001")
+    # Stronger model for escalated ("think hard") turns — see Brain._pick_model.
+    MODEL_HARD: str = os.getenv("MODEL_HARD", "claude-sonnet-4-6")
+    # LLM resilience: SDK auto-retries transient errors (429/500/connection);
+    # timeout bounds a hung request. Cost guard caps Claude calls per rolling
+    # hour so a runaway tool loop can't burn the API budget.
+    CLAUDE_MAX_RETRIES: int = int(os.getenv("CLAUDE_MAX_RETRIES", "3"))
+    CLAUDE_TIMEOUT_S: float = float(os.getenv("CLAUDE_TIMEOUT_S", "60"))
+    MAX_CLAUDE_CALLS_PER_HOUR: int = int(os.getenv("MAX_CLAUDE_CALLS_PER_HOUR", "400"))
     SYSTEM_PROMPT: str = os.getenv(
         "SYSTEM_PROMPT",
         "You are JARVIS, a concise and capable voice assistant. "
