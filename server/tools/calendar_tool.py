@@ -40,7 +40,7 @@ _LOCAL_TZ = ZoneInfo(os.getenv("JARVIS_TZ", "Europe/Berlin"))
 #   2. A shorter osascript timeout — 3 s instead of 15 s. If
 #      Calendar can't answer in 3 s it's broken; we'd rather have a
 #      stale-but-fresh-ish empty list than block the user for 15.
-_OSASCRIPT_TIMEOUT_S = float(os.getenv("CALENDAR_OSASCRIPT_TIMEOUT_S", "3.0"))
+_OSASCRIPT_TIMEOUT_S = float(os.getenv("CALENDAR_OSASCRIPT_TIMEOUT_S", "8.0"))
 _CACHE_TTL_S = float(os.getenv("CALENDAR_CACHE_TTL_S", "30"))
 _cache: dict[tuple, tuple[float, list]] = {}
 _cache_lock = threading.Lock()
@@ -90,8 +90,15 @@ set endOffset to {end_offset}
 set rangeStart to (current date) + startOffset
 set rangeEnd to (current date) + endOffset
 set out to ""
+-- Skip read-only subscription calendars (Feiertage, Siri-Vorschläge,
+-- Geburtstage) — they fetch data remotely and make the script slow.
+-- We only want the user's own writable calendars (Privat, Arbeit, …).
+set skipNames to {{"Geburtstage", "Deutsche Feiertage", "Siri-Vorschläge", "Birthdays", "Holidays in Germany"}}
 tell application "Calendar"
     repeat with c in calendars
+        set cName to title of c
+        if skipNames contains cName then
+        else
         try
             set theEvents to (every event of c whose ¬
                 (start date >= rangeStart) and (start date < rangeEnd))
@@ -108,6 +115,7 @@ tell application "Calendar"
                 my iso(end date of ev) & tab & ¬
                 (title of c) & tab & evLoc & linefeed
         end repeat
+        end if
     end repeat
 end tell
 return out

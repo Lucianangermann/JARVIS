@@ -229,6 +229,21 @@ class CommunicationManager:
                 if "neue nachrichten" in c or "was habe ich verpasst" in c \
                         or "ungelesene nachrichten" in c:
                     return await self.messaging.spoken_unread_summary()
+                if "whatsapp" in c and ("ungelesen" in c or "nachrichten" in c
+                                        or "was habe" in c or "neu" in c):
+                    wa = getattr(self.messaging, "whatsapp", None)
+                    if wa:
+                        return wa.spoken_unread_summary()
+                if "lies whatsapp" in c or ("whatsapp" in c and "lies" in c):
+                    name = ""
+                    for kw in ("von ", "mit ", "chat "):
+                        if kw in c:
+                            name = c.split(kw, 1)[1].strip()
+                            break
+                    wa = getattr(self.messaging, "whatsapp", None)
+                    if wa:
+                        return (wa.get_conversation_summary(name)
+                                if name else wa.spoken_unread_summary())
                 if c.startswith("schreib ") or c.startswith("sende nachricht"):
                     return await self._route_send(command)
                 if c.startswith("antworte ") or c.startswith("antwort an"):

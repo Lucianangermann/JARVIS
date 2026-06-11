@@ -603,6 +603,15 @@ async def lifespan(app: FastAPI):
                 print("[JARVIS] voice thread did not stop cleanly within 5s")
         if _VOICE_OK and tts is not None:
             tts.shutdown()
+        # Flush all open sessions to long-term memory before the process dies.
+        # session_end is idempotent (empty sessions are silently skipped) so
+        # re-flushing a session that was already flushed on WS-disconnect is
+        # safe.
+        try:
+            app.state.brain.memory.session_end()
+            print("[JARVIS] memory flushed at shutdown")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[JARVIS] memory flush at shutdown failed: {exc}")
         print("[JARVIS] shutdown complete")
 
 
@@ -1093,6 +1102,14 @@ async def ws(websocket: WebSocket) -> None:
         events.unsubscribe(event_queue)
         with contextlib.suppress(asyncio.CancelledError):
             await fanout_task
+        # Flush the session to long-term memory on disconnect so conversations
+        # are persisted even when the user just closes the tab. Best-effort —
+        # never let a memory-flush failure break the disconnect path.
+        try:
+            await asyncio.to_thread(brain.memory.session_end, token)
+            print(f"[JARVIS] session flushed to memory: {token}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[JARVIS] memory flush on disconnect failed: {exc}")
 
 
 # --- Remote TTS for the iPhone PWA --------------------------------------- #

@@ -20,6 +20,7 @@ from typing import Any
 from ...config import settings
 from .imessage import iMessageController
 from .telegram_bot import TelegramController
+from .whatsapp import WhatsAppReader
 
 _PENDING_TTL_S = 30.0
 _BROADCAST_RATE_S = 2.0  # 1 message / 2 s (spec)
@@ -34,7 +35,7 @@ class MessagingManager:
         self._client = client
         self.imessage = iMessageController(db=db)
         self.telegram = telegram or TelegramController(db=db)
-        self.whatsapp = None  # deferred (see tasks/todo.md)
+        self.whatsapp = WhatsAppReader()
         # One pending send/broadcast awaiting confirmation.
         self._pending: dict[str, Any] | None = None
 
@@ -84,12 +85,15 @@ class MessagingManager:
                 return []
 
         im, tg = await asyncio.gather(_im(), _tg())
-        return {"imessage": im, "telegram": tg, "whatsapp": []}
+        wa = self.whatsapp.get_unread_chats() if self.whatsapp else []
+        return {"imessage": im, "telegram": tg, "whatsapp": wa}
 
     async def spoken_unread_summary(self) -> str:
         data = await self.get_all_unread()
         im, tg = len(data["imessage"]), len(data["telegram"])
-        total = im + tg
+        wa_chats = data.get("whatsapp", [])
+        wa = sum(c.unread for c in wa_chats) if wa_chats else 0
+        total = im + tg + wa
         if total == 0:
             return "Du hast keine neuen Nachrichten."
         parts = []
@@ -99,12 +103,20 @@ class MessagingManager:
                          f"{' von ' + senders if senders else ''}")
         if tg:
             parts.append(f"{tg} Telegram-Nachricht{'en' if tg != 1 else ''}")
+        if wa:
+            names = ", ".join(c.name for c in wa_chats[:3])
+            parts.append(f"{wa} WhatsApp-Nachricht{'en' if wa != 1 else ''}"
+                         f" von {names}")
         return f"Du hast {total} neue Nachrichten: " + ", ".join(parts) + "."
 
     # ── reading + summarising ──────────────────────────────────────────── #
 
     async def read_messages(self, platform: str = "all", contact: str | None = None,
                             n: int = 5) -> str:
+        if platform == "whatsapp" and self.whatsapp:
+            if contact:
+                return self.whatsapp.get_conversation_summary(contact, limit=n)
+            return self.whatsapp.spoken_unread_summary()
         msgs: list[dict[str, Any]] = []
         if platform in ("all", "imessage") and contact:
             msgs = await self.imessage.get_conversation(contact, n)
