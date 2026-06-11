@@ -129,6 +129,14 @@ class ContextBuilder:
         prof = self._profile_block()
         if prof:
             stable.append(prof)
+        # User response preferences (length/tone/language) — shape every reply.
+        try:
+            from .preferences import preferences
+            pref_block = preferences.as_prompt_block()
+            if pref_block:
+                stable.append(pref_block)
+        except Exception:  # noqa: BLE001
+            pass
         issues = self._issues_block()
         if issues:
             stable.append(issues)

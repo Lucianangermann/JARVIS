@@ -652,6 +652,18 @@ class Brain:
             except Exception:  # noqa: BLE001 — comms must never crash reply
                 pass
 
+        # Preference short-circuit — "antworte kürzer", "sei förmlicher",
+        # "antworte auf englisch": set a response preference that shapes every
+        # future reply (injected into the system prompt). Deterministic, no
+        # Claude call.
+        try:
+            text = self._run_preference(user_text)
+            if text:
+                self._emit_short_circuit_reply(text, speak_locally)
+                return text
+        except Exception:  # noqa: BLE001
+            pass
+
         # Planning short-circuit — compound, multi-layer requests ("plane
         # meinen Tag", "mach mich startklar"). Gathers facts across layers and
         # synthesises one plan. Returns None for non-planning input.
@@ -1393,6 +1405,35 @@ class Brain:
             planner._finance = self._finance
             planner._security = self._security
         return self._planner
+
+    def _run_preference(self, user_text: str) -> str | None:
+        """Detect + apply a response-preference change. Returns a spoken
+        confirmation or None."""
+        c = (user_text or "").lower()
+        from .memory.preferences import preferences
+        # (matched phrases, key, value, spoken confirmation)
+        rules: list[tuple[tuple[str, ...], str, str, str]] = [
+            (("kürzer", "knapper", "fass dich kurz", "kürzere antwort",
+              "weniger reden"), "length", "kurz", "Ich antworte ab jetzt kürzer."),
+            (("ausführlicher", "mehr details", "längere antwort",
+              "detaillierter"), "length", "ausführlich",
+             "Ich antworte ab jetzt ausführlicher."),
+            (("normale länge", "mittellange antwort"), "length", "normal",
+             "Antwortlänge auf normal gesetzt."),
+            (("förmlicher", "sieze", "förmlich"), "tone",
+             "förmlich", "Ich sieze dich ab jetzt."),
+            (("lockerer", "duze", "lässiger"),
+             "tone", "locker", "Alles klar, ich bin ab jetzt lockerer."),
+            (("antworte auf englisch", "sprich englisch", "auf englisch bitte"),
+             "language", "en", "I'll answer in English from now on."),
+            (("antworte auf deutsch", "sprich deutsch", "auf deutsch bitte"),
+             "language", "de", "Ich antworte ab jetzt auf Deutsch."),
+        ]
+        for phrases, key, value, confirm in rules:
+            if any(p in c for p in phrases):
+                preferences.set(key, value)
+                return confirm
+        return None
 
     def _run_plan(self, user_text: str) -> str | None:
         """Route compound planning requests to the Planner (async) from the

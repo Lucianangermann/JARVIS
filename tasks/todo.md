@@ -17,8 +17,10 @@ Three directions: streaming + conditional actions, metrics + OS-resilience, deep
 - [x] `intelligence/triggers.py` TriggerStore (ThreadSafeDB) — time-scheduled actions JARVIS fires itself via the NotificationCenter (voice/UI/Telegram), not passive Apple Reminders. Background checker delivers + marks fired.
 - [x] `schedule_action` tool (Claude computes delay_minutes / at 'HH:MM') + brain executor (schedule/list/cancel) + lifespan wiring (NC sink + checker). tests/test_triggers.py (5). Verified add/fire/cancel + brain schedule.
 
-### Batch D — deeper personalization
-- [ ] Routine learning, response preferences, relationship modelling
+### Batch D — deeper personalization  ✅
+- [x] `memory/preferences.py` Preferences singleton (length/tone/language, JSON-persisted) rendered into the STABLE (cached) system-prompt block → shapes every reply.
+- [x] Brain preference short-circuit ("antworte kürzer", "sei förmlicher", "auf englisch") sets + persists; context_builder injects the block. tests/test_preferences.py (6). 150 passed total.
+- [ ] Routine learning + relationship modelling left for later (need real usage data to be reliable).
 
 ---
 
