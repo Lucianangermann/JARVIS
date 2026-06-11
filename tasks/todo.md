@@ -8,10 +8,10 @@ Four directions chosen. Executing in batches, commit per batch.
 - [x] `.github/workflows/test.yml` — pytest on push/PR (ubuntu, light deps, dummy env, CI-skips network/heavy tests). Verified locally: 65 passed, 2 skipped.
 - [x] `server/common/logging_setup.py` — rotating `logs/jarvis.log` + tee of all print() output (no 432-call sweep). Wired into `run()` (not lifespan → pytest untouched). Verified prints/logging/stderr all captured.
 
-### Batch 2 — wire dormant features
-- [ ] Proactive triggers (important_email / package / forgotten_task) active
-- [ ] Anomaly detector + per-IP rate-limit into the request path
-- [ ] Delegated access (guest/family tokens) live
+### Batch 2 — wire dormant features  ✅
+- [x] Proactive triggers wired to real sources: forgotten_task → task_manager.get_overdue, important_email → mail_tool unread count (package_delivery left a stub — no real tracking source).
+- [x] Per-IP rate-limit + IP-block (anomaly/digital) wired as `security_rate_gate` dependency on /chat + /audio.
+- [x] Delegated access live: `authorize_chat` accepts owner OR guest temp token; guest commands restricted to allowed level + audited. Verified: guest lights allowed, guest email refused, owner unaffected, bad token 401, rate-gate 429.
 
 ### Batch 3 — DB encryption at rest
 - [ ] Encrypt sensitive content in communication.db (messages/contacts) + finance.db

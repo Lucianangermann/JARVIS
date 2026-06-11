@@ -425,22 +425,45 @@ def _check_productivity_slump(engine: ProactiveEngine) -> str | None:
 
 
 def _check_forgotten_task(engine: ProactiveEngine) -> str | None:
-    """No-op until we have a task tracker. The brain's memory layer
-    can store notes but doesn't tag anything as 'todo' yet."""
-    engine._log_stub_once(
-        "forgotten_task",
-        "no task-tracking source",
-    )
+    """Nudge about overdue tasks. Reads the productivity task store
+    (jarvis.db) — runs only when the cooldown has elapsed (see tick), so a
+    fresh short-lived connection here is cheap."""
+    try:
+        from pathlib import Path
+        from ..productivity.task_manager import TaskManager
+        tm = TaskManager(Path("data/jarvis.db"))
+        try:
+            overdue = tm.get_overdue()
+        finally:
+            conn = getattr(tm, "_conn", None)
+            if conn is not None:
+                conn.close()
+        if overdue:
+            n = len(overdue)
+            return (f"Du hast {n} überfällige Task{'s' if n != 1 else ''}. "
+                    f"Zum Beispiel: {overdue[0]['title']}.")
+    except Exception:  # noqa: BLE001
+        pass
     return None
 
 
 def _check_important_email(engine: ProactiveEngine) -> str | None:
-    """No-op until a Gmail tool exists. The MCP Gmail surface is for
-    Claude.ai, not reachable from the server runtime."""
-    engine._log_stub_once(
-        "important_email",
-        "Gmail tool not wired into server runtime",
-    )
+    """Nudge about an unread-mail backlog via Apple Mail (mail_tool). Light
+    by design — a count, not a per-message Claude classification — so the
+    proactive thread stays cheap."""
+    try:
+        from ..tools import mail_tool
+        out, err = mail_tool.get_unread_count()
+        if err:
+            return None
+        # mail_tool returns the count as text.
+        digits = "".join(ch for ch in (out or "") if ch.isdigit())
+        n = int(digits) if digits else 0
+        if n >= 5:
+            return (f"Du hast {n} ungelesene E-Mails — davon könnten welche "
+                    f"wichtig sein.")
+    except Exception:  # noqa: BLE001
+        pass
     return None
 
 

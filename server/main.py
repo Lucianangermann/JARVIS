@@ -27,21 +27,25 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import secrets
+
 from fastapi import (
     Depends,
     FastAPI,
+    Header,
     HTTPException,
     Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.security.utils import get_authorization_scheme_param
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .auth import authorize_websocket, require_token
+from .auth import _check_rate, authorize_websocket, require_token
 from .brain import Brain
 from .config import settings
 from . import events
@@ -561,6 +565,48 @@ app.add_middleware(
 
 # --- Helpers -------------------------------------------------------------- #
 
+def authorize_chat(request: Request,
+                   authorization: str | None = Header(default=None)) -> str:
+    """Like require_token, but also accepts a live guest/family temp token
+    (from /security/access/temp). Owner token → full access; guest token →
+    request.state.guest_token is set so /chat can restrict the command to
+    the guest's allowed level. Other routes keep using require_token
+    (owner-only)."""
+    scheme, token = get_authorization_scheme_param(authorization)
+    if not token or scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Missing or malformed Bearer token.",
+                            headers={"WWW-Authenticate": "Bearer"})
+    if secrets.compare_digest(token, settings.JARVIS_AUTH_TOKEN):
+        _check_rate(token)
+        request.state.guest_token = None
+        return token
+    # Guest temp token?
+    sec = getattr(request.app.state, "security", None)
+    access = getattr(sec, "access", None) if sec is not None else None
+    if access is not None and access._grant_for(token) is not None:  # noqa: SLF001
+        _check_rate(token)
+        request.state.guest_token = token
+        return token
+    raise HTTPException(status_code=401, detail="Invalid token.",
+                        headers={"WWW-Authenticate": "Bearer"})
+
+
+def security_rate_gate(request: Request) -> None:
+    """Per-IP rate limit + block check, wired into the main request paths.
+    Complements require_token's per-token limiter (a different axis) and
+    finally puts the security layer's anomaly detector + auto-block list on
+    the live path. No-op when the security layer isn't loaded."""
+    sec = getattr(request.app.state, "security", None)
+    if sec is None:
+        return
+    ip = request.client.host if request.client else "local"
+    if getattr(sec, "digital", None) is not None and sec.digital.is_blocked(ip):
+        raise HTTPException(status_code=403, detail="IP blockiert.")
+    if getattr(sec, "anomaly", None) is not None \
+            and not sec.anomaly.rate_limit_check(ip):
+        raise HTTPException(status_code=429, detail="Zu viele Anfragen (per IP).")
+
+
 def _client_tag(request: Request) -> str:
     """Cheap UA-based client classifier purely for the console log line."""
     ua = (request.headers.get("user-agent") or "").lower()
@@ -614,11 +660,31 @@ def health() -> dict[str, Any]:
 def chat(
     payload: ChatRequest,
     request: Request,
-    token: str = Depends(require_token),
+    token: str = Depends(authorize_chat),
+    _gate: None = Depends(security_rate_gate),
 ) -> ChatResponse:
     user_text = _sanitize(payload.text)
     if not user_text:
         raise HTTPException(status_code=400, detail="Empty message.")
+
+    # Delegated access: if this is a guest temp token, restrict to the
+    # guest's allowed command set and audit the attempt.
+    guest_token = getattr(request.state, "guest_token", None)
+    if guest_token:
+        sec = getattr(request.app.state, "security", None)
+        access = getattr(sec, "access", None) if sec is not None else None
+        allowed = access is not None and access.is_command_allowed(guest_token, user_text)
+        if access is not None:
+            try:
+                access._db.log_access(  # noqa: SLF001
+                    "guest", user_text,
+                    request.client.host if request.client else None,
+                    None, "guest", allowed, "delegated access")
+            except Exception:  # noqa: BLE001
+                pass
+        if not allowed:
+            return ChatResponse(
+                reply="Dieser Befehl ist im Gastzugang nicht erlaubt.")
 
     tag = _client_tag(request)
     print(f"[CLIENT: {tag}] [YOU] {user_text}")
@@ -719,6 +785,7 @@ async def audio(
     request: Request,
     file: UploadFile,
     token: str = Depends(require_token),
+    _gate: None = Depends(security_rate_gate),
 ) -> ChatResponse:
     """Upload a 16 kHz mono WAV; we transcribe + run the same /chat pipeline."""
     if not _VOICE_OK or transcribe is None:
