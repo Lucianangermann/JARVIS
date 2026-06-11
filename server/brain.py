@@ -534,6 +534,10 @@ class Brain:
         self._tools.extend(finance_tools())
         self._finance = None  # type: ignore[assignment]
 
+        # Tool-name → handler dispatch table, built lazily on first tool use
+        # (see _tool_dispatch). Replaces a long elif chain.
+        self._tool_handlers: dict[str, Any] | None = None
+
         # Singleton handle — wired by main.py after start().
         self._entertainment = None  # type: ignore[assignment]
 
@@ -832,50 +836,9 @@ class Brain:
                 for block in resp.content:
                     if block.type != "tool_use":
                         continue
-                    if block.name == "system_command":
-                        result, is_error = self._exec_system_command(block.input)
-                    elif block.name == "mac_action":
-                        result, is_error = self._exec_mac_action(block.input)
-                    elif block.name == "confirm_action":
-                        result, is_error = self._exec_confirm_action(block.input)
-                    elif block.name in {"analyze_screen",
-                                         "check_screen_for_errors",
-                                         "read_screen_text"}:
-                        result, is_error = self._exec_vision_tool(
-                            block.name, block.input,
-                        )
-                    elif block.name == "smarthome_control":
-                        result, is_error = self._exec_smarthome_tool(block.input)
-                    elif block.name == "macos_app":
-                        result, is_error = self._exec_macos_app(block.input)
-                    elif block.name == "apple_reminders":
-                        result, is_error = self._exec_apple_reminders(block.input)
-                    elif block.name == "apple_music":
-                        result, is_error = self._exec_apple_music(block.input)
-                    elif block.name == "apple_notes":
-                        result, is_error = self._exec_apple_notes(block.input)
-                    elif block.name == "apple_mail":
-                        result, is_error = self._exec_apple_mail(block.input)
-                    elif block.name == "safari_control":
-                        result, is_error = self._exec_safari_control(block.input)
-                    elif block.name in {
-                        "manage_tasks", "manage_focus",
-                        "get_productivity_score", "add_knowledge_note",
-                        "recall_knowledge", "flashcards",
-                        "get_email_smart_summary", "meeting_control",
-                    }:
-                        result, is_error = self._exec_productivity(
-                            block.name, block.input,
-                        )
-                    elif block.name in {
-                        "play_mood_music", "manage_watchlist", "play_game",
-                        "manage_gaming_mode", "get_birthdays", "get_news_briefing",
-                    }:
-                        result, is_error = self._exec_entertainment(
-                            block.name, block.input,
-                        )
-                    elif block.name == "finance":
-                        result, is_error = self._exec_finance(block.input)
+                    handler = self._tool_dispatch().get(block.name)
+                    if handler is not None:
+                        result, is_error = handler(block.input)
                     else:
                         result = f"Unknown tool {block.name!r}."
                         is_error = True
@@ -1274,6 +1237,37 @@ class Brain:
         except Exception as exc:  # noqa: BLE001
             print(f"[Brain] security command failed: {exc}")
             return None
+
+    def _tool_dispatch(self) -> dict[str, Any]:
+        """Tool-name → ``handler(input) -> (result, is_error)`` table, built
+        once. Group executors that take ``(name, input)`` are wrapped so the
+        whole table has a uniform single-arg call site."""
+        if self._tool_handlers is not None:
+            return self._tool_handlers
+        h: dict[str, Any] = {
+            "system_command":    self._exec_system_command,
+            "mac_action":        self._exec_mac_action,
+            "confirm_action":    self._exec_confirm_action,
+            "smarthome_control": self._exec_smarthome_tool,
+            "macos_app":         self._exec_macos_app,
+            "apple_reminders":   self._exec_apple_reminders,
+            "apple_music":       self._exec_apple_music,
+            "apple_notes":       self._exec_apple_notes,
+            "apple_mail":        self._exec_apple_mail,
+            "safari_control":    self._exec_safari_control,
+            "finance":           self._exec_finance,
+        }
+        for n in ("analyze_screen", "check_screen_for_errors", "read_screen_text"):
+            h[n] = lambda inp, _n=n: self._exec_vision_tool(_n, inp)
+        for n in ("manage_tasks", "manage_focus", "get_productivity_score",
+                  "add_knowledge_note", "recall_knowledge", "flashcards",
+                  "get_email_smart_summary", "meeting_control"):
+            h[n] = lambda inp, _n=n: self._exec_productivity(_n, inp)
+        for n in ("play_mood_music", "manage_watchlist", "play_game",
+                  "manage_gaming_mode", "get_birthdays", "get_news_briefing"):
+            h[n] = lambda inp, _n=n: self._exec_entertainment(_n, inp)
+        self._tool_handlers = h
+        return h
 
     def _run_communication_command(self, user_text: str) -> str | None:
         """Run CommunicationManager.process_command (async) from the brain's

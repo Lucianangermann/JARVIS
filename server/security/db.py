@@ -20,10 +20,11 @@ JARVIS (see the hard rules in tasks/todo.md).
 from __future__ import annotations
 
 import sqlite3
-import threading
 import time
 from pathlib import Path
 from typing import Any
+
+from ..common.sqlite_store import ThreadSafeDB
 
 # ── Schema ──────────────────────────────────────────────────────────────── #
 # Five tables per the spec. `id` + `timestamp` (epoch seconds, REAL) on
@@ -105,63 +106,19 @@ _CREATE_INDICES = [
 ]
 
 
-class SecurityDB:
+class SecurityDB(ThreadSafeDB):
     """Thread-safe SQLite wrapper for the security layer."""
 
     def __init__(self, db_path: Path | str = "data/security.db") -> None:
-        self._db_path = Path(db_path)
-        self._lock = threading.Lock()
-        self._conn: sqlite3.Connection | None = None
-        try:
-            self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(
-                str(self._db_path),
-                check_same_thread=False,
-            )
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
-            for stmt in (
-                _CREATE_SECURITY_EVENTS,
-                _CREATE_ACCESS_LOG,
-                _CREATE_CAMERA_EVENTS,
-                _CREATE_SYSTEM_METRICS,
-                _CREATE_KNOWN_DEVICES,
-            ):
-                self._conn.execute(stmt)
-            for idx in _CREATE_INDICES:
-                self._conn.execute(idx)
-            self._conn.commit()
-            print(f"[SecurityDB] ready at {self._db_path}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[SecurityDB] init failed: {exc}")
+        super().__init__(db_path, label="SecurityDB")
 
-    # ── low-level helpers ──────────────────────────────────────────────── #
-
-    def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> int | None:
-        """Run a write statement, return lastrowid (or None on failure)."""
-        if self._conn is None:
-            return None
-        try:
-            with self._lock:
-                cur = self._conn.execute(sql, params)
-                self._conn.commit()
-                return cur.lastrowid
-        except Exception as exc:  # noqa: BLE001
-            print(f"[SecurityDB] write failed: {exc}")
-            return None
-
-    def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        """Run a read statement, return a list of dict rows ([] on failure)."""
-        if self._conn is None:
-            return []
-        try:
-            with self._lock:
-                cur = self._conn.execute(sql, params)
-                return [dict(r) for r in cur.fetchall()]
-        except Exception as exc:  # noqa: BLE001
-            print(f"[SecurityDB] query failed: {exc}")
-            return []
+    def _init_schema(self, conn: sqlite3.Connection) -> None:
+        for stmt in (_CREATE_SECURITY_EVENTS, _CREATE_ACCESS_LOG,
+                     _CREATE_CAMERA_EVENTS, _CREATE_SYSTEM_METRICS,
+                     _CREATE_KNOWN_DEVICES):
+            conn.execute(stmt)
+        for idx in _CREATE_INDICES:
+            conn.execute(idx)
 
     # ── security_events ────────────────────────────────────────────────── #
 
@@ -328,14 +285,4 @@ class SecurityDB:
             (int(trusted), mac_address),
         )
 
-    # ── lifecycle ──────────────────────────────────────────────────────── #
-
-    def close(self) -> None:
-        if self._conn is not None:
-            try:
-                with self._lock:
-                    self._conn.close()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[SecurityDB] close failed: {exc}")
-            finally:
-                self._conn = None
+    # close() / _execute() / query() are inherited from ThreadSafeDB.

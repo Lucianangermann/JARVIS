@@ -9,9 +9,10 @@ prints and returns a falsy value rather than crashing JARVIS.
 from __future__ import annotations
 
 import sqlite3
-import threading
 import time
 from pathlib import Path
+
+from ..common.sqlite_store import ThreadSafeDB
 from typing import Any
 
 _CREATE_EXPENSES = """
@@ -72,52 +73,21 @@ _INDICES = [
 ]
 
 
-class FinanceDB:
+class FinanceDB(ThreadSafeDB):
     """Thread-safe SQLite wrapper for the finance layer."""
 
     def __init__(self, db_path: Path | str = "data/finance.db") -> None:
-        self._db_path = Path(db_path)
-        self._lock = threading.Lock()
-        self._conn: sqlite3.Connection | None = None
-        try:
-            self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
-            for stmt in (_CREATE_EXPENSES, _CREATE_BUDGETS,
-                         _CREATE_SUBSCRIPTIONS, _CREATE_WATCHLIST):
-                self._conn.execute(stmt)
-            for idx in _INDICES:
-                self._conn.execute(idx)
-            self._conn.commit()
-            print(f"[FinanceDB] ready at {self._db_path}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[FinanceDB] init failed: {exc}")
+        super().__init__(db_path, label="FinanceDB")
 
-    # ── low-level ──────────────────────────────────────────────────────── #
+    def _init_schema(self, conn: sqlite3.Connection) -> None:
+        for stmt in (_CREATE_EXPENSES, _CREATE_BUDGETS,
+                     _CREATE_SUBSCRIPTIONS, _CREATE_WATCHLIST):
+            conn.execute(stmt)
+        for idx in _INDICES:
+            conn.execute(idx)
 
-    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> int | None:
-        if self._conn is None:
-            return None
-        try:
-            with self._lock:
-                cur = self._conn.execute(sql, params)
-                self._conn.commit()
-                return cur.lastrowid
-        except Exception as exc:  # noqa: BLE001
-            print(f"[FinanceDB] write failed: {exc}")
-            return None
-
-    def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        if self._conn is None:
-            return []
-        try:
-            with self._lock:
-                return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
-        except Exception as exc:  # noqa: BLE001
-            print(f"[FinanceDB] query failed: {exc}")
-            return []
+    # `execute` is this layer's public write name — alias the inherited impl.
+    execute = ThreadSafeDB._execute
 
     # ── expenses ───────────────────────────────────────────────────────── #
 
@@ -214,12 +184,4 @@ class FinanceDB:
         self.execute("UPDATE watchlist SET alert_armed=? WHERE symbol=?",
                      (int(armed), symbol.upper()))
 
-    def close(self) -> None:
-        if self._conn is not None:
-            try:
-                with self._lock:
-                    self._conn.close()
-            except Exception:  # noqa: BLE001
-                pass
-            finally:
-                self._conn = None
+    # close() / query() inherited from ThreadSafeDB; execute is aliased above.

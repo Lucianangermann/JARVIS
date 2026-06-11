@@ -11,7 +11,12 @@ Four parallel review agents (correctness / architecture / security / resources)
 
 **Batch C — voice-auth wired:** `process_request` now runs on the `/audio` path (real speaker-verify gate, no-op when off); error path logs durably + fails CLOSED for `critical`.
 
-**Batch D — dedup (partial):** intelligence briefings/proactive routed through NotificationCenter (DND/quiet-hours); shared `common/claude_json.py` replaced 4 identical fence-parsers. DEFERRED (risk vs pure-maintainability): shared `ThreadSafeDB` base, brain dispatch table, full `osa()` migration — recommend a separate focused pass.
+**Batch D — dedup:** intelligence briefings/proactive routed through NotificationCenter (DND/quiet-hours); shared `common/claude_json.py` replaced 4 identical fence-parsers.
+
+**Deferred refactors — done (separate careful pass):**
+- [x] Shared `common/sqlite_store.py` `ThreadSafeDB` base → security/communication/finance/knowledge DBs subclass it (removed ~4× boilerplate; public method names preserved via aliases: finance `execute`, flashcards `_write`/`_query`). 66 DB-layer tests pass.
+- [x] Brain tool-dispatch table (`_tool_dispatch`) replaces the 14-branch elif chain — all 29 registered tools covered, verified routing. 144 tests pass.
+- [x] `osa()` promoted to canonical `common/applescript.py`; `communication/applescript.py` is a back-compat shim. Full migration of the 12 legacy `osascript -e` tool callers NOT done blind — needs a Mac to verify each rewritten AppleScript (they already escape quotes; marginal gain vs real risk of breaking mail/notes/reminders headless). Recommend doing it interactively at the Mac.
 
 ---
 

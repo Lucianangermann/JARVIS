@@ -17,9 +17,10 @@ must NEVER crash JARVIS.
 from __future__ import annotations
 
 import sqlite3
-import threading
 import time
 from pathlib import Path
+
+from ..common.sqlite_store import ThreadSafeDB
 from typing import Any
 
 # ── Schema (spec §12) ───────────────────────────────────────────────────── #
@@ -102,56 +103,23 @@ _CREATE_INDICES = [
 MESSAGE_RETENTION_DAYS = 7
 
 
-class CommunicationDB:
+class CommunicationDB(ThreadSafeDB):
     """Thread-safe SQLite wrapper for the communication layer."""
 
     def __init__(self, db_path: Path | str = "data/communication.db") -> None:
-        self._db_path = Path(db_path)
-        self._lock = threading.Lock()
-        self._conn: sqlite3.Connection | None = None
         self._last_prune = 0.0
-        try:
-            self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
-            for stmt in (_CREATE_MESSAGES, _CREATE_CALLS, _CREATE_NOTIFICATIONS,
-                         _CREATE_AUTO_REPLIES, _CREATE_FOLLOWUPS):
-                self._conn.execute(stmt)
-            for idx in _CREATE_INDICES:
-                self._conn.execute(idx)
-            self._conn.commit()
-            self.prune_message_content()  # enforce retention on every boot
-            self._last_prune = time.time()
-            print(f"[CommunicationDB] ready at {self._db_path}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[CommunicationDB] init failed: {exc}")
+        super().__init__(db_path, label="CommunicationDB")
 
-    # ── low-level helpers ──────────────────────────────────────────────── #
+    def _init_schema(self, conn: sqlite3.Connection) -> None:
+        for stmt in (_CREATE_MESSAGES, _CREATE_CALLS, _CREATE_NOTIFICATIONS,
+                     _CREATE_AUTO_REPLIES, _CREATE_FOLLOWUPS):
+            conn.execute(stmt)
+        for idx in _CREATE_INDICES:
+            conn.execute(idx)
 
-    def _execute(self, sql: str, params: tuple[Any, ...] = ()) -> int | None:
-        if self._conn is None:
-            return None
-        try:
-            with self._lock:
-                cur = self._conn.execute(sql, params)
-                self._conn.commit()
-                return cur.lastrowid
-        except Exception as exc:  # noqa: BLE001
-            print(f"[CommunicationDB] write failed: {exc}")
-            return None
-
-    def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        if self._conn is None:
-            return []
-        try:
-            with self._lock:
-                cur = self._conn.execute(sql, params)
-                return [dict(r) for r in cur.fetchall()]
-        except Exception as exc:  # noqa: BLE001
-            print(f"[CommunicationDB] query failed: {exc}")
-            return []
+    def _on_ready(self) -> None:
+        self.prune_message_content()  # enforce retention on every boot
+        self._last_prune = time.time()
 
     # ── messages ───────────────────────────────────────────────────────── #
 
@@ -323,14 +291,4 @@ class CommunicationDB:
             (platform, contact),
         )
 
-    # ── lifecycle ──────────────────────────────────────────────────────── #
-
-    def close(self) -> None:
-        if self._conn is not None:
-            try:
-                with self._lock:
-                    self._conn.close()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[CommunicationDB] close failed: {exc}")
-            finally:
-                self._conn = None
+    # close() / _execute() / query() are inherited from ThreadSafeDB.

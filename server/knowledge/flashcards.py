@@ -14,11 +14,11 @@ write prints and returns a falsy value rather than crashing JARVIS.
 from __future__ import annotations
 
 import sqlite3
-import threading
 import time
 from pathlib import Path
 from typing import Any
 
+from ..common.sqlite_store import ThreadSafeDB
 from ..config import settings
 
 _CREATE = """
@@ -41,52 +41,22 @@ CREATE TABLE IF NOT EXISTS flashcards (
 _MIN_EF = 1.3  # SM-2 lower bound on the ease factor
 
 
-class FlashcardManager:
+class FlashcardManager(ThreadSafeDB):
     """SM-2 spaced-repetition flashcard store."""
 
     def __init__(self, db_path: Path | str = "data/knowledge.db",
                  client: Any = None) -> None:
-        self._db_path = Path(db_path)
         self._client = client
-        self._lock = threading.Lock()
-        self._conn: sqlite3.Connection | None = None
-        try:
-            self._db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
-            self._conn.execute(_CREATE)
-            self._conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_fc_due ON flashcards(next_review)")
-            self._conn.commit()
-            print(f"[Flashcards] ready at {self._db_path}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"[Flashcards] init failed: {exc}")
+        super().__init__(db_path, label="Flashcards")
 
-    # ── low-level ──────────────────────────────────────────────────────── #
+    def _init_schema(self, conn: sqlite3.Connection) -> None:
+        conn.execute(_CREATE)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fc_due ON flashcards(next_review)")
 
-    def _write(self, sql: str, params: tuple[Any, ...] = ()) -> int | None:
-        if self._conn is None:
-            return None
-        try:
-            with self._lock:
-                cur = self._conn.execute(sql, params)
-                self._conn.commit()
-                return cur.lastrowid
-        except Exception as exc:  # noqa: BLE001
-            print(f"[Flashcards] write failed: {exc}")
-            return None
-
-    def _query(self, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
-        if self._conn is None:
-            return []
-        try:
-            with self._lock:
-                return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
-        except Exception as exc:  # noqa: BLE001
-            print(f"[Flashcards] query failed: {exc}")
-            return []
+    # This layer's write/read names — alias the inherited base impls.
+    _write = ThreadSafeDB._execute
+    _query = ThreadSafeDB.query
 
     # ── authoring ──────────────────────────────────────────────────────── #
 
@@ -241,12 +211,4 @@ class FlashcardManager:
             return "Keine fälligen Karteikarten. Gut gelernt!"
         return f"Du hast {n} fällige Karteikarte{'n' if n != 1 else ''} zum Wiederholen."
 
-    def close(self) -> None:
-        if self._conn is not None:
-            try:
-                with self._lock:
-                    self._conn.close()
-            except Exception:  # noqa: BLE001
-                pass
-            finally:
-                self._conn = None
+    # close() inherited from ThreadSafeDB; _write/_query aliased above.
