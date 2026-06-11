@@ -93,6 +93,28 @@ PWA_DIR = Path(__file__).resolve().parent.parent / "clients" / "pwa"
 
 # --- App lifecycle -------------------------------------------------------- #
 
+def _wire_subsystem(app: FastAPI, label: str, factory: Any, *,
+                    brain_attr: str | None = None,
+                    state_attr: str | None = None, start: bool = True) -> Any:
+    """Uniform subsystem wiring: build (best-effort), optionally start(),
+    attach to app.state + brain, log. Returns the manager or None. Used for
+    the independent layers; subsystems with bespoke cross-bridges
+    (security/communication) keep their inline wiring below."""
+    try:
+        mgr = factory()
+        if start and hasattr(mgr, "start"):
+            mgr.start()
+        if state_attr:
+            setattr(app.state, state_attr, mgr)
+        if brain_attr:
+            setattr(app.state.brain, brain_attr, mgr)
+        print(f"[{label}] wired to brain ✓")
+        return mgr
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{label}] init failed: {exc}")
+        return None
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     print("[JARVIS] starting up")
@@ -216,32 +238,21 @@ async def lifespan(app: FastAPI):
     else:
         print("[SMARTHOME] disabled (module unavailable)")
 
-    # Productivity layer
-    try:
+    # Productivity + entertainment — independent layers, uniform wiring.
+    def _build_productivity() -> Any:
         from .productivity.productivity_manager import ProductivityManager
-        productivity = ProductivityManager(Path("data/jarvis.db"),
-                                           client=app.state.brain.client)
-        productivity.start()
-        app.state.productivity = productivity
-        app.state.brain._productivity = productivity
-        print("[PRODUCTIVITY] wired to brain ✓")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[PRODUCTIVITY] init failed: {exc}")
+        return ProductivityManager(Path("data/jarvis.db"),
+                                   client=app.state.brain.client)
+    _wire_subsystem(app, "PRODUCTIVITY", _build_productivity,
+                    brain_attr="_productivity", state_attr="productivity")
 
-    # Entertainment layer
-    try:
+    def _build_entertainment() -> Any:
         from .entertainment.entertainment_manager import EntertainmentManager
-        entertainment = EntertainmentManager(
-            Path("data/jarvis.db"),
-            app.state.brain.client,
-            getattr(app.state, "smarthome", None),
-        )
-        entertainment.start()
-        app.state.entertainment = entertainment
-        app.state.brain._entertainment = entertainment
-        print("[ENTERTAINMENT] wired to brain ✓")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[ENTERTAINMENT] init failed: {exc}")
+        return EntertainmentManager(Path("data/jarvis.db"),
+                                    app.state.brain.client,
+                                    getattr(app.state, "smarthome", None))
+    _wire_subsystem(app, "ENTERTAINMENT", _build_entertainment,
+                    brain_attr="_entertainment", state_attr="entertainment")
 
     # Security & monitoring layer. Best-effort like every other layer:
     # a boot failure logs and JARVIS keeps running (the brain's
@@ -410,22 +421,15 @@ async def lifespan(app: FastAPI):
 
     # Finance layer. Best-effort. Price alerts route through the comm
     # NotificationCenter (so they respect DND/quiet-hours + reach Telegram).
-    try:
+    def _build_finance() -> Any:
         from .finance import FinanceManager
         _nc = getattr(communication, "notifications", None) \
             if communication is not None else None
-        finance = FinanceManager(
-            db_path=Path("data/finance.db"),
-            client=app.state.brain.client,
-            notification_center=_nc,
-        )
-        finance.start()
-        app.state.finance = finance
-        app.state.brain._finance = finance
-        print("[FINANCE] wired to brain ✓")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[FINANCE] init failed, continuing without finance: {exc}")
-        finance = None  # type: ignore[assignment]
+        return FinanceManager(db_path=Path("data/finance.db"),
+                              client=app.state.brain.client,
+                              notification_center=_nc)
+    finance = _wire_subsystem(app, "FINANCE", _build_finance,
+                              brain_attr="_finance", state_attr="finance")
 
     # On macOS, periodically drain the main-thread NSRunLoop so Cocoa
     # framework callbacks (Speech.framework's SFSpeechRecognizer in

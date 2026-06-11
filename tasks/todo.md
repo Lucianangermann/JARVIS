@@ -18,9 +18,9 @@ Four directions chosen. Executing in batches, commit per batch.
 - [x] communication.db: message content/translated_content encrypted at rest; finance.db: expense merchant/description encrypted (queryable columns stay plaintext — full-file needs SQLCipher).
 - [x] config + .env.example + requirements (cryptography); tests/test_crypto.py (5); CI runs it. Verified: raw row ciphertext, reads decrypt, off-without-key passthrough, wrong-key graceful.
 
-### Batch 4 — test_brain.py + lifespan registry
-- [ ] Direct tests for brain.py (short-circuits, dispatch table, memory hooks)
-- [ ] main.py lifespan → subsystem registry
+### Batch 4 — test_brain.py + lifespan registry  ✅
+- [x] tests/test_brain.py (7): dispatch table covers every registered tool, unknown→None, table cached, security/communication short-circuit routing, handler-error swallowed, empty-input guard. In CI.
+- [x] `_wire_subsystem` helper unifies the build/start/attach/log boilerplate for the independent layers (productivity/entertainment/finance). Bridged subsystems (security/communication, with cross-bridges) intentionally keep inline wiring — a full declarative registry doesn't fit their interdependencies. Boot verified.
 
 ---
 
