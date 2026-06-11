@@ -152,7 +152,7 @@ export async function connect() {
     const p = pending;
     pending = null;
     if (typeof data.error === "string")      p.reject(new Error(data.error));
-    else if (typeof data.reply === "string") p.resolve(data.reply);
+    else if (typeof data.reply === "string") p.resolve(data);  // full object, not just .reply
     else p.reject(new Error("unexpected message shape"));
   });
 

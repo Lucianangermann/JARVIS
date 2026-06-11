@@ -535,6 +535,10 @@ class Brain:
         self._claude_calls: deque[float] = deque(maxlen=4096)
         self._histories: dict[str, list[dict[str, Any]]] = {}
         self._lock = threading.Lock()  # FastAPI runs handlers in a threadpool
+        # Last user command + assistant reply per session — rescued when the
+        # history has to be cleared (orphan/overflow) so the system prompt
+        # can remind JARVIS what was being worked on.
+        self._last_task: dict[str, tuple[str, str]] = {}  # sid → (user, reply)
 
         # Optional intelligence layer. The server wires this in
         # main.py's lifespan; brain works fine with it set to None
@@ -848,10 +852,23 @@ class Brain:
                         or "invalid_request_error" in exc_str
                         and "tool_use" in exc_str):
                     print("[Brain] tool_use/tool_result orphan — clearing history")
+                    # Rescue the last known task before wiping so the
+                    # system prompt can remind JARVIS what was being done.
+                    last = self._last_task.get(session_id)
                     history.clear()
-                    return ("Mein Gesprächsverlauf hatte einen internen Fehler — "
-                            "ich habe ihn zurückgesetzt. Sag mir einfach nochmal, "
-                            "was du brauchst.")
+                    if last:
+                        user_ctx, reply_ctx = last
+                        reminder = (
+                            "Mein Gesprächsverlauf musste zurückgesetzt werden. "
+                            f"Zuletzt warst du dabei: '{user_ctx[:120]}'. "
+                            f"Meine letzte Antwort war: '{reply_ctx[:200]}'. "
+                            "Mach einfach weiter — sag mir kurz was du brauchst."
+                        )
+                    else:
+                        reminder = ("Mein Gesprächsverlauf hatte einen internen Fehler — "
+                                    "ich habe ihn zurückgesetzt. Sag mir einfach nochmal, "
+                                    "was du brauchst.")
+                    return reminder
                 return ("Entschuldige, ich konnte gerade keine Verbindung zu "
                         "Claude herstellen. Bitte versuch es gleich noch einmal.")
 
@@ -862,6 +879,11 @@ class Brain:
             if self._cancel_check():
                 return final_text
             history.append({"role": "assistant", "content": final_text})
+            # Save last task context before trimming — used to brief JARVIS
+            # if the history has to be cleared later.
+            if final_text and user_text:
+                self._last_task[session_id] = (user_text, final_text[:300])
+            self._truncate_tool_results(history)
             self._trim(history)
             # Fact-extraction + learning hooks. Done outside the model
             # call's critical path so memory writes can't block latency.
@@ -885,6 +907,32 @@ class Brain:
             self._started_sessions.discard(session_id)
 
     # -- Internals --------------------------------------------------------- #
+
+    # Large tool results (PDF content, long file reads) are only needed
+    # for the immediate reply. Keeping them verbatim in the history inflates
+    # the context window rapidly — a 200-KB PDF tool_result alone can use
+    # 50k+ tokens on every subsequent turn. We truncate once the turn is
+    # complete so the history retains WHAT was done without all the raw data.
+    _TOOL_RESULT_MAX = 800  # chars kept per tool_result content item
+
+    def _truncate_tool_results(self, history: list[dict[str, Any]]) -> None:
+        """Trim oversized tool_result blobs in-place. Runs after a turn
+        completes — the full content has already been used for the reply."""
+        for msg in history:
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") != "tool_result":
+                    continue
+                raw = block.get("content", "")
+                if isinstance(raw, str) and len(raw) > self._TOOL_RESULT_MAX:
+                    block["content"] = (raw[:self._TOOL_RESULT_MAX]
+                                        + f"… [truncated {len(raw)-self._TOOL_RESULT_MAX} chars]")
 
     def _trim(self, history: list[dict[str, Any]]) -> None:
         """Keep the last MAX_HISTORY_TURNS user/assistant pairs.

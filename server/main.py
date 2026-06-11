@@ -1094,7 +1094,10 @@ async def ws(websocket: WebSocket) -> None:
                 continue
 
             print(f"[JARVIS] {reply}")
-            await send_json({"reply": reply})
+            history = brain._histories.get(token, [])
+            max_msgs = settings.MAX_HISTORY_TURNS * 2
+            ctx_pct = min(100, round(len(history) / max(max_msgs, 1) * 100))
+            await send_json({"reply": reply, "context_pct": ctx_pct})
     except WebSocketDisconnect:
         print(f"[JARVIS] ws disconnected client={tag}")
     except Exception as exc:  # noqa: BLE001

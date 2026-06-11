@@ -83,6 +83,19 @@ let liveJarvisBubble = null;
 let lastFinalizedAt = 0;
 const STALE_PARTIAL_MS = 800;
 
+/** Update the context-usage indicator in the bottom-right corner.
+ *  pct: 0–100 or null (unknown). Colour: green→yellow→red. */
+const ctxBar = document.getElementById("ctx-bar");
+function updateContextBar(pct) {
+  if (!ctxBar) return;
+  if (pct === null || pct === undefined) { ctxBar.textContent = ""; return; }
+  const color = pct >= 90 ? "var(--jarvis-danger)"
+              : pct >= 70 ? "var(--jarvis-warn)"
+              : "var(--jarvis-glow)";
+  ctxBar.textContent = `${pct}% context used`;
+  ctxBar.style.color = color;
+}
+
 /** Streaming append: each partial extends the same JARVIS bubble.
  *  The first partial of a turn creates the bubble; subsequent
  *  partials extend its body text. No typewriter — partials arrive
@@ -417,9 +430,11 @@ async function runTurn(text) {
   abandonJarvisBubble();
   addMessage("you", text);
   setState("processing");
-  let reply;
+  let reply, contextPct = null;
   try {
-    reply = await ws.send(text);
+    const data = await ws.send(text);
+    reply = data.reply;
+    contextPct = data.context_pct ?? null;
   } catch (err) {
     reply = `[ERROR] ${err?.message || err}`;
   }
@@ -435,6 +450,7 @@ async function runTurn(text) {
     // classic typewriter so the user isn't staring at silence.
     await addMessage("jarvis", reply);
   }
+  updateContextBar(contextPct);
   setState("active");
 }
 
