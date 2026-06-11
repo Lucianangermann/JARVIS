@@ -9,8 +9,9 @@ Three directions: streaming + conditional actions, metrics + OS-resilience, deep
 - [x] `deploy/com.jarvis.server.plist` + `install-launchd.command` — launchd agent: auto-start at login + restart on crash (process-level resilience, complements the thread watchdog).
 - [x] tests/test_metrics.py (5). Verified /metrics aggregates real traffic, token recording, 401.
 
-### Batch B — streaming on text/WS path
-- [ ] Token-stream /chat + WS replies for snappier UX
+### Batch B — streaming  ✅
+- [x] FINDING: WS clients (PWA + HUD) ALREADY stream via jarvis_partial events. Gap was pure-HTTP /chat.
+- [x] `/chat/stream` SSE endpoint — {"partial":...} per sentence then {"final":...}, reusing flush_sentence via a new `on_partial` callback (threaded reply→tool_loop→stream). Guest/rate-gate honoured. tests/test_e2e.py +1.
 
 ### Batch C — conditional/deferred actions
 - [x] `intelligence/triggers.py` TriggerStore (ThreadSafeDB) — time-scheduled actions JARVIS fires itself via the NotificationCenter (voice/UI/Telegram), not passive Apple Reminders. Background checker delivers + marks fired.

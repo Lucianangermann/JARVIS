@@ -45,6 +45,15 @@ def test_chat_security_short_circuit_no_claude(client) -> None:
     assert "cpu" in reply or "ram" in reply or "prozent" in reply
 
 
+def test_chat_stream_sse(client) -> None:
+    # A short-circuit command streams its final via SSE without a model call.
+    r = client.post("/chat/stream", headers=OWNER, json={"text": "system status"})
+    assert r.status_code == 200
+    assert "text/event-stream" in r.headers.get("content-type", "")
+    assert "data:" in r.text and '"final"' in r.text
+    assert client.post("/chat/stream", json={"text": "x"}).status_code == 401
+
+
 def test_chat_invalid_token_401(client) -> None:
     r = client.post("/chat", headers={"Authorization": "Bearer nope"},
                     json={"text": "system status"})

@@ -41,7 +41,9 @@ from fastapi import (
 )
 from fastapi.security.utils import get_authorization_scheme_param
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import (
+    FileResponse, JSONResponse, Response, StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -786,6 +788,65 @@ def chat(
     if payload.speak and _VOICE_OK and tts is not None:
         tts.speak(reply)
     return ChatResponse(reply=reply)
+
+
+@app.post("/chat/stream")
+async def chat_stream(
+    payload: ChatRequest,
+    request: Request,
+    token: str = Depends(authorize_chat),
+    _gate: None = Depends(security_rate_gate),
+) -> StreamingResponse:
+    """Server-Sent-Events streaming of a chat turn for pure-HTTP clients
+    (the WS clients already stream via jarvis_partial events). Each SSE
+    'data:' line is {"partial": "..."} as sentences are produced, then a
+    final {"final": "..."}. Reuses the brain's per-sentence flush via an
+    on_partial callback."""
+    import asyncio
+    import json as _json
+    import threading as _threading
+
+    user_text = _sanitize(payload.text)
+    if not user_text:
+        raise HTTPException(status_code=400, detail="Empty message.")
+
+    guest_token = getattr(request.state, "guest_token", None)
+    if guest_token:
+        sec = getattr(request.app.state, "security", None)
+        access = getattr(sec, "access", None) if sec is not None else None
+        if not (access is not None and access.is_command_allowed(guest_token, user_text)):
+            async def _refuse():
+                yield ("data: " + _json.dumps(
+                    {"final": "Dieser Befehl ist im Gastzugang nicht erlaubt."})
+                    + "\n\n")
+            return StreamingResponse(_refuse(), media_type="text/event-stream")
+
+    brain = request.app.state.brain
+    loop = asyncio.get_running_loop()
+    q: asyncio.Queue = asyncio.Queue()
+
+    def _on_partial(text: str) -> None:
+        loop.call_soon_threadsafe(q.put_nowait, {"partial": text})
+
+    def _run() -> None:
+        try:
+            final = brain.reply(token, user_text, speak_locally=False,
+                                on_partial=_on_partial)
+        except Exception as exc:  # noqa: BLE001
+            final = f"Fehler: {exc}"
+        loop.call_soon_threadsafe(q.put_nowait, {"final": final})
+        loop.call_soon_threadsafe(q.put_nowait, None)  # sentinel
+
+    _threading.Thread(target=_run, name="jarvis-chat-stream", daemon=True).start()
+
+    async def _gen():
+        while True:
+            item = await q.get()
+            if item is None:
+                break
+            yield "data: " + _json.dumps(item) + "\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
 @app.post("/transcribe")

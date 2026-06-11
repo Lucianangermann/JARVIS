@@ -596,7 +596,8 @@ class Brain:
     # -- Public API -------------------------------------------------------- #
 
     def reply(self, session_id: str, user_text: str,
-              *, speak_locally: bool = True) -> str:
+              *, speak_locally: bool = True,
+              on_partial: Any = None) -> str:
         """Return Claude's spoken-ready reply to ``user_text``.
 
         ``speak_locally``: if False, suppress the per-sentence
@@ -760,7 +761,8 @@ class Brain:
                 final_text = self._run_tool_loop(history, session_id=session_id,
                                                   user_text=user_text,
                                                   speak_locally=speak_locally,
-                                                  model=model)
+                                                  model=model,
+                                                  on_partial=on_partial)
             except Exception as exc:  # noqa: BLE001 — surface to user
                 # Roll back the user turn so a retry doesn't double it up.
                 # (The SDK already retried transient errors per
@@ -811,7 +813,8 @@ class Brain:
                        *, session_id: str = "",
                        user_text: str = "",
                        speak_locally: bool = True,
-                       model: str | None = None) -> str:
+                       model: str | None = None,
+                       on_partial: Any = None) -> str:
         """Manual agentic loop: call Claude, run any tools, feed results back.
 
         ``user_text`` is the current user turn — drives the memory
@@ -861,7 +864,7 @@ class Brain:
 
             resp = self._stream_one_turn(history, system_blocks,
                                           speak_locally=speak_locally,
-                                          model=model)
+                                          model=model, on_partial=on_partial)
 
             # Stop conditions: normal end_turn, or pause_turn (server-side
             # tool wants another round-trip — just resend with the assistant
@@ -1035,7 +1038,8 @@ class Brain:
     def _stream_one_turn(self, history: list[dict[str, Any]],
                          system_blocks: list[dict[str, Any]],
                          *, speak_locally: bool = True,
-                         model: str | None = None) -> "Message":
+                         model: str | None = None,
+                         on_partial: Any = None) -> "Message":
         """Issue one ``messages.stream()`` call, push completed
         sentences to TTS + HUD as text deltas arrive, then return the
         final Message so the existing tool_use / end_turn switch can
@@ -1066,6 +1070,12 @@ class Brain:
             text = text.strip()
             if len(text) < self._MIN_SPEAKABLE_LEN:
                 return
+            # 0) Per-request streaming sink (SSE /chat/stream).
+            if on_partial is not None:
+                try:
+                    on_partial(text)
+                except Exception:  # noqa: BLE001
+                    pass
             # 1) HUD: incremental display via a typed event.
             try:
                 events.publish({"type": "jarvis_partial", "text": text})
