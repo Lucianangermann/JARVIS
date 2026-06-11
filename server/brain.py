@@ -829,6 +829,17 @@ class Brain:
             self.memory.before_message(session_id, user_text)
 
             history = self._histories.setdefault(session_id, [])
+            # Proactive context management: if the history is already at or
+            # above 80% capacity, trim it down to the last 6 pairs before
+            # adding the new turn. This prevents the "100% context" crash
+            # mid-task rather than only recovering after the crash.
+            max_msgs = settings.MAX_HISTORY_TURNS * 2
+            if len(history) >= max_msgs * 0.8:
+                keep = 12  # 6 user+assistant pairs — recent context only
+                if len(history) > keep:
+                    del history[: len(history) - keep]
+                    self._trim(history)  # repair any orphan at the new boundary
+                    print(f"[Brain] proactive context trim: history reduced to {len(history)} msgs")
             history.append({"role": "user", "content": user_text})
             try:
                 final_text = self._run_tool_loop(history, session_id=session_id,
@@ -1024,9 +1035,20 @@ class Brain:
             # Stop conditions: normal end_turn, or pause_turn (server-side
             # tool wants another round-trip — just resend with the assistant
             # turn appended).
-            if resp.stop_reason in ("end_turn", "stop_sequence", "max_tokens"):
+            if resp.stop_reason in ("end_turn", "stop_sequence"):
                 history.append({"role": "assistant", "content": resp.content})
                 return _join_text(resp)
+
+            if resp.stop_reason == "max_tokens":
+                # Claude hit the output token limit mid-response. With 4096
+                # max_tokens this only happens for very long content. Log it
+                # so the user knows the reply was cut, then return what we have.
+                partial = _join_text(resp)
+                print(f"[Brain] max_tokens hit — reply truncated at {len(partial)} chars")
+                history.append({"role": "assistant", "content": resp.content})
+                if partial:
+                    return partial + " [Antwort wurde wegen Länge abgeschnitten — bitte sag mir, wo ich weitermachen soll.]"
+                return "Die Antwort war zu lang und wurde abgeschnitten. Bitte teile die Aufgabe in kleinere Schritte auf."
 
             if resp.stop_reason == "pause_turn":
                 history.append({"role": "assistant", "content": resp.content})
@@ -1279,7 +1301,7 @@ class Brain:
 
         with self.client.messages.stream(
             model=model or settings.MODEL,
-            max_tokens=1024,
+            max_tokens=4096,
             system=system_blocks,
             tools=self._tools,
             messages=history,
