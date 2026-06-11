@@ -838,6 +838,20 @@ class Brain:
                 # CLAUDE_MAX_RETRIES; reaching here means it still failed.)
                 history.pop()
                 print(f"[Brain] Claude call failed after retries: {exc}")
+                exc_str = str(exc)
+                # Orphaned tool_use/tool_result at the history boundary
+                # (caused by _trim cutting through a tool call pair) puts
+                # the conversation into a permanent broken state — every
+                # subsequent turn gets the same 400. Clear the history and
+                # retry once with a clean slate so the user isn't stuck.
+                if ("tool_use" in exc_str and "tool_result" in exc_str
+                        or "invalid_request_error" in exc_str
+                        and "tool_use" in exc_str):
+                    print("[Brain] tool_use/tool_result orphan — clearing history")
+                    history.clear()
+                    return ("Mein Gesprächsverlauf hatte einen internen Fehler — "
+                            "ich habe ihn zurückgesetzt. Sag mir einfach nochmal, "
+                            "was du brauchst.")
                 return ("Entschuldige, ich konnte gerade keine Verbindung zu "
                         "Claude herstellen. Bitte versuch es gleich noch einmal.")
 
@@ -873,10 +887,34 @@ class Brain:
     # -- Internals --------------------------------------------------------- #
 
     def _trim(self, history: list[dict[str, Any]]) -> None:
-        # Each turn is user+assistant; keep the last N pairs.
+        """Keep the last MAX_HISTORY_TURNS user/assistant pairs.
+
+        Trimming naively from the front can leave an orphaned tool_result
+        block (no preceding tool_use) or an orphaned tool_use block (no
+        following tool_result) at the new boundary — Claude returns 400
+        "tool_use ids were found without tool_result blocks". After the
+        length cut, walk forward until the first message is a clean user
+        turn (plain text, not a tool_result list).
+        """
         max_messages = settings.MAX_HISTORY_TURNS * 2
         if len(history) > max_messages:
             del history[: len(history) - max_messages]
+
+        # Repair boundary: drop leading messages until the first message
+        # is a user turn with plain string content (not a tool_result list).
+        while history:
+            first = history[0]
+            content = first.get("content")
+            if first.get("role") == "user" and isinstance(content, str):
+                break  # clean user turn — safe boundary
+            if first.get("role") == "user" and isinstance(content, list):
+                # tool_result list: orphaned tool_result without tool_use
+                history.pop(0)
+                if history and history[0].get("role") == "assistant":
+                    history.pop(0)  # drop the assistant turn that preceded it
+                continue
+            # assistant turn at the front (tool_use without result): drop it
+            history.pop(0)
 
     def _run_tool_loop(self, history: list[dict[str, Any]],
                        *, session_id: str = "",
