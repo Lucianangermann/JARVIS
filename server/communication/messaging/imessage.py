@@ -76,6 +76,15 @@ class iMessageController:
         """Send an iMessage to ``contact`` (handle, phone, or email).
         Returns True on success. The CALLER is responsible for the
         confirm-before-send gate — this is the raw transport."""
+        return self.send_sync(contact, message)
+
+    def send_sync(self, contact: str, message: str) -> bool:
+        """Synchronous twin of :meth:`send`. ``osa`` is a blocking
+        subprocess anyway, so this carries no extra cost — it exists so
+        emergency code paths (which run inside the asyncio loop thread and
+        must not await) can text contacts without scheduling a coroutine.
+        Same injection-safe argv transport + best-effort fallback."""
+        last: Exception | None = None
         for script in (_SEND_SCRIPT, _SEND_SCRIPT_FALLBACK):
             try:
                 osa(script, contact, message)
@@ -87,7 +96,7 @@ class iMessageController:
             except ASError as exc:
                 last = exc
                 continue
-        print(f"[iMessage] send failed: {last}")  # noqa: F821
+        print(f"[iMessage] send failed: {last}")
         return False
 
     # ── reading (chat.db) ──────────────────────────────────────────────── #

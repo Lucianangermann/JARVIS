@@ -182,6 +182,65 @@ def test_imessage_send_is_injection_safe(monkeypatch, tmp_path: Path) -> None:
     assert evil not in seen["script"]       # … never interpolated
 
 
+# ── emergency contact fan-out ───────────────────────────────────────────── #
+
+class _FakeIMessage:
+    def __init__(self, fail: set[str] | None = None) -> None:
+        self.sent: list[tuple[str, str]] = []
+        self._fail = fail or set()
+
+    def send_sync(self, contact: str, message: str) -> bool:
+        if contact in self._fail:
+            raise RuntimeError("messages app not signed in")
+        self.sent.append((contact, message))
+        return True
+
+
+class _FakeTelegram:
+    def __init__(self, configured: bool) -> None:
+        self.configured = configured
+        self.pushed: list[tuple[str, str, str]] = []
+
+    def notify_sync(self, title: str, body: str, priority: str = "normal") -> None:
+        self.pushed.append((title, body, priority))
+
+
+def test_deliver_emergency_texts_every_contact() -> None:
+    from server.communication.communication_manager import deliver_emergency
+    im = _FakeIMessage()
+    tg = _FakeTelegram(configured=False)
+    rep = deliver_emergency("NOTFALL: SOS. Adresse: Test 1.",
+                            ["+49170", "mom@icloud.com"], imessage=im, telegram=tg)
+    assert [c for c, _ in im.sent] == ["+49170", "mom@icloud.com"]
+    assert rep == {"contacts": 2, "imessage": 2, "telegram": False}
+    assert tg.pushed == []                   # telegram asleep → no push
+
+
+def test_deliver_emergency_pushes_telegram_when_configured() -> None:
+    from server.communication.communication_manager import deliver_emergency
+    tg = _FakeTelegram(configured=True)
+    rep = deliver_emergency("NOTFALL", ["+49170"],
+                            imessage=_FakeIMessage(), telegram=tg)
+    assert rep["telegram"] is True
+    assert tg.pushed and tg.pushed[0][2] == "critical"
+
+
+def test_deliver_emergency_is_best_effort() -> None:
+    """One failing contact must not abort the others or raise."""
+    from server.communication.communication_manager import deliver_emergency
+    im = _FakeIMessage(fail={"+49170"})
+    rep = deliver_emergency("NOTFALL", ["+49170", "+49171"],
+                            imessage=im, telegram=None)
+    assert [c for c, _ in im.sent] == ["+49171"]   # second still delivered
+    assert rep == {"contacts": 2, "imessage": 1, "telegram": False}
+
+
+def test_deliver_emergency_no_transports_is_noop() -> None:
+    from server.communication.communication_manager import deliver_emergency
+    rep = deliver_emergency("NOTFALL", ["+49170"], imessage=None, telegram=None)
+    assert rep == {"contacts": 1, "imessage": 0, "telegram": False}
+
+
 # ── MessagingManager ────────────────────────────────────────────────────── #
 
 def test_messaging_confirm_before_send(db: CommunicationDB, monkeypatch) -> None:

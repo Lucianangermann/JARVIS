@@ -33,6 +33,35 @@ _CONFIRM_WORDS = ("ja", "bestätigen", "bestätige", "senden", "send", "ok", "ok
 _CANCEL_WORDS = ("nein", "abbrechen", "abbruch", "stop", "cancel", "nicht senden")
 
 
+def deliver_emergency(message: str, contacts: list[str],
+                      *, imessage: Any = None, telegram: Any = None) -> dict[str, Any]:
+    """Push an emergency message out through every available transport.
+
+    On a Mac the reliable, zero-cost contact channel is iMessage (the
+    owner is signed into Messages.app), so each contact is texted directly.
+    The owner's own phone also gets a Telegram push when that bot is set up.
+    Best-effort by design: a failing transport is logged, never raised —
+    an emergency must not be aborted because one channel is down.
+
+    Returns a small report dict for the audit log.
+    """
+    imsg_ok = 0
+    for contact in contacts or []:
+        try:
+            if imessage is not None and imessage.send_sync(contact, message):
+                imsg_ok += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Emergency] iMessage to {contact} failed: {exc}")
+    tg_ok = False
+    try:
+        if telegram is not None and getattr(telegram, "configured", False):
+            telegram.notify_sync("NOTFALL", message, "critical")
+            tg_ok = True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Emergency] telegram push failed: {exc}")
+    return {"contacts": len(contacts or []), "imessage": imsg_ok, "telegram": tg_ok}
+
+
 class CommunicationManager:
     """Coordinator that owns and wires the whole communication layer."""
 
@@ -112,6 +141,21 @@ class CommunicationManager:
         if self.telegram is not None:
             self.telegram.stop()
         self.db.close()
+
+    # ── emergency fan-out ──────────────────────────────────────────────── #
+
+    def notify_emergency_contacts(self, message: str,
+                                  contacts: list[str]) -> dict[str, Any]:
+        """Text every emergency contact via iMessage and push to the owner
+        via Telegram. Wired into EmergencySystem's notify seam in main.py.
+        Thin wrapper over :func:`deliver_emergency` so the transport choice
+        lives in one testable place."""
+        imsg = getattr(self.messaging, "imessage", None)
+        report = deliver_emergency(message, contacts,
+                                   imessage=imsg, telegram=self.telegram)
+        print(f"[Emergency] fan-out: {report['imessage']}/{report['contacts']} "
+              f"iMessage, telegram={report['telegram']}")
+        return report
 
     def _on_telegram_message(self, msg: dict[str, Any]) -> None:
         """Inbound Telegram message: clear any open follow-up to that

@@ -369,32 +369,33 @@ async def lifespan(app: FastAPI):
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMM] security→center bridge failed: {exc}")
 
-        # Emergency → Telegram: emergency contact notifications (SOS, fire,
-        # intrusion) now ALSO push to the owner's iPhone via the Telegram
-        # bot, the most reliable mobile channel. Keeps the existing
-        # log + event-bus path; degrades to a no-op if Telegram isn't set up.
+        # Emergency contact fan-out: SOS / fire / intrusion notifications
+        # now text each contact via iMessage (the reliable zero-setup Mac
+        # channel) AND push to the owner's iPhone via Telegram when that bot
+        # is configured. Keeps the existing log + event-bus path. Wired
+        # whenever communication exists — iMessage works even with Telegram
+        # asleep; degrades to a no-op if no contacts/transports are present.
         emergency = getattr(security, "emergency", None) if security else None
-        if emergency is not None and communication.telegram is not None:
+        if emergency is not None:
             try:
                 _orig_notify = emergency._notify  # noqa: SLF001
 
                 def _emergency_notify_all(message: str, contacts: list[str],
                                           _orig=_orig_notify,
-                                          _tg=communication.telegram) -> None:
+                                          _comm=communication) -> None:
                     if _orig is not None:
                         try:
                             _orig(message, contacts)
                         except Exception as exc:  # noqa: BLE001
                             print(f"[COMM] emergency orig-notify failed: {exc}")
                     try:
-                        if _tg.configured:
-                            _tg.notify_sync("NOTFALL", message, "critical")
+                        _comm.notify_emergency_contacts(message, contacts)
                     except Exception as exc:  # noqa: BLE001
-                        print(f"[COMM] emergency telegram push failed: {exc}")
+                        print(f"[COMM] emergency contact fan-out failed: {exc}")
 
                 emergency._notify = _emergency_notify_all  # noqa: SLF001
             except Exception as exc:  # noqa: BLE001
-                print(f"[COMM] emergency→telegram bridge failed: {exc}")
+                print(f"[COMM] emergency→contacts bridge failed: {exc}")
 
         # Route intelligence briefings + proactive notifications through the
         # NotificationCenter too, so they respect DND / quiet-hours (a 7am
