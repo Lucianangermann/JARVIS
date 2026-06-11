@@ -22,6 +22,7 @@ Coverage matrix
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import pytest
@@ -312,5 +313,77 @@ def test_manager_request_pipeline_denies_flood(tmp_path: Path) -> None:
             sm.anomaly.rate_limit_check("9.9.9.9")
         denied = _run(sm.process_request("licht an", audio=None, ip="9.9.9.9"))
         assert denied["allowed"] is False
+    finally:
+        sm.stop()
+
+
+# ── PIN-challenge rescue flow ──────────────────────────────────────────────── #
+
+def test_pin_elevation_allows_any_level(db: SecurityDB) -> None:
+    auth = VoiceAuthenticator(db=db, enabled=True)
+    auth._pin_hash = VoiceAuthenticator.hash_pin("4711")
+    # Borderline confidence on a high-level command is normally denied …
+    assert _run(auth.check_command_permission("lösche die datei", 0.70)) is False
+    # … but a fresh PIN elevation authorises it.
+    auth.grant_pin_elevation(60.0)
+    assert auth.is_pin_elevated() is True
+    assert _run(auth.check_command_permission("lösche die datei", 0.70)) is True
+
+
+def test_process_request_offers_pin_for_borderline(tmp_path: Path, monkeypatch) -> None:
+    sm = SecurityManager(db_path=tmp_path / "security.db")
+    try:
+        sm.voice_auth._enabled = True
+        sm.voice_auth._pin_hash = VoiceAuthenticator.hash_pin("4711")
+
+        async def _fake_verify(_audio):  # no resemblyzer / real audio needed
+            return {"is_owner": False, "confidence": 0.70, "action": "challenge"}
+        monkeypatch.setattr(sm.voice_auth, "verify_speaker", _fake_verify)
+
+        v = _run(sm.process_request("lösche die datei", audio=b"x", ip="local"))
+        assert v.get("needs_pin") is True and v["allowed"] is False
+        assert sm._awaiting_pin is not None
+    finally:
+        sm.stop()
+
+
+def test_pin_entry_correct_grants_elevation(tmp_path: Path) -> None:
+    sm = SecurityManager(db_path=tmp_path / "security.db")
+    try:
+        sm.voice_auth._enabled = True
+        sm.voice_auth._pin_hash = VoiceAuthenticator.hash_pin("4711")
+        sm._awaiting_pin = {"until": time.time() + 120, "attempts": 0, "level": "high"}
+        reply = _run(sm.process_command("4711"))
+        assert reply and "korrekt" in reply.lower()
+        assert sm.voice_auth.is_pin_elevated() is True
+        assert sm._awaiting_pin is None
+    finally:
+        sm.stop()
+
+
+def test_pin_entry_wrong_locks_out_after_three(tmp_path: Path) -> None:
+    sm = SecurityManager(db_path=tmp_path / "security.db")
+    try:
+        sm.voice_auth._enabled = True
+        sm.voice_auth._pin_hash = VoiceAuthenticator.hash_pin("4711")
+        sm._awaiting_pin = {"until": time.time() + 120, "attempts": 0, "level": "high"}
+        assert "falsch" in _run(sm.process_command("0000")).lower()
+        assert "falsch" in _run(sm.process_command("0000")).lower()
+        reply = _run(sm.process_command("0000"))
+        assert "dreimal" in reply.lower()
+        assert sm._awaiting_pin is None
+        assert sm.voice_auth.is_pin_elevated() is False
+    finally:
+        sm.stop()
+
+
+def test_pin_pending_abandoned_by_non_pin_input(tmp_path: Path) -> None:
+    sm = SecurityManager(db_path=tmp_path / "security.db")
+    try:
+        sm.voice_auth._pin_hash = VoiceAuthenticator.hash_pin("4711")
+        sm._awaiting_pin = {"until": time.time() + 120, "attempts": 0, "level": "high"}
+        # A normal utterance (not digits) clears the challenge and falls through.
+        assert _run(sm.process_command("erzähl einen witz")) is None
+        assert sm._awaiting_pin is None
     finally:
         sm.stop()

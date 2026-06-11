@@ -973,6 +973,14 @@ async def audio(
         try:
             ip = request.client.host if request.client else "audio"
             verdict = await sec.process_request(transcript, audio=raw, ip=ip)
+            if verdict.get("needs_pin"):
+                # Borderline voice on a sensitive command — hold it, ask for
+                # the PIN (typed into the HUD, not spoken).
+                msg = ("Ich konnte deine Stimme nicht sicher genug erkennen. "
+                       "Bitte tippe deinen PIN ins Fenster, dann sag den "
+                       "Befehl noch einmal.")
+                print(f"[SECURITY] audio turn needs PIN: {verdict.get('reason')}")
+                return ChatResponse(reply=msg, transcript=transcript)
             if not verdict.get("allowed", True):
                 msg = f"Zugriff verweigert: {verdict.get('reason', 'nicht autorisiert')}."
                 print(f"[SECURITY] audio turn denied: {verdict.get('reason')}")

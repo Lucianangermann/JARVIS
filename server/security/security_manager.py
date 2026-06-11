@@ -18,8 +18,20 @@ so the rest of the layer — and JARVIS — keeps working.
 """
 from __future__ import annotations
 
+import re
+import time
 from pathlib import Path
 from typing import Any, Callable
+
+# Voice confidence in [_PIN_RESCUE_FLOOR, level-need) means "probably the
+# owner, just a borderline match" — rescuable with a PIN. Below the floor is
+# already the deny tier (a stranger), which a PIN must NOT override.
+_PIN_RESCUE_FLOOR = 0.65
+_PIN_PENDING_TTL = 120.0
+_PIN_MAX_ATTEMPTS = 3
+# A typed PIN is 4–12 digits and nothing else. Matching digits-only means a
+# spoken "eins zwei drei vier" never leaks the PIN over the voice channel.
+_PIN_RE = re.compile(r"\d{4,12}")
 
 from ..config import settings
 from .db import SecurityDB
@@ -101,6 +113,11 @@ class SecurityManager:
             emergency=self.emergency, camera=self.camera,
         ), "home_security")
 
+        # Outstanding PIN challenge: set when a borderline-voice command is
+        # held pending the owner's PIN. {"until": ts, "attempts": int,
+        # "level": str}. Consumed by process_command when the PIN is typed.
+        self._awaiting_pin: dict[str, Any] | None = None
+
     @staticmethod
     def _build(factory: Callable[[], Any], name: str) -> Any:
         try:
@@ -173,6 +190,21 @@ class SecurityManager:
             if self.voice_auth is not None:
                 allowed = await self.voice_auth.check_command_permission(
                     command, confidence, level)
+
+            # Borderline voice on a sensitive command: instead of a hard deny,
+            # offer a PIN rescue (if a PIN is set and we're not already
+            # elevated). Hold the command pending the typed PIN.
+            if (not allowed and self.voice_auth is not None
+                    and self.voice_auth.pin_configured
+                    and not self.voice_auth.is_pin_elevated()
+                    and confidence >= _PIN_RESCUE_FLOOR):
+                self._awaiting_pin = {"until": time.time() + _PIN_PENDING_TTL,
+                                      "attempts": 0, "level": level}
+                self.db.log_access("owner", command, ip, round(confidence, 3),
+                                   level, False, "pin challenge issued")
+                return {"allowed": False, "needs_pin": True, "level": level,
+                        "confidence": confidence,
+                        "reason": f"PIN erforderlich für {level}-Befehl"}
 
             reason = "ok" if allowed else f"insufficient confidence for {level}"
             self.db.log_access("owner", command, ip, round(confidence, 3),
@@ -270,6 +302,33 @@ class SecurityManager:
                     if not contacts:
                         return "Keine Notfallkontakte hinterlegt."
                     return f"{len(contacts)} Notfallkontakte hinterlegt."
+
+            # ── PIN challenge entry ───────────────────────────────────── #
+            # A borderline-voice command was held (process_request set
+            # needs_pin); the next TYPED input is read as the PIN. Checked
+            # after EMERGENCY (which must never be blocked) but before normal
+            # routing so the digits aren't mistaken for a command.
+            if self._awaiting_pin is not None and self.voice_auth is not None:
+                if time.time() >= self._awaiting_pin["until"]:
+                    self._awaiting_pin = None  # expired → fall through
+                elif _PIN_RE.fullmatch(c):
+                    ok = await self.voice_auth.challenge(
+                        reason="borderline voice", pin=c)
+                    if ok:
+                        self.voice_auth.grant_pin_elevation(60.0)
+                        self._awaiting_pin = None
+                        return ("PIN korrekt. Du bist eine Minute freigeschaltet — "
+                                "sag den Befehl noch einmal.")
+                    self._awaiting_pin["attempts"] += 1
+                    if self._awaiting_pin["attempts"] >= _PIN_MAX_ATTEMPTS:
+                        self._awaiting_pin = None
+                        if self.anomaly is not None:
+                            self.anomaly.record_auth_failure()
+                        return "PIN dreimal falsch. Abgebrochen."
+                    return "PIN falsch. Bitte erneut eingeben."
+                else:
+                    # A non-PIN utterance abandons the challenge gracefully.
+                    self._awaiting_pin = None
 
             # ── SYSTEM ────────────────────────────────────────────────── #
             if self.system is not None:

@@ -110,6 +110,11 @@ class VoiceAuthenticator:
         self._guest_until: float = 0.0
         self._guest_allowed: list[str] | None = None
 
+        # PIN-elevation: a correct PIN challenge opens a short window in which
+        # commands are owner-authorised regardless of voice confidence. This
+        # is the runtime rescue for a borderline voice match (cold, noise).
+        self._pin_elevated_until: float = 0.0
+
         self._profile_path.parent.mkdir(parents=True, exist_ok=True)
         self._load_profile()
 
@@ -122,6 +127,20 @@ class VoiceAuthenticator:
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    @property
+    def pin_configured(self) -> bool:
+        """True when a JARVIS_PIN hash is set, so the PIN-challenge rescue
+        path is actually available (no point offering it otherwise)."""
+        return bool(self._pin_hash)
+
+    def grant_pin_elevation(self, seconds: float = 60.0) -> None:
+        """Open the post-PIN authorisation window. Called after a correct
+        PIN challenge so the owner can re-issue the borderline command."""
+        self._pin_elevated_until = time.time() + seconds
+
+    def is_pin_elevated(self) -> bool:
+        return time.time() < self._pin_elevated_until
 
     def _load_profile(self) -> None:
         if self._profile_path.is_file():
@@ -340,6 +359,11 @@ class VoiceAuthenticator:
 
         # Auth disabled → everything allowed.
         if not self._enabled:
+            return True
+
+        # Recent correct PIN → owner-authorised regardless of voice match.
+        if self.is_pin_elevated():
+            self._audit(command, speaker_confidence, level, True, "pin elevated")
             return True
 
         need = _LEVEL_MIN_CONFIDENCE.get(level, 0.65)
