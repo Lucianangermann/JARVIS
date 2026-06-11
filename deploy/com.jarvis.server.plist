@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent: run the JARVIS server headless, auto-start at login, and
+  restart it if it crashes — process-level resilience that complements the
+  in-process thread watchdog (which only revives dead threads).
+
+  Install:  bash deploy/install-launchd.command
+  This is for HEADLESS/always-on use. Do NOT also run the Electron HUD's
+  launch.command at the same time — both bind uvicorn to :8000.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jarvis.server</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PROJECT__/.venv/bin/python</string>
+    <string>-m</string>
+    <string>server.main</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PROJECT__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart on crash / non-clean exit, but not after a clean shutdown. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+
+  <!-- Don't hot-loop if it crashes immediately on boot. -->
+  <key>ThrottleInterval</key>
+  <integer>15</integer>
+
+  <key>StandardOutPath</key>
+  <string>__PROJECT__/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PROJECT__/logs/launchd.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>JARVIS_LOCAL_VOICE</key>
+    <string>0</string>
+  </dict>
+</dict>
+</plist>

@@ -590,6 +590,29 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def _metrics_middleware(request: Request, call_next):
+    """Time every request + count requests/errors per route template."""
+    import time as _t
+    from .common.metrics import metrics
+    t0 = _t.perf_counter()
+    metrics.incr("requests")
+    try:
+        response = await call_next(request)
+    except Exception as exc:  # noqa: BLE001
+        metrics.record_error(request.url.path, str(exc))
+        raise
+    finally:
+        # Group by route template (not raw path) to avoid unbounded keys.
+        route = request.scope.get("route")
+        name = getattr(route, "path", None) or request.url.path
+        metrics.observe_ms(f"http {request.method} {name}",
+                           (_t.perf_counter() - t0) * 1000)
+    if response.status_code >= 500:
+        metrics.incr("http_5xx")
+    return response
+
+
 # --- Helpers -------------------------------------------------------------- #
 
 def authorize_chat(request: Request,
@@ -691,6 +714,15 @@ def health_full(request: Request,
     should be running has died (the watchdog will try to revive it)."""
     from .common.watchdog import collect_health
     return collect_health(request.app)
+
+
+@app.get("/metrics")
+def metrics_endpoint(request: Request,
+                     token: str = Depends(require_token)) -> dict[str, Any]:
+    """Counters, per-route latency, tool usage, and Claude call/token totals
+    since boot — a 'what is JARVIS doing and roughly costing' view."""
+    from .common.metrics import metrics
+    return metrics.snapshot()
 
 
 @app.post("/chat", response_model=ChatResponse)

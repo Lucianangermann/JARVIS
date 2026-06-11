@@ -882,6 +882,11 @@ class Brain:
                     else:
                         result = f"Unknown tool {block.name!r}."
                         is_error = True
+                    try:
+                        from .common.metrics import metrics
+                        metrics.record_tool(block.name, error=bool(is_error))
+                    except Exception:  # noqa: BLE001
+                        pass
                     tool_results.append(
                         {
                             "type": "tool_result",
@@ -1133,7 +1138,17 @@ class Brain:
 
         # Hand back the final Message so the caller's stop_reason /
         # tool_use logic stays exactly as before.
-        return stream.get_final_message()
+        final = stream.get_final_message()
+        # Record token usage for the cost/observability metrics.
+        try:
+            from .common.metrics import metrics
+            usage = getattr(final, "usage", None)
+            metrics.record_claude(
+                getattr(usage, "input_tokens", 0) if usage else 0,
+                getattr(usage, "output_tokens", 0) if usage else 0)
+        except Exception:  # noqa: BLE001
+            pass
+        return final
 
     def _record_tool_result(self, block: Any, result: str, is_error: bool) -> None:
         """Forward a tool execution outcome to the memory layer.

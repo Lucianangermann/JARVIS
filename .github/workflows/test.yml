@@ -47,4 +47,5 @@ jobs:
             tests/test_brain.py \
             tests/test_planner.py \
             tests/test_watchdog.py \
+            tests/test_metrics.py \
             tests/test_e2e.py

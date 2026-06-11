@@ -1,5 +1,25 @@
 # Todo
 
+## Depth Improvements II (active)
+
+Three directions: streaming + conditional actions, metrics + OS-resilience, deeper personalization.
+
+### Batch A — metrics + OS-resilience  ✅
+- [x] `common/metrics.py` thread-safe collector (counters, per-route latency, tool calls/errors, Claude calls+tokens, recent-errors ring) + `/metrics` route. Middleware times every request; brain records tool calls + token usage.
+- [x] `deploy/com.jarvis.server.plist` + `install-launchd.command` — launchd agent: auto-start at login + restart on crash (process-level resilience, complements the thread watchdog).
+- [x] tests/test_metrics.py (5). Verified /metrics aggregates real traffic, token recording, 401.
+
+### Batch B — streaming on text/WS path
+- [ ] Token-stream /chat + WS replies for snappier UX
+
+### Batch C — conditional/deferred actions
+- [ ] Trigger store: time/event-conditioned actions ("wenn ich heimkomme", "in 2h")
+
+### Batch D — deeper personalization
+- [ ] Routine learning, response preferences, relationship modelling
+
+---
+
 ## Depth Improvements (active)
 
 Four directions: agentic planning, LLM resilience, self-monitoring, reproducibility+e2e.
