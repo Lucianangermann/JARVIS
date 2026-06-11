@@ -343,23 +343,33 @@ def _calendar_create(*, title: str = "", start: str = "", end: str = "", **_kw) 
 
 # --- registry -------------------------------------------------------------- #
 
+# True Tier-4: irreversible or system-wide changes. Always require the
+# JARVIS password OR an accepted voice/PIN challenge (see dispatcher.py).
 _TIER4: tuple[tuple[str, callable, callable], ...] = (
     ("terminal",           _terminal,           lambda **p: f"Terminal: {p.get('command','')} {p.get('args',[])}"),
     ("install_app",        _install_app,        lambda **p: f"App installieren (brew): {p.get('pkg','')}"),
     ("uninstall_app",      _uninstall_app,      lambda **p: f"App entfernen (brew): {p.get('pkg','')}"),
-    ("open_prefs_pane",    _open_prefs_pane,    lambda **p: f"System Settings öffnen: {p.get('pane','')}"),
-    ("screenshot",         _screenshot,         lambda **_: "Screenshot vom gesamten Bildschirm"),
-    ("email_preview",      _email_preview,      lambda **p: f"Mail-Entwurf an {p.get('to','')}: {p.get('subject','')[:60]}"),
-    ("calendar_create",    _calendar_create,    lambda **p: f"Termin: {p.get('title','')[:60]} ({p.get('start','')}→{p.get('end','')})"),
     ("add_allowed_app",    _add_allowed_app,    lambda **p: f"App in Allowlist aufnehmen: {p.get('name','')}"),
     ("remove_allowed_app", _remove_allowed_app, lambda **p: f"App aus Allowlist entfernen: {p.get('name','')}"),
     ("run_applescript",    _run_applescript,    lambda **p: f"AppleScript ausführen ({len(p.get('script','') or '')} Z.): {(p.get('script','') or '').splitlines()[0][:80]}"),
+)
+
+# Tier-3 actions: need a simple confirmation ("ja"), NOT a password.
+# calendar_create, screenshot, email_preview, open_prefs_pane are not
+# dangerous enough to block on a password — a misfire is easy to undo.
+_TIER3_SYSTEM: tuple[tuple[str, callable, callable], ...] = (
+    ("open_prefs_pane",    _open_prefs_pane,    lambda **p: f"System Settings öffnen: {p.get('pane','')}"),
+    ("screenshot",         _screenshot,         lambda **_: "Screenshot vom gesamten Bildschirm"),
+    ("email_preview",      _email_preview,      lambda **p: f"Mail-Entwurf an {p.get('to','')}: {p.get('subject','')[:60]}"),
+    ("calendar_create",    _calendar_create,    lambda **p: f"Termin anlegen: {p.get('title','')[:60]} ({p.get('start','')}→{p.get('end','')})"),
 )
 
 
 def register_all() -> None:
     for name, handler, summary in _TIER4:
         permission_manager.register(name, Tier.SYSTEM, handler, summary)
+    for name, handler, summary in _TIER3_SYSTEM:
+        permission_manager.register(name, Tier.FILES, handler, summary)
 
 
 register_all()

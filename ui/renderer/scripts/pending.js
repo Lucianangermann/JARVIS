@@ -76,7 +76,7 @@ function buildCard(p) {
     pwRow.className = "pc-row";
     pwInput = document.createElement("input");
     pwInput.type = "password";
-    pwInput.placeholder = "Tier-4 Passwort";
+    pwInput.placeholder = "PIN oder JARVIS-Passwort";
     pwInput.autocomplete = "off";
     pwInput.spellcheck = false;
     pwRow.appendChild(pwInput);

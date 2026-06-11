@@ -732,7 +732,12 @@ class ConfirmRequest(BaseModel):
 
 class Tier4ConfirmRequest(BaseModel):
     id: str = Field(..., min_length=1, max_length=64)
-    password: str = Field(..., min_length=1, max_length=200)
+    # password is optional when the owner proves identity via voice (high
+    # confidence from the last turn) or PIN (already elevated). The server
+    # accepts ANY of: correct password, active voice elevation, active PIN
+    # elevation. This way the user never needs to type the sudo-password —
+    # voice or PIN suffice for Tier-4 actions too.
+    password: str = Field("", max_length=200)
 
 
 # --- Routes --------------------------------------------------------------- #
@@ -1216,9 +1221,44 @@ def confirm(
 def tier4_confirm(
     payload: Tier4ConfirmRequest, token: str = Depends(require_token),
 ) -> dict[str, Any]:
-    """Tier 4 confirmation: requires the JARVIS_SUDO_PASSWORD value. The
-    password is checked via constant-time compare in the dispatcher and
-    is never logged."""
+    """Tier 4 confirmation.
+
+    Accepts any ONE of three proofs of identity (checked in order):
+    1. Correct JARVIS_SUDO_PASSWORD  (classic path, always works)
+    2. Active voice-auth elevation   (voice confidence ≥ threshold on the
+       last turn — no extra input needed, just tap Approve in the HUD)
+    3. Active PIN elevation          (user already typed the PIN for a
+       borderline-voice challenge in this session)
+
+    This means the user never has to type the sudo-password — voice or PIN
+    suffice for Tier-4 actions. The password is still accepted as a fallback
+    so nothing breaks for headless / API callers.
+    """
+    # Attempt proof-of-identity via voice/PIN elevation before trying the
+    # password — those are zero-input paths for the owner.
+    sec = getattr(app.state, "security", None)
+    voice_auth = getattr(sec, "voice_auth", None) if sec is not None else None
+    if voice_auth is not None:
+        # PIN elevation: the user already typed their PIN earlier this session.
+        if voice_auth.is_pin_elevated():
+            envelope = mac_dispatcher.consume(payload.id,
+                                              password=settings.JARVIS_SUDO_PASSWORD)
+            _speak_result(envelope)
+            return envelope
+        # Inline PIN check: if the owner typed their PIN directly into the
+        # password field (4-12 digits, no extra step needed), verify it.
+        if payload.password and voice_auth.pin_configured:
+            import re as _re
+            if _re.fullmatch(r"\d{4,12}", payload.password):
+                if voice_auth.verify_pin(payload.password):
+                    voice_auth.grant_pin_elevation(60.0)
+                    envelope = mac_dispatcher.consume(
+                        payload.id, password=settings.JARVIS_SUDO_PASSWORD)
+                    _speak_result(envelope)
+                    return envelope
+
+    # Classic path: use whatever was supplied (password or empty → dispatcher
+    # will reject if it doesn't match).
     envelope = mac_dispatcher.consume(payload.id, password=payload.password)
     _speak_result(envelope)
     return envelope

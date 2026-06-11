@@ -108,11 +108,14 @@ def _mac_action_tool() -> dict[str, Any]:
             "    the user's confirmation (Tier 3) before it runs.\n"
             "  terminal(command, args)  # command ∈ {say, caffeinate, display_sleep, mac_sleep}\n"
             "  install_app(pkg), uninstall_app(pkg)  # brew package names\n"
-            "  open_prefs_pane(pane), screenshot(),\n"
-            "  email_preview(to, subject, body), calendar_create(title, start, end)\n"
+            "  open_prefs_pane(pane), screenshot()   # Tier 3 — simple confirm\n"
+            "  email_preview(to, subject, body)       # Tier 3 — simple confirm\n"
+            "  calendar_create(title, start, end)     # Tier 3 — simple confirm\n"
+            "    start/end: ISO 8601 'YYYY-MM-DDTHH:MM'\n"
             "  list_allowed_apps()                   # Tier 1, no params\n"
             "  add_allowed_app(name), remove_allowed_app(name)\n"
-            "    — extend / shrink the persistent app allowlist. Tier 4.\n"
+            "    — extend / shrink the persistent app allowlist. Tier 4\n"
+            "    (voice ≥0.85 or PIN sufficient — no separate password needed).\n"
             "    Cannot override the hard-coded BLOCKED_APPS list.\n"
         ),
         "input_schema": {
