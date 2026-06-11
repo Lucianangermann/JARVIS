@@ -1,0 +1,45 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    env:
+      # config.py requires these at import time; tests mock the Claude client
+      # so the values are never used for a real call.
+      ANTHROPIC_API_KEY: ci-test-key
+      JARVIS_AUTH_TOKEN: ci-test-token
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install light deps
+        # Deliberately NOT installing torch / chromadb / sentence-transformers
+        # / opencv / resemblyzer — those tests self-skip when the deps or a
+        # mic/camera/macOS are absent. This keeps CI fast (~1 min) while still
+        # covering the security / communication / finance / flashcards /
+        # meeting layers.
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi "uvicorn[standard]" pydantic python-dotenv \
+            python-multipart anthropic requests httpx websockets \
+            psutil bcrypt "numpy<2.0" pytest
+
+      - name: Run portable test suite
+        run: |
+          pytest -q \
+            tests/test_security.py \
+            tests/test_communication.py \
+            tests/test_finance.py \
+            tests/test_flashcards.py \
+            tests/test_meeting_assistant.py

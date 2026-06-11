@@ -102,6 +102,10 @@ def test_subscription_detection(db: FinanceDB) -> None:
 # ── market (network) ────────────────────────────────────────────────────── #
 
 def _online() -> bool:
+    # Skip the live-market tests in CI (network flakiness / Yahoo rate limits).
+    import os
+    if os.getenv("CI"):
+        return False
     try:
         import httpx
         return httpx.get(

@@ -1,5 +1,27 @@
 # Todo
 
+## System Improvements (active)
+
+Four directions chosen. Executing in batches, commit per batch.
+
+### Batch 1 — CI + logging  ✅
+- [x] `.github/workflows/test.yml` — pytest on push/PR (ubuntu, light deps, dummy env, CI-skips network/heavy tests). Verified locally: 65 passed, 2 skipped.
+- [x] `server/common/logging_setup.py` — rotating `logs/jarvis.log` + tee of all print() output (no 432-call sweep). Wired into `run()` (not lifespan → pytest untouched). Verified prints/logging/stderr all captured.
+
+### Batch 2 — wire dormant features
+- [ ] Proactive triggers (important_email / package / forgotten_task) active
+- [ ] Anomaly detector + per-IP rate-limit into the request path
+- [ ] Delegated access (guest/family tokens) live
+
+### Batch 3 — DB encryption at rest
+- [ ] Encrypt sensitive content in communication.db (messages/contacts) + finance.db
+
+### Batch 4 — test_brain.py + lifespan registry
+- [ ] Direct tests for brain.py (short-circuits, dispatch table, memory hooks)
+- [ ] main.py lifespan → subsystem registry
+
+---
+
 ## System Review Fixes (done)
 
 Four parallel review agents (correctness / architecture / security / resources)

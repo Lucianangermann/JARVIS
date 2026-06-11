@@ -2395,6 +2395,12 @@ def run() -> None:
     """
     import uvicorn
 
+    # Persist all output (logging-module records + tee'd print() lines) to a
+    # rotating logs/jarvis.log. Done here (the real entrypoint), not in the
+    # lifespan, so pytest/TestClient output capture is untouched.
+    from .common.logging_setup import configure_logging
+    configure_logging(settings.LOG_DIR)
+
     kwargs: dict[str, Any] = dict(
         host=settings.HOST,
         port=settings.PORT,
