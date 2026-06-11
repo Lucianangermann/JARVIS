@@ -383,6 +383,25 @@ async def lifespan(app: FastAPI):
         print(f"[COMM] init failed, continuing without communication: {exc}")
         communication = None  # type: ignore[assignment]
 
+    # Finance layer. Best-effort. Price alerts route through the comm
+    # NotificationCenter (so they respect DND/quiet-hours + reach Telegram).
+    try:
+        from .finance import FinanceManager
+        _nc = getattr(communication, "notifications", None) \
+            if communication is not None else None
+        finance = FinanceManager(
+            db_path=Path("data/finance.db"),
+            client=app.state.brain.client,
+            notification_center=_nc,
+        )
+        finance.start()
+        app.state.finance = finance
+        app.state.brain._finance = finance
+        print("[FINANCE] wired to brain ✓")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[FINANCE] init failed, continuing without finance: {exc}")
+        finance = None  # type: ignore[assignment]
+
     # On macOS, periodically drain the main-thread NSRunLoop so Cocoa
     # framework callbacks (Speech.framework's SFSpeechRecognizer in
     # particular) actually get delivered. Apple posts those completions
@@ -473,6 +492,11 @@ async def lifespan(app: FastAPI):
                 communication.stop()
             except Exception as exc:  # noqa: BLE001
                 print(f"[COMM] stop error: {exc}")
+        if finance is not None:
+            try:
+                finance.stop()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[FINANCE] stop error: {exc}")
         if runloop_pump_task is not None:
             runloop_pump_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1689,6 +1713,101 @@ def gaming_stats(
         return JSONResponse({"stats": ""})
     msg, _ = ent.gaming.get_stats()
     return JSONResponse({"stats": msg})
+
+
+# --- Finance -------------------------------------------------------------- #
+
+def _finance(request: Request) -> Any:
+    return getattr(request.app.state, "finance", None)
+
+
+def _require_finance(request: Request) -> Any:
+    fm = _finance(request)
+    if fm is None:
+        raise HTTPException(status_code=503, detail="Finance-Layer nicht verfügbar.")
+    return fm
+
+
+class ExpenseRequest(BaseModel):
+    amount: float = Field(..., gt=0)
+    merchant: str = ""
+    description: str = ""
+    category: str | None = None
+
+
+class BudgetRequest(BaseModel):
+    category: str = Field(..., min_length=1)
+    monthly_limit: float = Field(..., gt=0)
+
+
+class WatchRequest(BaseModel):
+    symbol: str = Field(..., min_length=1)
+    quantity: float = 0
+    target_above: float | None = None
+    target_below: float | None = None
+
+
+@app.post("/finance/expenses")
+async def finance_add_expense(body: ExpenseRequest, request: Request,
+                              token: str = Depends(require_token)) -> dict[str, Any]:
+    fm = _require_finance(request)
+    return fm.expenses.add_expense(body.amount, body.merchant, body.description,
+                                   body.category)
+
+
+@app.get("/finance/summary")
+async def finance_summary(request: Request,
+                          token: str = Depends(require_token)) -> dict[str, Any]:
+    fm = _require_finance(request)
+    return fm.expenses.monthly_summary()
+
+
+@app.post("/finance/budgets")
+async def finance_set_budget(body: BudgetRequest, request: Request,
+                             token: str = Depends(require_token)) -> dict[str, Any]:
+    fm = _require_finance(request)
+    return {"spoken": fm.expenses.set_budget(body.category, body.monthly_limit)}
+
+
+@app.get("/finance/watchlist")
+async def finance_watchlist(request: Request,
+                            token: str = Depends(require_token)) -> dict[str, Any]:
+    fm = _require_finance(request)
+    return {"watchlist": fm.market.refresh_prices()}
+
+
+@app.post("/finance/watchlist")
+async def finance_watch_add(body: WatchRequest, request: Request,
+                            token: str = Depends(require_token)) -> dict[str, Any]:
+    fm = _require_finance(request)
+    return fm.market.add_to_watchlist(
+        body.symbol, asset_type="crypto" if "-" in body.symbol else "stock",
+        quantity=body.quantity, target_above=body.target_above,
+        target_below=body.target_below)
+
+
+@app.delete("/finance/watchlist/{symbol}")
+async def finance_watch_remove(symbol: str, request: Request,
+                               token: str = Depends(require_token)) -> dict[str, Any]:
+    fm = _require_finance(request)
+    return {"spoken": fm.market.remove_from_watchlist(symbol)}
+
+
+@app.get("/finance/portfolio")
+async def finance_portfolio(request: Request,
+                            token: str = Depends(require_token)) -> dict[str, Any]:
+    fm = _require_finance(request)
+    return fm.market.portfolio_value()
+
+
+@app.get("/finance/price/{symbol}")
+async def finance_price(symbol: str, request: Request,
+                        token: str = Depends(require_token)) -> dict[str, Any]:
+    fm = _require_finance(request)
+    p = fm.market.fetch_price(symbol)
+    if p is None:
+        raise HTTPException(status_code=404, detail=f"no price for {symbol}")
+    return p
 
 
 # --- Communication -------------------------------------------------------- #

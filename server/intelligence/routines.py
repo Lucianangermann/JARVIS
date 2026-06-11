@@ -184,6 +184,18 @@ def morning_briefing() -> str:
     except Exception:
         pass
 
+    # Finance — over-budget categories (construct WITHOUT start() so no market
+    # poll thread is spawned for a one-shot read).
+    try:
+        from ..finance import FinanceManager
+        _fin = FinanceManager(_DATA_DIR / "finance.db")
+        _fb = _fin.morning_brief()
+        _fin.stop()
+        if _fb:
+            lines.append("Finanzen: " + _fb)
+    except Exception:
+        pass
+
     return " ".join(lines)
 
 

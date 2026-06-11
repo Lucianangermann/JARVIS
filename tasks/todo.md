@@ -1,5 +1,35 @@
 # Todo
 
+## Finance Layer (active)
+
+New `server/finance/` package. Clean slate (no existing finance code). Reuses:
+Claude client (categorization), NotificationCenter (price alerts), mail_tool
+(receipt/subscription scan), httpx, SQLite pattern. Decisions baked in:
+market data = Yahoo Finance chart API (free, no key) + CoinGecko crypto
+fallback; storage = data/finance.db; default currency EUR.
+
+### Phase 1 — Expenses & Budgets  ✅
+- [x] `finance/finance_db.py` — SQLite (expenses, budgets, subscriptions, watchlist), thread-safe
+- [x] `finance/expense_tracker.py` — keyword-first categorization (Claude fallback), monthly budgets + warnings, summaries
+- [x] Verified: REWE→lebensmittel/Netflix→abos/Shell→transport, budget-exceeded warning, monthly summary
+
+### Phase 2 — Market watchlist + alerts  ✅
+- [x] `finance/market.py` — Yahoo Finance prices (stock/crypto/etf) + CoinGecko fallback, watchlist, portfolio value
+- [x] price alerts (background poll → NotificationCenter when target crossed, rising-edge then disarm)
+- [x] Verified LIVE: AAPL/SAP.DE/BTC-EUR prices, portfolio per currency, alert fires once
+
+### Phase 3 — Subscription / receipt detection  ✅
+- [x] `finance/subscription_detector.py` — Claude extracts recurring charges from mail text; scan_mail wrapper (best-effort); upsert + spoken summary
+
+### Phase 4 — Integration  ✅
+- [x] `finance_manager.py` coordinator (start market poll); brain tool `finance` (own tools.py + _exec_finance + lazy _get_finance)
+- [x] main.py lifespan wiring (price alerts → comm NotificationCenter) + `/finance/*` routes (expenses/summary/budgets/watchlist/portfolio/price)
+- [x] morning briefing over-budget line (no poll thread); tests/test_finance.py (8)
+- [x] Bug fixed: keyword categorization used substring → "buch" matched "Buchung"; switched to word-boundary regex
+- [x] Verified end-to-end via TestClient (tool + routes + live prices); 72 tests pass, no regressions
+
+---
+
 ## Second Brain / Knowledge (active)
 
 Builds heavily on the existing memory layer (ChromaDB `knowledge` collection,
