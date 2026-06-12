@@ -70,7 +70,7 @@ class MessagingManager:
                 # Anything else (Konnte WhatsApp nicht öffnen...) → real failure
                 ok = ("gesendet" in status or "offen" in status
                       or "eingetragen" in status or "vorbereitet" in status)
-                self._last_wa_status = status if ok else None
+                self._last_wa_status = status  # save always — used in confirm_pending
                 return ok
             except Exception as exc:  # noqa: BLE001
                 print(f"[Messaging] whatsapp send error: {exc}")
@@ -270,14 +270,14 @@ class MessagingManager:
             self._pending = None  # always clear, success or failure
         if pending["kind"] == "broadcast":
             return f"An {ok} von {len(sends)} Kontakte gesendet."
+        wa_status = getattr(self, "_last_wa_status", None)
         if ok:
-            # Propagate the WhatsApp status so the user hears "drück Enter"
-            # when System Events couldn't press Return for them.
-            wa_status = getattr(self, "_last_wa_status", None)
-            if wa_status and ("offen" in wa_status or "eingetragen" in wa_status):
-                return wa_status
-            return "Nachricht gesendet."
-        return "Senden fehlgeschlagen."
+            # Propagate the real WhatsApp status: "drück Enter" when System
+            # Events couldn't press Return, or the full "gesendet" confirmation.
+            return wa_status or "Nachricht gesendet."
+        # Propagate the real failure reason (contact not found, URL failed, …)
+        # so the user hears something useful instead of the generic fallback.
+        return wa_status or "Senden fehlgeschlagen."
 
     def cancel_pending(self) -> str:
         self._pending = None

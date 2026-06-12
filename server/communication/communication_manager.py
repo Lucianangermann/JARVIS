@@ -218,6 +218,13 @@ class CommunicationManager:
                     if pend_msg:
                         return self.messaging.cancel_pending()
                     return self.email.cancel_pending()
+                # Short/punctuation-only input (e.g. "." from a failed STT
+                # transcription) while a send is pending: don't fall through
+                # to Claude — remind the user to confirm or cancel explicitly.
+                stripped = c.strip("., !?")
+                if not stripped or len(stripped) <= 2:
+                    return ("Ich warte noch auf deine Bestätigung. "
+                            "Sag 'ja' zum Senden oder 'nein' zum Abbrechen.")
 
             # ── translation ───────────────────────────────────────────── #
             if self.translator is not None:
