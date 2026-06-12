@@ -24,11 +24,13 @@ from typing import Any
 
 from .context_builder import ContextBuilder
 from .error_memory import ErrorMemory
+from .knowledge_staleness import KnowledgeStalenessDB
 from .long_term import LongTermMemory
 from .profile_manager import ProfileManager
 from .quality_metrics import QualityMetricsDB
 from .self_improvement import SelfImprovementDB
 from .short_term import ShortTermMemory
+from .topic_graph import TopicGraph
 
 
 # Resolve the project root the same way config.py does — parent of
@@ -95,6 +97,8 @@ class MemoryManager:
         )
         self.self_improvement = SelfImprovementDB(self.data_dir / "jarvis.db")
         self.quality_metrics = QualityMetricsDB(self.data_dir / "jarvis.db")
+        self.topic_graph = TopicGraph(self.data_dir / "jarvis.db")
+        self.knowledge_staleness = KnowledgeStalenessDB(self.data_dir / "jarvis.db")
         self.context_builder = ContextBuilder(
             profile=self.profile,
             long_term=self.long_term,
@@ -280,6 +284,18 @@ class MemoryManager:
                     )
                     _gdb.close()
                 except Exception:  # noqa: BLE001 — never crash on goal extraction
+                    pass
+
+            # Topic graph: extract keywords from this turn and record
+            # co-occurrence so we can surface thematic patterns later.
+            if self.topic_graph.available:
+                try:
+                    from .long_term import _extract_cluster_tags as _ect
+                    # Use up to 4 tags per turn for richer edge coverage.
+                    tags_str = _ect(f"{user_text} {response}", n=4)
+                    if tags_str:
+                        self.topic_graph.record_tags(tags_str.split(","))
+                except Exception:  # noqa: BLE001
                     pass
         except Exception as exc:  # noqa: BLE001
             self._mem_log.warning("after_message failed: %s", exc)

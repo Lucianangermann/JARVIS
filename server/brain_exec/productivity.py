@@ -108,6 +108,14 @@ class ProductivityExecMixin:
                     content, source="explicit", category=category,
                 )
                 if entry_id:
+                    # Record topic tags for graph co-occurrence tracking.
+                    try:
+                        from ..memory.long_term import _extract_cluster_tags as _ect
+                        tags = _ect(content, n=4).split(",")
+                        self.memory.topic_graph.record_tags(  # type: ignore[attr-defined]
+                            [t for t in tags if t])
+                    except Exception:
+                        pass
                     return f"Notiz gespeichert ({category}): {content[:60]}…", False
                 return ("Konnte die Notiz nicht dauerhaft speichern "
                         "(Wissensspeicher nicht verfügbar)."), True
@@ -124,8 +132,27 @@ class ProductivityExecMixin:
                                if r.get("metadata", {}).get("category") == category]
                 if not results:
                     return f"Ich weiß nichts über '{query}'.", False
+                # Log access for staleness tracking.
+                try:
+                    for r in results:
+                        doc_id = r.get("id", "")
+                        if doc_id:
+                            self.memory.knowledge_staleness.record_access(doc_id)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
                 facts = [r["document"] for r in results[:5]]
                 answer = "Dazu weiß ich: " + " · ".join(facts)
+                # Append topic graph bridge hints if available.
+                try:
+                    from ..memory.long_term import _extract_cluster_tags as _ect
+                    query_tags = _ect(query, n=3).split(",")
+                    bridges = self.memory.topic_graph.topic_bridge(  # type: ignore[attr-defined]
+                        [t for t in query_tags if t], n=2)
+                    if bridges:
+                        bridge_txt = " und ".join(f"'{b['tag']}'" for b in bridges)
+                        answer += f" (Verwandte Themen: {bridge_txt}.)"
+                except Exception:
+                    pass
                 if cluster_hints:
                     hints_txt = "; ".join(
                         f"Du hast {h['total']} Notiz{'en' if h['total'] != 1 else ''} "
@@ -373,6 +400,9 @@ class ProductivityExecMixin:
                             return "goal_id und pct sind erforderlich.", True
                         ok = gdb.update_progress(int(gid), int(pct),
                                                  str(inp.get("note") or ""))
+                        if ok:
+                            # Advance the SR review interval on explicit update.
+                            gdb.record_review(int(gid), pct_update=None)
                         return (f"Fortschritt aktualisiert: {pct}%." if ok
                                 else "Ziel nicht gefunden."), not ok
                     if action == "achieve":
@@ -487,6 +517,29 @@ class ProductivityExecMixin:
                         return "Qualitäts-Metriken nicht verfügbar.", True
                     client = getattr(self, "client", None)  # type: ignore[attr-defined]
                     return qm.audit_report(client=client), False
+                if action == "staleness_review":
+                    ks = getattr(self.memory, "knowledge_staleness", None)  # type: ignore[attr-defined]
+                    lt = getattr(self.memory, "long_term", None)  # type: ignore[attr-defined]
+                    client = getattr(self, "client", None)  # type: ignore[attr-defined]
+                    if ks is None or lt is None or client is None:
+                        return "Staleness-Review nicht verfügbar.", True
+                    return ks.run_weekly_review(lt, client), False
+                if action == "topic_map":
+                    tg = getattr(self.memory, "topic_graph", None)  # type: ignore[attr-defined]
+                    if tg is None or not tg.available:
+                        return "Themen-Graph nicht verfügbar.", True
+                    cmap = tg.cluster_map(limit=8)
+                    nodes = cmap.get("nodes", [])
+                    if not nodes:
+                        return "Noch keine Themen im Graphen.", False
+                    lines = []
+                    for n in nodes:
+                        line = f"• {n['tag']} ({n['count']}x)"
+                        if n.get("strongest_link"):
+                            line += f" ↔ {n['strongest_link']} ({n['link_weight']}x)"
+                        lines.append(line)
+                    total = cmap.get("total_nodes", len(nodes))
+                    return (f"Top Themen ({total} gesamt):\n" + "\n".join(lines)), False
                 return f"Unbekannte action: {action}", True
 
             return f"Unbekanntes Productivity-Tool: {tool_name}", True

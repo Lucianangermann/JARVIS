@@ -14,15 +14,17 @@ from typing import Any
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS goals (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    title        TEXT    NOT NULL,
-    description  TEXT    DEFAULT '',
-    deadline     TEXT    DEFAULT NULL,   -- YYYY-MM-DD
-    status       TEXT    DEFAULT 'active',
-    progress_pct INTEGER DEFAULT 0,
-    created_at   REAL    NOT NULL,
-    updated_at   REAL    NOT NULL,
-    achieved_at  REAL    DEFAULT NULL
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    title                TEXT    NOT NULL,
+    description          TEXT    DEFAULT '',
+    deadline             TEXT    DEFAULT NULL,   -- YYYY-MM-DD
+    status               TEXT    DEFAULT 'active',
+    progress_pct         INTEGER DEFAULT 0,
+    created_at           REAL    NOT NULL,
+    updated_at           REAL    NOT NULL,
+    achieved_at          REAL    DEFAULT NULL,
+    next_review_at       REAL    DEFAULT NULL,
+    review_interval_days INTEGER DEFAULT 3
 );
 CREATE INDEX IF NOT EXISTS ix_goals_status ON goals(status);
 
@@ -49,6 +51,9 @@ Falls nein: KEIN_ZIEL"""
 class GoalDB:
     """Long-term goal store backed by jarvis.db."""
 
+    # SR review intervals (days): 3 → 7 → 14 → 30 → 30 (cap)
+    _SR_INTERVALS = [3, 7, 14, 30]
+
     def __init__(self, db_path: str | Path) -> None:
         self._path = str(db_path)
         self.available = False
@@ -57,6 +62,15 @@ class GoalDB:
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.executescript(_SCHEMA)
+            # Migrate: add SR columns if they don't exist yet.
+            for col, defn in [
+                ("next_review_at", "REAL DEFAULT NULL"),
+                ("review_interval_days", "INTEGER DEFAULT 3"),
+            ]:
+                try:
+                    self._conn.execute(f"ALTER TABLE goals ADD COLUMN {col} {defn}")
+                except Exception:
+                    pass  # column already exists
             self._conn.commit()
             self.available = True
         except Exception as exc:
@@ -203,6 +217,71 @@ class GoalDB:
                     f"noch {days} Tag{'e' if days != 1 else ''}.")
         top = goals[0]
         return f"Ziel '{top['title']}': {top['progress_pct']}% erreicht."
+
+    # ── spaced-repetition review ──────────────────────────────────────── #
+
+    def due_for_review(self) -> list[dict]:
+        """Return active goals whose next_review_at is in the past (or null)."""
+        now = time.time()
+        try:
+            rows = self._conn.execute(
+                "SELECT * FROM goals WHERE status='active' "
+                "AND (next_review_at IS NULL OR next_review_at <= ?) "
+                "ORDER BY CASE WHEN deadline IS NULL THEN 1 ELSE 0 END, deadline",
+                (now,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
+
+    def record_review(self, goal_id: int, pct_update: int | None = None) -> bool:
+        """Mark a goal as reviewed and advance its SR interval.
+
+        Optionally also updates progress_pct. Returns True on success."""
+        now = time.time()
+        try:
+            row = self._conn.execute(
+                "SELECT review_interval_days FROM goals WHERE id=? AND status='active'",
+                (goal_id,),
+            ).fetchone()
+            if not row:
+                return False
+            current_interval = int(row[0] or 3)
+            # Advance to next interval (cap at 30 days)
+            intervals = self._SR_INTERVALS
+            try:
+                idx = intervals.index(current_interval)
+                next_interval = intervals[min(idx + 1, len(intervals) - 1)]
+            except ValueError:
+                next_interval = min(current_interval * 2, 30)
+            next_review = now + next_interval * 86400
+            if pct_update is not None:
+                pct_update = max(0, min(100, pct_update))
+                self._conn.execute(
+                    "UPDATE goals SET next_review_at=?, review_interval_days=?, "
+                    "progress_pct=?, updated_at=? WHERE id=?",
+                    (next_review, next_interval, pct_update, now, goal_id),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE goals SET next_review_at=?, review_interval_days=?, "
+                    "updated_at=? WHERE id=?",
+                    (next_review, next_interval, now, goal_id),
+                )
+            self._conn.commit()
+            return True
+        except Exception as exc:
+            print(f"[Goals] record_review failed: {exc}")
+            return False
+
+    def review_summary(self) -> str:
+        """German one-liner: goals due for review right now."""
+        due = self.due_for_review()
+        if not due:
+            return ""
+        if len(due) == 1:
+            return f"Ziel '{due[0]['title'][:40]}' wartet auf dein Update."
+        return f"{len(due)} Ziele warten auf ein Fortschritts-Update."
 
     # ── auto-extraction ───────────────────────────────────────────────── #
 

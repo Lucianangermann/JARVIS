@@ -674,6 +674,28 @@ def session_greeting(*, client: object = None) -> str:
     except Exception:
         pass
 
+    # ── goals due for SR review ───────────────────────────────────────
+    try:
+        from ..productivity.goals import GoalDB as _GDB
+        gdb = _GDB(_DATA_DIR / "jarvis.db")
+        try:
+            review_hint = gdb.review_summary()
+        finally:
+            gdb.close()
+        if review_hint:
+            context_parts.append(review_hint)
+    except Exception:
+        pass
+
+    # ── behavioral anomalies ──────────────────────────────────────────
+    try:
+        from .anomaly_detector import AnomalyDetector as _AD
+        anomaly_msg = _AD.spoken_anomalies(_DATA_DIR / "jarvis.db")
+        if anomaly_msg:
+            context_parts.append(anomaly_msg)
+    except Exception:
+        pass
+
     context = "; ".join(context_parts) if context_parts else ""
 
     if client is None or not context:
