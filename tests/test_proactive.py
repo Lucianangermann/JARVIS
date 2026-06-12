@@ -230,3 +230,174 @@ def test_stub_logged_only_once(tmp_path, capsys):
     out = capsys.readouterr().out
     # The "trigger registered but inactive" line should appear once.
     assert out.count("forgotten_task") == 1
+
+
+# --- new check functions -------------------------------------------------- #
+
+# Stub helpers — replace the real DB classes so tests run without touching
+# real files or requiring knowledge.db / lerntrack.db to exist.
+
+class _StubFM:
+    """FlashcardManager stub."""
+    def __init__(self, n_due: int = 0) -> None:
+        self._n = n_due
+
+    def __call__(self, path: object) -> "_StubFM":
+        # Called as FlashcardManager("data/knowledge.db") → return self
+        return self
+
+    def due_count(self) -> int:
+        return self._n
+
+    def close(self) -> None:
+        pass
+
+
+class _StubLT:
+    """LerntrackDB stub."""
+    def __init__(
+        self, total: int = 0, offen: int = 0,
+        open_rows: list | None = None,
+    ) -> None:
+        self._total = total
+        self._offen = offen
+        self._open_rows = open_rows or []
+
+    def __call__(self, path: object) -> "_StubLT":
+        return self
+
+    def stats(self) -> dict:
+        done = self._total - self._offen
+        return {
+            "total": self._total, "offen": self._offen,
+            "bearbeitet": 0, "abgeschlossen": done,
+        }
+
+    def list_group(self, group: str = "",
+                   status: str | None = None) -> list:
+        if status == "offen":
+            return self._open_rows
+        return []
+
+    def close(self) -> None:
+        pass
+
+
+def _patch(monkeypatch, fm: "_StubFM | None" = None,
+           lt: "_StubLT | None" = None) -> None:
+    if fm is not None:
+        monkeypatch.setattr("server.knowledge.flashcards.FlashcardManager", fm)
+    if lt is not None:
+        monkeypatch.setattr("server.knowledge.lerntrack.LerntrackDB", lt)
+
+
+# _check_flashcard_due ----------------------------------------------------- #
+
+def test_flashcard_due_none_when_zero_cards(monkeypatch):
+    from server.intelligence.proactive import _check_flashcard_due
+    _patch(monkeypatch, fm=_StubFM(0))
+    assert _check_flashcard_due(None) is None  # type: ignore[arg-type]
+
+
+def test_flashcard_due_none_when_below_threshold(monkeypatch):
+    from server.intelligence.proactive import _check_flashcard_due
+    _patch(monkeypatch, fm=_StubFM(2))
+    assert _check_flashcard_due(None) is None  # type: ignore[arg-type]
+
+
+def test_flashcard_due_fires_at_threshold(monkeypatch):
+    from server.intelligence.proactive import _check_flashcard_due
+    _patch(monkeypatch, fm=_StubFM(3))
+    msg = _check_flashcard_due(None)  # type: ignore[arg-type]
+    assert msg is not None
+    assert "3" in msg
+    assert "Karteikarte" in msg
+
+
+def test_flashcard_due_plural(monkeypatch):
+    from server.intelligence.proactive import _check_flashcard_due
+    _patch(monkeypatch, fm=_StubFM(7))
+    msg = _check_flashcard_due(None)  # type: ignore[arg-type]
+    assert msg is not None
+    assert "Karteikarten" in msg  # plural "n" appended
+
+
+# _check_lernziel_reminder ------------------------------------------------- #
+
+def test_lernziel_reminder_none_when_empty_db(monkeypatch):
+    from server.intelligence.proactive import _check_lernziel_reminder
+    _patch(monkeypatch, lt=_StubLT(total=0, offen=0))
+    assert _check_lernziel_reminder(None) is None  # type: ignore[arg-type]
+
+
+def test_lernziel_reminder_none_when_all_done(monkeypatch):
+    from server.intelligence.proactive import _check_lernziel_reminder
+    _patch(monkeypatch, lt=_StubLT(total=3, offen=0))
+    assert _check_lernziel_reminder(None) is None  # type: ignore[arg-type]
+
+
+def test_lernziel_reminder_fires_with_open_topics(monkeypatch):
+    from server.intelligence.proactive import _check_lernziel_reminder
+    rows = [{"display_name": "Mathe"}, {"display_name": "Physik"}]
+    _patch(monkeypatch, lt=_StubLT(total=5, offen=2, open_rows=rows))
+    msg = _check_lernziel_reminder(None)  # type: ignore[arg-type]
+    assert msg is not None
+    assert "2" in msg
+    assert "Mathe" in msg
+    assert "Physik" in msg
+
+
+def test_lernziel_reminder_truncates_long_list(monkeypatch):
+    from server.intelligence.proactive import _check_lernziel_reminder
+    rows = [{"display_name": "A"}, {"display_name": "B"}]
+    _patch(monkeypatch, lt=_StubLT(total=10, offen=5, open_rows=rows))
+    msg = _check_lernziel_reminder(None)  # type: ignore[arg-type]
+    assert msg is not None
+    assert "..." in msg
+
+
+def test_lernziel_reminder_singular(monkeypatch):
+    from server.intelligence.proactive import _check_lernziel_reminder
+    rows = [{"display_name": "Elektrotechnik"}]
+    _patch(monkeypatch, lt=_StubLT(total=4, offen=1, open_rows=rows))
+    msg = _check_lernziel_reminder(None)  # type: ignore[arg-type]
+    assert msg is not None
+    # Singular: "Lernziel" without trailing "e"
+    assert "Lernziel " in msg or msg.endswith("Lernziel.")
+
+
+# _check_morning_learning -------------------------------------------------- #
+
+def test_morning_learning_none_when_nothing(monkeypatch):
+    from server.intelligence.proactive import _check_morning_learning
+    _patch(monkeypatch, fm=_StubFM(0), lt=_StubLT(0, 0))
+    assert _check_morning_learning(None) is None  # type: ignore[arg-type]
+
+
+def test_morning_learning_cards_only(monkeypatch):
+    from server.intelligence.proactive import _check_morning_learning
+    _patch(monkeypatch, fm=_StubFM(4), lt=_StubLT(0, 0))
+    msg = _check_morning_learning(None)  # type: ignore[arg-type]
+    assert msg is not None
+    assert "4" in msg
+    assert "Karteikarte" in msg
+    assert "Lernziel" not in msg
+
+
+def test_morning_learning_lernziele_only(monkeypatch):
+    from server.intelligence.proactive import _check_morning_learning
+    _patch(monkeypatch, fm=_StubFM(0), lt=_StubLT(3, 3))
+    msg = _check_morning_learning(None)  # type: ignore[arg-type]
+    assert msg is not None
+    assert "Lernziel" in msg
+    assert "Karteikarte" not in msg
+
+
+def test_morning_learning_combines_both(monkeypatch):
+    from server.intelligence.proactive import _check_morning_learning
+    _patch(monkeypatch, fm=_StubFM(5), lt=_StubLT(4, 2))
+    msg = _check_morning_learning(None)  # type: ignore[arg-type]
+    assert msg is not None
+    assert "Karteikarte" in msg
+    assert "Lernziel" in msg
+    assert " und " in msg
