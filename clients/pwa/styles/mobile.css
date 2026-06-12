@@ -64,6 +64,36 @@ input { font-size: 16px; }
   touch-action: none;
 }
 
+/* Action bar: 9 category buttons + tier indicator + STOP total ~540 px,
+ * wider than any phone in portrait. Contain the overflow INSIDE the bar
+ * so it never escapes to the body — otherwise iOS Safari lets the user
+ * scroll the entire viewport right, displacing the HUD and chat.
+ * Items are flex-shrink:0 so they keep their touch target; the bar
+ * itself scrolls silently (hidden scrollbar). */
+.action-bar {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;       /* Firefox */
+  justify-content: flex-start; /* left-to-right scroll, not space-around */
+  padding-left:  max(10px, env(safe-area-inset-left));
+  padding-right: max(10px, env(safe-area-inset-right));
+}
+.action-bar::-webkit-scrollbar { display: none; }
+
+.hex-btn,
+.kill-badge,
+.tier-indicator {
+  flex-shrink: 0;
+}
+
+/* Slightly more compact hex buttons so ~8 of 9 are visible without
+ * scrolling on a typical iPhone (390 px wide). */
+.hex-btn {
+  width: 40px;
+  height: 46px;
+  font-size: 16px;
+}
+
 /* Shorten visualizer + emblem on tiny phones so the chat still
  * has room. iPhone SE: 320×480 dimensions roughly. */
 @media (max-height: 700px) {
