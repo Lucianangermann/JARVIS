@@ -372,6 +372,48 @@ def productivity_tools() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "journal",
+            "description": (
+                "Query JARVIS's automatic daily journal — aggregated from tasks, "
+                "focus time, mood, and feedback signals. "
+                "action='today' — today's metrics in one sentence. "
+                "action='weekly' — this week's totals. "
+                "action='insights' — AI-generated analysis of the past 7 days."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["today", "weekly", "insights"],
+                        "description": "What to show.",
+                    },
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "study_plan",
+            "description": (
+                "Generate a prioritised daily learning plan from open Lernziele "
+                "and fällige Karteikarten. Pass available_minutes to size the plan "
+                "(default 60). Uses Spaced Repetition priority: cards first, then "
+                "in-progress subjects, then open subjects."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "available_minutes": {
+                        "type": "integer",
+                        "description": "How many minutes are available for studying today (default 60).",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "extract_lernziele",
             "description": (
                 "Extract Lernziele / topics from a text or file using AI. "

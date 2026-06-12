@@ -4,7 +4,10 @@ Mixed into Brain. All self.* attributes are satisfied by Brain.__init__.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 
 class ProductivityExecMixin:
@@ -333,6 +336,51 @@ class ProductivityExecMixin:
                     return text or "Keine Stimmungsdaten dieser Woche.", False
                 mt.close()
                 return f"Unbekannte action: {action}", True
+
+            if tool_name == "journal":
+                from pathlib import Path as _Path
+                from ..productivity.journal import JournalDB as _Journal
+                jdb = _Journal(_Path("data/jarvis.db"))
+                action = inp.get("action", "today")
+                try:
+                    if action == "today":
+                        return jdb.spoken_today(), False
+                    if action == "weekly":
+                        return jdb.spoken_week(), False
+                    if action == "insights":
+                        client = getattr(self, "client", None)  # type: ignore[attr-defined]
+                        return jdb.insights(client=client), False
+                    return f"Unbekannte action: {action}", True
+                finally:
+                    jdb.close()
+
+            if tool_name == "study_plan":
+                from pathlib import Path as _Path
+                from ..productivity.curriculum import generate_curriculum as _curriculum
+                available = int(inp.get("available_minutes") or 60)
+                client = getattr(self, "client", None)  # type: ignore[attr-defined]
+                lt = fc = None
+                try:
+                    from ..knowledge.lerntrack import LerntrackDB as _LT
+                    lt = _LT(_DATA_DIR / "lerntrack.db")
+                except Exception:
+                    pass
+                try:
+                    fc = self._get_flashcards()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                result = _curriculum(
+                    lerntrack=lt,
+                    flashcard_manager=fc,
+                    available_minutes=available,
+                    client=client,
+                )
+                if lt is not None:
+                    try:
+                        lt.close()
+                    except Exception:
+                        pass
+                return result, False
 
             if tool_name == "self_reflect":
                 si = getattr(self.memory, "self_improvement", None)  # type: ignore[attr-defined]

@@ -579,3 +579,113 @@ def weekly_summary() -> str:
 
     lines.append("Schönes Wochenende!")
     return " ".join(lines)
+
+
+def session_greeting(*, client: object = None) -> str:
+    """1-2 sentence warm opening for a new JARVIS session.
+
+    Synthesises open tasks, lerntrack, flashcard due count, and last
+    mood score into a concise spoken context. When a Claude client is
+    provided, Haiku writes a natural version; otherwise a template is
+    used. Always best-effort: each sub-section degrades independently.
+    """
+    now = datetime.now(_LOCAL_TZ)
+    context_parts: list[str] = []
+
+    # ── open tasks ────────────────────────────────────────────────────
+    try:
+        from ..productivity.task_manager import TaskManager as _TM
+        tm = _TM(_DATA_DIR / "jarvis.db")
+        try:
+            row_ov = tm._conn.execute(
+                "SELECT COUNT(*) AS n FROM tasks WHERE status IN ('todo','in_progress') "
+                "AND due_date < date('now')"
+            ).fetchone()
+            row_td = tm._conn.execute(
+                "SELECT COUNT(*) AS n FROM tasks WHERE status IN ('todo','in_progress') "
+                "AND due_date = date('now')"
+            ).fetchone()
+            n_ov = row_ov["n"] if row_ov else 0
+            n_td = row_td["n"] if row_td else 0
+        finally:
+            tm._conn.close()
+        if n_ov:
+            s = "s" if n_ov != 1 else ""
+            context_parts.append(f"{n_ov} überfällige{s} Task{s}")
+        if n_td:
+            s = "s" if n_td != 1 else ""
+            context_parts.append(f"{n_td} Task{s} für heute fällig")
+    except Exception:
+        pass
+
+    # ── open lernziele ────────────────────────────────────────────────
+    try:
+        from ..knowledge.lerntrack import LerntrackDB as _LT
+        lt = _LT(_DATA_DIR / "lerntrack.db")
+        try:
+            open_subs = lt.list_group(status="offen")
+        finally:
+            lt.close()
+        if open_subs:
+            s = "e" if len(open_subs) != 1 else ""
+            context_parts.append(f"{len(open_subs)} offene{s} Lernziel{s}")
+    except Exception:
+        pass
+
+    # ── flashcards due ────────────────────────────────────────────────
+    try:
+        from ..knowledge.flashcards import FlashcardManager as _FC
+        fc = _FC(_DATA_DIR / "knowledge.db")
+        try:
+            due = fc.due_count()
+        finally:
+            fc.close()
+        if due:
+            s = "n" if due != 1 else ""
+            context_parts.append(f"{due} Karteikarte{s} fällig")
+    except Exception:
+        pass
+
+    # ── last mood score ───────────────────────────────────────────────
+    try:
+        from ..productivity.mood_tracker import MoodTracker as _Mood
+        mood = _Mood(_DATA_DIR / "jarvis.db")
+        try:
+            today_mood = mood.today_mood()
+        finally:
+            mood.close()
+        if today_mood:
+            score = today_mood.get("score")
+            if score is not None and score <= 4:
+                context_parts.append(f"Stimmung heute {score}/10")
+    except Exception:
+        pass
+
+    context = "; ".join(context_parts) if context_parts else ""
+
+    if client is None or not context:
+        greet = _greeting(now)
+        return f"{greet}. {context}." if context else f"{greet}."
+
+    prompt = (
+        f"Es ist {now.strftime('%H:%M')} Uhr.\n"
+        f"Offene Punkte: {context}\n\n"
+        "Begrüße den Nutzer kurz auf Deutsch in 1-2 Sätzen. "
+        "Erwähne, was heute ansteht. Direkt zum Punkt, kein Opener wie 'Guten Morgen'. "
+        "Kein Markdown."
+    )
+    try:
+        from anthropic import Anthropic as _A
+        _client = _A() if client is True else client  # type: ignore[arg-type]
+        resp = _client.messages.create(  # type: ignore[union-attr]
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        for block in resp.content:
+            if getattr(block, "type", None) == "text" and block.text:
+                return block.text.strip()
+    except Exception as exc:
+        print(f"[SessionGreeting] LLM failed: {exc}")
+
+    return f"{_greeting(now)}. {context}." if context else f"{_greeting(now)}."

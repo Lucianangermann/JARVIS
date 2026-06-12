@@ -939,9 +939,19 @@ class Brain(
             # First message of a session triggers the memory warmup
             # (bumps session counter, semantic-searches the user's
             # query against past sessions, primes the prompt cache).
-            if session_id not in self._started_sessions:
+            is_new_session = session_id not in self._started_sessions
+            if is_new_session:
                 self.memory.session_start(session_id, warmup_query=user_text)
                 self._started_sessions.add(session_id)
+                # Emit a warm session greeting BEFORE the tool loop so
+                # it reaches TTS + HUD independently of the actual reply.
+                if self.intelligence is not None:
+                    try:
+                        greeting = self.intelligence.get_session_greeting()
+                        if greeting:
+                            self._emit_short_circuit_reply(greeting, speak_locally)
+                    except Exception:  # noqa: BLE001 — never block on greeting
+                        pass
             # Append to short-term + rebuild the system blocks. The
             # returned prompt isn't actually used here (we re-fetch
             # blocks inside the tool loop), but the side-effect of
@@ -1599,7 +1609,7 @@ class Brain(
                   "add_knowledge_note", "recall_knowledge", "flashcards",
                   "get_email_smart_summary", "meeting_control",
                   "schedule_action", "search_memory", "track_mood",
-                  "self_reflect"):
+                  "self_reflect", "journal", "study_plan"):
             h[n] = lambda inp, _n=n: self._exec_productivity(_n, inp)
         h["extract_lernziele"] = lambda inp: self._exec_extract_lernziele(inp)
         for n in ("play_mood_music", "manage_watchlist", "play_game",

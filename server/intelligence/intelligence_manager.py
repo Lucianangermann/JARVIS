@@ -51,11 +51,12 @@ _DEFAULT_WEEKDAYS = {0, 1, 2, 3, 4}  # Mon..Fri
 # means: add the function to routines.py, register it here, optionally
 # add a default schedule below.
 _ROUTINE_REGISTRY: dict[str, Callable[[], str]] = {
-    "morning":    routines.morning_briefing,
-    "work_start": routines.work_start_briefing,
-    "lunch":      routines.lunch_briefing,
-    "evening":    routines.evening_briefing,
-    "weekly":     routines.weekly_summary,
+    "morning":          routines.morning_briefing,
+    "work_start":       routines.work_start_briefing,
+    "lunch":            routines.lunch_briefing,
+    "evening":          routines.evening_briefing,
+    "weekly":           routines.weekly_summary,
+    "session_greeting": routines.session_greeting,
 }
 
 
@@ -164,6 +165,15 @@ class IntelligenceManager:
         """Wire the Anthropic client so LLM-enhanced routines can use it."""
         self._client = client
 
+    def get_session_greeting(self) -> str:
+        """Produce the warm session-start greeting (LLM-enhanced when client is set)."""
+        try:
+            client = getattr(self, "_client", None)
+            return routines.session_greeting(client=client)
+        except Exception as exc:
+            print(f"[INTEL] session_greeting failed: {exc}")
+            return ""
+
     def run_routine(self, name: str) -> str | None:
         """Assemble a routine on demand by name. Returns the text
         ready for TTS / display, or ``None`` if no routine of that
@@ -264,5 +274,15 @@ class IntelligenceManager:
             parts.append(self.context.prompt_block(calendar_busy=calendar_busy))
         except Exception as exc:  # noqa: BLE001
             print(f"[INTEL] context prompt_block failed: {exc}")
+
+        # 3) Adaptive persona — time-of-day + mood-based tone hint.
+        try:
+            from .persona import compute_persona_block, read_today_mood
+            mood = read_today_mood(_DB_PATH)
+            persona = compute_persona_block(mood_score=mood)
+            if persona:
+                parts.append(persona)
+        except Exception:  # noqa: BLE001
+            pass
 
         return " ".join(parts)
