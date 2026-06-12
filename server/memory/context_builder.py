@@ -163,9 +163,12 @@ class ContextBuilder:
         issues = self._issues_block()
         if issues:
             stable.append(issues)
-        lessons = self._lessons_block()
-        if lessons:
-            stable.append(lessons)
+        # Stil + präferenz lessons are stable (slow-changing, benefit from caching).
+        stable_lessons = self._lessons_block(
+            lesson_types=["stil", "präferenz", "general"],
+        )
+        if stable_lessons:
+            stable.append(stable_lessons)
         stable.append(_INSTRUCTIONS)
 
         # ---- per-turn suffix ---- #
@@ -180,6 +183,12 @@ class ContextBuilder:
             knew = self._knowledge_block(current_query)
             if knew:
                 dynamic.append(knew)
+            # Fakt + tool lessons: query-filtered, per-turn dynamic block.
+            dynamic_lessons = self._lessons_block(
+                query=current_query, lesson_types=["fakt", "tool"], limit=4,
+            )
+            if dynamic_lessons:
+                dynamic.append(dynamic_lessons)
         dynamic.append(self._current_context_block(session_count))
 
         blocks: list[dict[str, Any]] = [
@@ -277,15 +286,40 @@ class ContextBuilder:
         return ("## Saved Knowledge (the user asked you to remember this)\n"
                 + "\n".join(bullets))
 
-    def _lessons_block(self, *, limit: int = 10) -> str:
-        """Active learned behavioral rules from past corrections."""
+    def _lessons_block(
+        self,
+        query: str = "",
+        *,
+        lesson_types: list[str] | None = None,
+        limit: int = 6,
+    ) -> str:
+        """Active learned behavioral rules, optionally filtered by type and
+        relevance to the current query."""
         if self.self_improvement is None or not self.self_improvement.available:
             return ""
-        lessons = self.self_improvement.get_active_lessons(limit=limit)
+        lessons = self.self_improvement.get_lessons_for_prompt(
+            query, limit=limit, lesson_types=lesson_types,
+        )
         if not lessons:
             return ""
-        bullets = [f"- {r['lesson']}" for r in lessons]
-        return "## Learned Behaviors\n" + "\n".join(bullets)
+        _TYPE_HEADER = {
+            "stil": "Stil-Regeln",
+            "fakt": "Fakten-Korrekturen",
+            "tool": "Tool-Regeln",
+            "präferenz": "Nutzer-Präferenzen",
+            "general": "Gelernte Regeln",
+        }
+        # Group by type for readability.
+        grouped: dict[str, list[str]] = {}
+        for r in lessons:
+            ltype = r.get("lesson_type") or "general"
+            grouped.setdefault(ltype, []).append(r["lesson"])
+        parts = []
+        for ltype, items in grouped.items():
+            header = _TYPE_HEADER.get(ltype, "Gelernte Regeln")
+            bullets = "\n".join(f"- {item}" for item in items)
+            parts.append(f"### {header}\n{bullets}")
+        return "## Learned Behaviors\n" + "\n".join(parts)
 
     def _current_context_block(self, session_count: int) -> str:
         now = _dt.datetime.now()

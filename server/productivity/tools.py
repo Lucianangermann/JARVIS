@@ -338,18 +338,19 @@ def productivity_tools() -> list[dict[str, Any]]:
         {
             "name": "self_reflect",
             "description": (
-                "Manage JARVIS's learned behavioral rules. Use action='list' "
-                "to see all active rules (what JARVIS has learned from corrections). "
-                "Use action='remove' with an id to delete a wrong rule. "
-                "Use action='add' with a lesson string to add a rule manually. "
-                "Use action='stats' for a summary of feedback signals received."
+                "Manage JARVIS's learned behavioral rules. "
+                "action='list' — all active rules with IDs and types. "
+                "action='remove' — deactivate a rule by id. "
+                "action='add' — add a manual rule (with optional type: stil/fakt/tool/präferenz). "
+                "action='stats' — feedback signal summary. "
+                "action='consolidate' — Haiku merges redundant/conflicting rules (weekly maintenance)."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["list", "remove", "add", "stats"],
+                        "enum": ["list", "remove", "add", "stats", "consolidate"],
                         "description": "What to do.",
                     },
                     "id": {
@@ -359,6 +360,11 @@ def productivity_tools() -> list[dict[str, Any]]:
                     "lesson": {
                         "type": "string",
                         "description": "Rule text to add manually (for action='add').",
+                    },
+                    "lesson_type": {
+                        "type": "string",
+                        "enum": ["stil", "fakt", "tool", "präferenz", "general"],
+                        "description": "Rule category for action='add' (default: general).",
                     },
                 },
                 "required": ["action"],

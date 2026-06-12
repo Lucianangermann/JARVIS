@@ -347,8 +347,11 @@ class ProductivityExecMixin:
                     lines = []
                     for r in lessons:
                         when = _dt.datetime.fromtimestamp(r["ts"]).strftime("%Y-%m-%d")
-                        src = r.get("source", "")
-                        lines.append(f"[#{r['id']} | {when} | {src}] {r['lesson']}")
+                        ltype = r.get("lesson_type") or "general"
+                        conf = r.get("confidence", 0.8)
+                        lines.append(
+                            f"[#{r['id']} | {ltype} | conf={conf:.1f} | {when}] {r['lesson']}"
+                        )
                     return "\n".join(lines), False
                 if action == "remove":
                     lid = inp.get("id")
@@ -361,11 +364,19 @@ class ProductivityExecMixin:
                     lesson = str(inp.get("lesson") or "").strip()
                     if not lesson:
                         return "lesson ist erforderlich.", True
-                    eid = si.add_lesson(lesson, source="manual")
-                    return (f"Regel gespeichert: {lesson}" if eid
-                            else "Regel konnte nicht gespeichert werden (Duplikat?)."), not bool(eid)
+                    ltype = str(inp.get("lesson_type") or "general").lower()
+                    eid = si.add_lesson(lesson, source="manual", lesson_type=ltype)
+                    if eid:
+                        return f"Regel gespeichert ({ltype}): {lesson}", False
+                    return "Regel konnte nicht gespeichert werden (Duplikat?).", True
                 if action == "stats":
                     return si.spoken_summary(), False
+                if action == "consolidate":
+                    client = getattr(self, "client", None)  # type: ignore[attr-defined]
+                    if client is None:
+                        return "Claude-Client nicht verfügbar für Konsolidierung.", True
+                    result = si.consolidate_lessons(client)
+                    return result, False
                 return f"Unbekannte action: {action}", True
 
             return f"Unbekanntes Productivity-Tool: {tool_name}", True
