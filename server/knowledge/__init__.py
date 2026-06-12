@@ -7,5 +7,6 @@ data/knowledge.db.
 from __future__ import annotations
 
 from .flashcards import FlashcardManager
+from .lerntrack import LerntrackDB
 
-__all__ = ["FlashcardManager"]
+__all__ = ["FlashcardManager", "LerntrackDB"]

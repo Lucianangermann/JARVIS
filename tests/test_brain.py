@@ -165,3 +165,30 @@ def test_cost_guard_blocks_and_reply_refuses(brain: Brain) -> None:
     # reply() must refuse without making a Claude call (returns the pause msg).
     assert "pausiere" in brain.reply("s", "irgendwas")
     brain._claude_calls.clear()  # reset for other tests in the module
+
+
+def test_track_learning_add_mark_status(brain: Brain, tmp_path) -> None:
+    import server.knowledge.lerntrack as lt
+    old_init = lt.LerntrackDB.__init__
+
+    def patched_init(self, db_path="data/lerntrack.db"):
+        old_init(self, tmp_path / "lerntrack.db")
+
+    lt.LerntrackDB.__init__ = patched_init
+    try:
+        out, err = brain._exec_track_learning(
+            {"action": "add", "subjects": ["Zeigerbild", "Resonanz"],
+             "group": "Test M4"})
+        assert err is False and "2 Thema" in out
+        out, err = brain._exec_track_learning(
+            {"action": "mark", "subject": "Zeigerbild",
+             "status": "abgeschlossen"})
+        assert err is False and "abgeschlossen" in out
+        out, err = brain._exec_track_learning(
+            {"action": "status", "group": "Test M4"})
+        assert err is False and "1 von 2" in out
+        out, _ = brain._exec_track_learning(
+            {"action": "list", "group": "Test"})
+        assert "Zeigerbild" in out and "●" in out
+    finally:
+        lt.LerntrackDB.__init__ = old_init

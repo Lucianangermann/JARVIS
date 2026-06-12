@@ -521,6 +521,43 @@ def _apple_tools() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "track_learning",
+            "description": (
+                "Track learning progress across subjects/Lernziele over multiple "
+                "days. Use this whenever the user works on a topic so JARVIS can "
+                "answer 'von 8 Lernzielen hast du 5 erledigt' and remind about "
+                "open topics.\n"
+                "- action='add': add one or more subjects. Pass 'subjects' (list "
+                "of names) and 'group' (e.g. 'Mechatronik M4').\n"
+                "- action='mark': update status of a subject. Pass 'subject' and "
+                "'status' ('offen'|'bearbeitet'|'abgeschlossen'), optionally 'notes'.\n"
+                "- action='status': get spoken progress report. Pass 'group' to "
+                "filter (or omit for all). ALWAYS call this when asked about progress.\n"
+                "- action='list': list all subjects with status.\n"
+                "- action='delete': remove a subject by name."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["add", "mark", "status", "list", "delete"]},
+                    "group": {"type": "string",
+                              "description": "Subject group (e.g. 'Mechatronik M4')."},
+                    "subjects": {"type": "array", "items": {"type": "string"},
+                                 "description": "List of subject names (for add)."},
+                    "subject": {"type": "string",
+                                "description": "Single subject name (for mark/delete)."},
+                    "status": {"type": "string",
+                               "enum": ["offen", "bearbeitet", "abgeschlossen"],
+                               "description": "New status (for mark)."},
+                    "notes": {"type": "string",
+                              "description": "Optional notes (for mark)."},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "track_task",
             "description": (
                 "Persistent progress notepad for LONG multi-step tasks "
@@ -1588,6 +1625,7 @@ class Brain:
             "apple_mail":        self._exec_apple_mail,
             "send_imessage":     self._exec_send_imessage,
             "get_calendar":      self._exec_get_calendar,
+            "track_learning":    self._exec_track_learning,
             "track_task":        self._exec_track_task,
             "safari_control":    self._exec_safari_control,
             "finance":           self._exec_finance,
@@ -1891,6 +1929,78 @@ class Brain:
             loc = f" ({ev.location})" if ev.location else ""
             lines.append(f"{start_str}–{end_str}: {ev.title}{loc}")
         return "\n".join(lines), False
+
+    def _exec_track_learning(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        """Persistent learning-progress tracker. Lives in data/lerntrack.db —
+        survives restarts and context resets."""
+        from .knowledge.lerntrack import LerntrackDB
+        inp = tool_input or {}
+        action = inp.get("action", "status")
+        try:
+            db = LerntrackDB()
+        except Exception as exc:  # noqa: BLE001
+            return f"Lerntrack nicht verfügbar: {exc}", True
+
+        if action == "add":
+            subjects = inp.get("subjects") or []
+            group = inp.get("group", "")
+            if not subjects:
+                return "subjects (Liste) ist erforderlich.", True
+            added = 0
+            for s in subjects:
+                if db.add(s, group=group):
+                    added += 1
+            skipped = len(subjects) - added
+            msg = f"{added} Thema/Themen hinzugefügt"
+            if skipped:
+                msg += f" ({skipped} bereits vorhanden)"
+            if group:
+                msg += f" in Gruppe '{group}'"
+            return msg + ".", False
+
+        if action == "mark":
+            subject = inp.get("subject", "")
+            status = inp.get("status", "bearbeitet")
+            if not subject:
+                return "subject ist erforderlich.", True
+            notes = inp.get("notes")
+            ok = db.mark(subject, status, notes=notes)
+            if not ok:
+                return f"Thema '{subject}' nicht gefunden.", True
+            return f"'{subject}' als '{status}' markiert.", False
+
+        if action == "status":
+            group = inp.get("group", "")
+            return db.spoken_status(group), False
+
+        if action == "list":
+            group = inp.get("group", "")
+            rows = db.list_group(group)
+            if not rows:
+                return "Keine Themen gespeichert.", False
+            STATUS_ICON = {"offen": "○", "bearbeitet": "◑",
+                           "abgeschlossen": "●"}
+            lines = []
+            cur_group = None
+            for r in rows:
+                g = r.get("subject_group", "")
+                if g != cur_group:
+                    if g:
+                        lines.append(f"[{g}]")
+                    cur_group = g
+                icon = STATUS_ICON.get(r["status"], "?")
+                lines.append(f"  {icon} {r['display_name']}")
+            return "\n".join(lines), False
+
+        if action == "delete":
+            subject = inp.get("subject", "")
+            if not subject:
+                return "subject ist erforderlich.", True
+            ok = db.delete(subject)
+            return (f"'{subject}' gelöscht." if ok
+                    else f"'{subject}' nicht gefunden."), not ok
+
+        return f"Unbekannte action: {action}", True
 
     def _exec_track_task(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
         """Persistent progress notepad for long multi-step tasks. Plain text
