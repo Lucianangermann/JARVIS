@@ -61,13 +61,20 @@ class MessagingManager:
         if platform == "whatsapp":
             # WhatsApp send is synchronous (URL scheme + System Events) and
             # returns a status string, not a bool. Run it in a thread so the
-            # 1.5s UI-settle sleep doesn't block the event loop.
+            # sleep inside doesn't block the event loop.
             try:
                 status = await asyncio.to_thread(self.whatsapp.send, contact, message)
                 print(f"[Messaging] whatsapp: {status}")
-                return "gesendet" in status
+                # "gesendet" → fully sent via System Events
+                # "offen" / "eingetragen" / "vorbereitet" → chat opened, user presses Enter
+                # Anything else (Konnte WhatsApp nicht öffnen...) → real failure
+                ok = ("gesendet" in status or "offen" in status
+                      or "eingetragen" in status or "vorbereitet" in status)
+                self._last_wa_status = status if ok else None
+                return ok
             except Exception as exc:  # noqa: BLE001
                 print(f"[Messaging] whatsapp send error: {exc}")
+                self._last_wa_status = None
                 return False
         return await ctrl.send(contact, message)
 
@@ -263,7 +270,14 @@ class MessagingManager:
             self._pending = None  # always clear, success or failure
         if pending["kind"] == "broadcast":
             return f"An {ok} von {len(sends)} Kontakte gesendet."
-        return "Nachricht gesendet." if ok else "Senden fehlgeschlagen."
+        if ok:
+            # Propagate the WhatsApp status so the user hears "drück Enter"
+            # when System Events couldn't press Return for them.
+            wa_status = getattr(self, "_last_wa_status", None)
+            if wa_status and ("offen" in wa_status or "eingetragen" in wa_status):
+                return wa_status
+            return "Nachricht gesendet."
+        return "Senden fehlgeschlagen."
 
     def cancel_pending(self) -> str:
         self._pending = None

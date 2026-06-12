@@ -299,18 +299,25 @@ class WhatsAppReader:
             return (f"WhatsApp-Chat mit {name} ist geöffnet, die Nachricht ist "
                     f"vorbereitet. Drück Enter zum Senden.")
 
-        # Give WhatsApp a moment to focus the message field, then press Return.
-        time.sleep(1.5)
+        # Give WhatsApp time to open and focus the message field,
+        # then press Return via System Events.
+        # 3 s is generous but necessary — WhatsApp's Electron UI is slow.
+        time.sleep(3.0)
         press_return = (
             'tell application "WhatsApp" to activate\n'
-            'delay 0.4\n'
+            'delay 0.6\n'
             'tell application "System Events" to key code 36\n'  # 36 = Return
         )
         try:
             osa(press_return)
         except ASError as exc:
-            return (f"Nachricht für {name} vorbereitet, aber das automatische "
-                    f"Senden ging nicht ({exc}). Drück Enter im WhatsApp-Fenster.")
+            # System Events failed (no Accessibility permission or WhatsApp
+            # not frontmost). The chat is open with the text prefilled —
+            # report a partial success so "Senden fehlgeschlagen" is NOT shown
+            # and the user knows to press Enter themselves.
+            print(f"[WhatsApp] System Events Return failed: {exc}")
+            return (f"WhatsApp-Chat mit {name} ist offen, Nachricht ist "
+                    f"eingetragen — drück bitte Enter zum Senden.")
         if self._comm_db is not None:
             try:
                 self._comm_db.log_message("whatsapp", "out", name, message,

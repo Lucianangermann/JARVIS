@@ -943,15 +943,10 @@ class Brain(
             if is_new_session:
                 self.memory.session_start(session_id, warmup_query=user_text)
                 self._started_sessions.add(session_id)
-                # Emit a warm session greeting BEFORE the tool loop so
-                # it reaches TTS + HUD independently of the actual reply.
-                if self.intelligence is not None:
-                    try:
-                        greeting = self.intelligence.get_session_greeting()
-                        if greeting:
-                            self._emit_short_circuit_reply(greeting, speak_locally)
-                    except Exception:  # noqa: BLE001 — never block on greeting
-                        pass
+                # Session greeting is now emitted at startup via
+                # _startup_greeting() in main.py (which calls
+                # session_greeting() with full context). Repeating it
+                # here on the first turn would cause a duplicate.
             # Append to short-term + rebuild the system blocks. The
             # returned prompt isn't actually used here (we re-fetch
             # blocks inside the tool loop), but the side-effect of
