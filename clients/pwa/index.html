@@ -276,11 +276,28 @@
     <div class="panel-inner">
       <h2>Produktivität</h2>
 
-      <!-- Score -->
+      <!-- Score + mood -->
       <div class="sh-section">
         <div class="sh-label">Score heute</div>
         <div id="prod-score" style="font-size:2em;color:#00d4ff;text-align:center;">–</div>
         <div id="prod-score-detail" style="font-size:0.8em;opacity:0.7;text-align:center;"></div>
+        <div id="prod-mood" style="font-size:0.85em;text-align:center;margin-top:4px;opacity:0.8;"></div>
+      </div>
+
+      <!-- Active goals -->
+      <div class="sh-section">
+        <div class="sh-label">Ziele</div>
+        <div id="prod-goals">
+          <span class="sh-loading">Lade...</span>
+        </div>
+      </div>
+
+      <!-- Today's journal summary -->
+      <div class="sh-section">
+        <div class="sh-label">Heute</div>
+        <div id="prod-journal" style="font-size:0.85em;opacity:0.85;line-height:1.5;">
+          <span class="sh-loading">Lade...</span>
+        </div>
       </div>
 
       <!-- Top 3 tasks -->
@@ -294,9 +311,19 @@
       <!-- Actions -->
       <div class="sh-section">
         <div class="sh-scene-grid">
-          <button class="sh-scene-btn" id="prod-pomodoro" type="button">🍅 Pomodoro</button>
-          <button class="sh-scene-btn" id="prod-mails"    type="button">📧 Mails</button>
+          <button class="sh-scene-btn" id="prod-pomodoro"  type="button">🍅 Pomodoro</button>
+          <button class="sh-scene-btn" id="prod-mails"     type="button">📧 Mails</button>
+          <button class="sh-scene-btn" id="prod-lernplan"  type="button">📚 Lernplan</button>
+          <button class="sh-scene-btn" id="prod-goals-btn" type="button">🎯 Ziele</button>
+          <button class="sh-scene-btn" id="prod-journal-btn" type="button">📓 Journal</button>
+          <button class="sh-scene-btn" id="prod-stimmung"  type="button">😊 Stimmung</button>
         </div>
+      </div>
+
+      <!-- Mood quick-log (hidden until Stimmung button pressed) -->
+      <div id="prod-mood-logger" class="sh-section" style="display:none;">
+        <div class="sh-label">Stimmung loggen (1–10)</div>
+        <div id="prod-mood-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:6px;"></div>
       </div>
 
       <p id="prod-status" class="sh-status"></p>

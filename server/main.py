@@ -2017,6 +2017,72 @@ def productivity_analytics_today(
     return pm.analytics.daily_score()
 
 
+@app.get("/productivity/goals")
+def productivity_goals(
+    request: Request, _: str = Depends(require_token),
+) -> dict[str, Any]:
+    """Return active long-term goals with progress and days remaining."""
+    from .productivity.goals import GoalDB as _GoalDB
+    import datetime as _dt
+    db_path = Path("data/jarvis.db")
+    try:
+        gdb = _GoalDB(db_path)
+        goals = gdb.get_active()
+        gdb.close()
+        today = _dt.date.today()
+        result = []
+        for g in goals:
+            entry: dict[str, Any] = {
+                "id": g["id"],
+                "title": g["title"],
+                "progress_pct": g["progress_pct"],
+                "deadline": g.get("deadline"),
+                "days_left": None,
+            }
+            if g.get("deadline"):
+                try:
+                    dl = _dt.date.fromisoformat(g["deadline"])
+                    entry["days_left"] = (dl - today).days
+                except ValueError:
+                    pass
+            result.append(entry)
+        return {"goals": result}
+    except Exception as exc:
+        return JSONResponse({"goals": [], "error": str(exc)}, status_code=200)
+
+
+@app.get("/productivity/journal/today")
+def productivity_journal_today(
+    request: Request, _: str = Depends(require_token),
+) -> dict[str, Any]:
+    """Return today's automatic journal entry (tasks done, focus, mood)."""
+    from .productivity.journal import JournalDB as _Journal
+    db_path = Path("data/jarvis.db")
+    try:
+        jdb = _Journal(db_path)
+        entry = jdb.today_entry()
+        jdb.close()
+        return entry
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=200)
+
+
+@app.get("/productivity/mood/today")
+def productivity_mood_today(
+    request: Request, _: str = Depends(require_token),
+) -> dict[str, Any]:
+    """Return today's mood score and note (or null if not logged yet)."""
+    from .productivity.mood_tracker import MoodTracker as _Mood
+    db_path = Path("data/jarvis.db")
+    try:
+        mt = _Mood(db_path)
+        entry = mt.today_mood()
+        mt.close()
+        return entry or {"score": None, "note": None}
+    except Exception as exc:
+        return JSONResponse({"score": None, "error": str(exc)}, status_code=200)
+
+
 # --- Entertainment API ---------------------------------------------------- #
 
 @app.get("/entertainment/watchlist")
