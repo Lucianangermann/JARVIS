@@ -587,3 +587,13 @@ const initialCfg = cfg.get();
 if (!initialCfg.token || (!initialCfg.local && !initialCfg.tailscale)) {
   openSettings();
 }
+
+// Auto-reload when a new service worker takes over so CSS/JS updates
+// are immediately visible without requiring a manual cache clear.
+// The SW's skipWaiting() + clients.claim() triggers controllerchange;
+// reloading here gives us the fresh assets from the new cache version.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    window.location.reload();
+  });
+}

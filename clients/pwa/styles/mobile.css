@@ -14,9 +14,14 @@ html, body {
   /* iOS rubber-band on body looks janky against the fixed corner
    * brackets — pin it. */
   position: fixed;
-  inset: 0;
+  /* Use explicit properties instead of inset shorthand for older iOS
+   * versions (< 14.5) that don't support the inset shorthand. */
+  top: 0; right: 0; bottom: 0; left: 0;
   width: 100%;
   height: 100%;
+  /* Belt-and-suspenders: prevent any horizontal body scroll that
+   * iOS Safari allows despite overflow:hidden on a fixed element. */
+  overflow-x: hidden;
 }
 
 body {
@@ -62,6 +67,18 @@ input { font-size: 16px; }
  * fingerdrag-off doesn't fire scroll or context menu. */
 .hex-btn-large {
   touch-action: none;
+}
+
+/* "JUST A RATHER VERY INTELLIGENT SYSTEM" at 7 px / 0.25em letter-spacing
+ * is ~320 px wide — wider than core-wrap (198–240 px) on any phone.
+ * Center it explicitly and clip so it never overflows the body. */
+.emblem .wordmark-sub {
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 90%;
+  letter-spacing: 0.12em;
 }
 
 /* Action bar: 9 category buttons + tier indicator + STOP total ~540 px,
