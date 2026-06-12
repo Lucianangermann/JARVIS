@@ -29,7 +29,8 @@ from .email import ExtendedEmailManager
 from .social import SocialManager
 from .automation import CommunicationAutomation
 
-_CONFIRM_WORDS = ("ja", "bestätigen", "bestätige", "senden", "send", "ok", "okay")
+_CONFIRM_WORDS = ("ja", "j", "jo", "bestätigen", "bestätige", "senden", "send",
+                  "ok", "okay", "sicher", "klar", "mach es", "tue es")
 _CANCEL_WORDS = ("nein", "abbrechen", "abbruch", "stop", "cancel", "nicht senden")
 
 

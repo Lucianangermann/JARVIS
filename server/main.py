@@ -529,17 +529,27 @@ async def lifespan(app: FastAPI):
 
             # Startup greeting — speaks after a brief pause so the audio
             # system is fully initialised before the first TTS call.
+            # Uses session_greeting() which includes open Karteikarten,
+            # Lernziele, overdue tasks, etc. so JARVIS is immediately
+            # informative instead of just saying "Ich bin online".
             def _startup_greeting() -> None:
                 import time as _time
                 _time.sleep(2.5)
                 try:
-                    _hour = _time.localtime().tm_hour
-                    if _hour < 12:
-                        _msg = "Guten Morgen, Lucian. Ich bin online und einsatzbereit."
-                    elif _hour < 18:
-                        _msg = "Guten Mittag, Lucian. Ich bin online und einsatzbereit."
-                    else:
-                        _msg = "Guten Abend, Lucian. Ich bin online und einsatzbereit."
+                    from .intelligence.routines import session_greeting as _sg
+                    _msg = _sg(client=True)
+                except Exception:  # noqa: BLE001
+                    try:
+                        _hour = _time.localtime().tm_hour
+                        if _hour < 12:
+                            _msg = "Guten Morgen, Lucian. Ich bin online und einsatzbereit."
+                        elif _hour < 18:
+                            _msg = "Guten Mittag, Lucian. Ich bin online und einsatzbereit."
+                        else:
+                            _msg = "Guten Abend, Lucian. Ich bin online und einsatzbereit."
+                    except Exception:  # noqa: BLE001
+                        _msg = "JARVIS online."
+                try:
                     if tts is not None:
                         tts.speak(_msg)
                 except Exception as _exc:  # noqa: BLE001

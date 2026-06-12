@@ -22,7 +22,7 @@ from .imessage import iMessageController
 from .telegram_bot import TelegramController
 from .whatsapp import WhatsAppReader
 
-_PENDING_TTL_S = 30.0
+_PENDING_TTL_S = 120.0
 _BROADCAST_RATE_S = 2.0  # 1 message / 2 s (spec)
 
 
@@ -62,9 +62,13 @@ class MessagingManager:
             # WhatsApp send is synchronous (URL scheme + System Events) and
             # returns a status string, not a bool. Run it in a thread so the
             # 1.5s UI-settle sleep doesn't block the event loop.
-            status = await asyncio.to_thread(self.whatsapp.send, contact, message)
-            print(f"[Messaging] whatsapp: {status}")
-            return "gesendet" in status
+            try:
+                status = await asyncio.to_thread(self.whatsapp.send, contact, message)
+                print(f"[Messaging] whatsapp: {status}")
+                return "gesendet" in status
+            except Exception as exc:  # noqa: BLE001
+                print(f"[Messaging] whatsapp send error: {exc}")
+                return False
         return await ctrl.send(contact, message)
 
     # ── unread aggregation ─────────────────────────────────────────────── #
@@ -243,14 +247,20 @@ class MessagingManager:
         if pending_id is not None and self._pending.get("id") != pending_id:
             return "Bestätigungs-ID passt nicht."
         pending = self._pending
-        self._pending = None
+        # Clear pending AFTER the send so a failed send can be retried.
         sends = pending["sends"]
         ok = 0
-        for i, (platform, contact, message) in enumerate(sends):
-            if i > 0 and pending["kind"] == "broadcast":
-                await asyncio.sleep(_BROADCAST_RATE_S)  # rate limit
-            if await self._raw_send(platform, contact, message):
-                ok += 1
+        try:
+            for i, (platform, contact, message) in enumerate(sends):
+                if i > 0 and pending["kind"] == "broadcast":
+                    await asyncio.sleep(_BROADCAST_RATE_S)  # rate limit
+                if await self._raw_send(platform, contact, message):
+                    ok += 1
+        except Exception as exc:  # noqa: BLE001
+            print(f"[Messaging] confirm_pending error: {exc}")
+            return "Senden fehlgeschlagen."
+        finally:
+            self._pending = None  # always clear, success or failure
         if pending["kind"] == "broadcast":
             return f"An {ok} von {len(sends)} Kontakte gesendet."
         return "Nachricht gesendet." if ok else "Senden fehlgeschlagen."
