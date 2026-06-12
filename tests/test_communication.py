@@ -182,6 +182,69 @@ def test_imessage_send_is_injection_safe(monkeypatch, tmp_path: Path) -> None:
     assert evil not in seen["script"]       # … never interpolated
 
 
+# ── WhatsApp (synthetic ChatStorage.sqlite) ─────────────────────────────── #
+
+def _make_wa_db(path: Path) -> None:
+    import sqlite3
+    c = sqlite3.connect(path)
+    c.executescript(
+        "CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, ZPARTNERNAME TEXT,"
+        " ZCONTACTJID TEXT, ZUNREADCOUNT INTEGER, ZARCHIVED INTEGER, ZHIDDEN INTEGER,"
+        " ZLASTMESSAGEDATE REAL, ZLASTMESSAGETEXT TEXT);"
+        "CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INTEGER,"
+        " ZPUSHNAME TEXT, ZFROMJID TEXT, ZTEXT TEXT, ZMESSAGEDATE REAL,"
+        " ZISFROMME INTEGER, ZMESSAGETYPE INTEGER);")
+    c.execute("INSERT INTO ZWACHATSESSION VALUES "
+              "(1,'Mama','491701234567@s.whatsapp.net',2,0,0,800000000,'Hallo')")
+    c.execute("INSERT INTO ZWACHATSESSION VALUES "
+              "(2,'Fußball Gruppe','120363@g.us',5,0,0,800000100,'Training')")
+    c.execute("INSERT INTO ZWAMESSAGE VALUES (1,1,'Mama','491701234567@s.whatsapp.net',"
+              "'Kommst du heim?',800000000,0,0)")
+    c.commit()
+    c.close()
+
+
+def test_whatsapp_unread_and_resolve(tmp_path: Path) -> None:
+    from server.communication.messaging.whatsapp import WhatsAppReader
+    db = tmp_path / "ChatStorage.sqlite"
+    _make_wa_db(db)
+    wa = WhatsAppReader(db_path=db)
+    assert wa.available
+    chats = wa.get_unread_chats()
+    assert any(c.name == "Mama" and c.unread == 2 for c in chats)
+    # 1:1 chat resolves to a phone; group chat (@g.us) does not.
+    assert wa.resolve_phone("Mama") == ("Mama", "491701234567")
+    assert wa.resolve_phone("Fußball") is None
+
+
+def test_whatsapp_send_opens_url_and_presses_return(tmp_path: Path, monkeypatch) -> None:
+    from server.communication.messaging import whatsapp as wamod
+    db = tmp_path / "ChatStorage.sqlite"
+    _make_wa_db(db)
+    calls = []
+    monkeypatch.setattr(wamod, "osa",
+                        lambda script, *a, **k: calls.append((script, a)) or "ok")
+    monkeypatch.setattr(wamod.time, "sleep", lambda *_: None)  # no 1.5s wait
+    wa = wamod.WhatsAppReader(db_path=db)
+    status = wa.send("Mama", "Bin gleich da")
+    assert "gesendet" in status
+    # First osa call opens the whatsapp:// URL with the resolved phone + text.
+    open_url = calls[0][1][0]
+    assert open_url.startswith("whatsapp://send?phone=491701234567")
+    assert "Bin%20gleich%20da" in open_url
+    # A later call presses Return (key code 36) to actually send.
+    assert any("key code 36" in script for script, _ in calls)
+
+
+def test_whatsapp_send_unknown_contact(tmp_path: Path) -> None:
+    from server.communication.messaging.whatsapp import WhatsAppReader
+    db = tmp_path / "ChatStorage.sqlite"
+    _make_wa_db(db)
+    wa = WhatsAppReader(db_path=db)
+    status = wa.send("Niemand", "test")
+    assert "keine WhatsApp-Nummer" in status.lower() or "konnte keine" in status.lower()
+
+
 # ── emergency contact fan-out ───────────────────────────────────────────── #
 
 class _FakeIMessage:

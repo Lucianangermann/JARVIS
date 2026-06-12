@@ -367,7 +367,10 @@ class CommunicationManager:
             return "Wem soll ich was schreiben? Format: schreib Name: Nachricht."
         contact, message = body.split(":", 1)
         contact, message = contact.strip(), message.strip()
-        platform = "telegram" if "telegram" in command.lower() else "imessage"
+        cl = command.lower()
+        platform = ("whatsapp" if "whatsapp" in cl
+                    else "telegram" if "telegram" in cl
+                    else "imessage")
         r = await self.messaging.send(platform, contact, message)
         return r["preview"]
 

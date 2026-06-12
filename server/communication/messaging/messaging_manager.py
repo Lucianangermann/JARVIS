@@ -35,7 +35,7 @@ class MessagingManager:
         self._client = client
         self.imessage = iMessageController(db=db)
         self.telegram = telegram or TelegramController(db=db)
-        self.whatsapp = WhatsAppReader()
+        self.whatsapp = WhatsAppReader(comm_db=db)
         # One pending send/broadcast awaiting confirmation.
         self._pending: dict[str, Any] | None = None
 
@@ -58,6 +58,13 @@ class MessagingManager:
             if not contact or contact in ("self", "me"):
                 return await self.telegram.send_to_self(message)
             return await self.telegram.send(contact, message)
+        if platform == "whatsapp":
+            # WhatsApp send is synchronous (URL scheme + System Events) and
+            # returns a status string, not a bool. Run it in a thread so the
+            # 1.5s UI-settle sleep doesn't block the event loop.
+            status = await asyncio.to_thread(self.whatsapp.send, contact, message)
+            print(f"[Messaging] whatsapp: {status}")
+            return "gesendet" in status
         return await ctrl.send(contact, message)
 
     # ── unread aggregation ─────────────────────────────────────────────── #

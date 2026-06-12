@@ -449,10 +449,11 @@ def _apple_tools() -> list[dict[str, Any]]:
         {
             "name": "send_imessage",
             "description": (
-                "Send a TEXT message to a person via iMessage/SMS (Messages.app). "
+                "Send a TEXT message to a person via iMessage/SMS OR WhatsApp. "
                 "Use this for ANY request to text, message, or write to someone — "
-                "e.g. 'schreib/schreibe/schick/sende ... eine Nachricht/iMessage/SMS' "
-                "or 'text X'. This is the texting channel. apple_mail is for EMAIL "
+                "e.g. 'schreib/schreibe/schick/sende ... eine Nachricht/iMessage/SMS/"
+                "WhatsApp' or 'text X'. Set platform='whatsapp' when the user says "
+                "WhatsApp, otherwise default 'imessage'. apple_mail is for EMAIL "
                 "only — never send a text message as an email. The recipient is a "
                 "contact name, phone number, or iMessage email. The user is asked to "
                 "confirm before it actually sends, so just call this with the details."
@@ -462,6 +463,8 @@ def _apple_tools() -> list[dict[str, Any]]:
                 "properties": {
                     "to": {"type": "string", "description": "Recipient: contact name, phone number (+49…), or iMessage email"},
                     "message": {"type": "string", "description": "The text message body to send"},
+                    "platform": {"type": "string", "enum": ["imessage", "whatsapp"],
+                                 "description": "Channel: 'whatsapp' if the user said WhatsApp, else 'imessage' (default)"},
                 },
                 "required": ["to", "message"],
                 "additionalProperties": False,
@@ -1961,19 +1964,22 @@ class Brain:
         inp = tool_input or {}
         to = (inp.get("to") or "").strip()
         message = (inp.get("message") or "").strip()
+        platform = (inp.get("platform") or "imessage").strip().lower()
+        if platform not in ("imessage", "whatsapp"):
+            platform = "imessage"
         if not to or not message:
             return "to und message sind erforderlich.", True
         import asyncio as _aio
         from . import events as _events
         try:
-            coro = messaging.send("imessage", to, message)
+            coro = messaging.send(platform, to, message)
             main_loop = _events._loop
             if main_loop is not None and main_loop.is_running():
                 r = _aio.run_coroutine_threadsafe(coro, main_loop).result(timeout=25)
             else:
                 r = _aio.run(coro)
         except Exception as exc:  # noqa: BLE001
-            return f"iMessage-Versand fehlgeschlagen: {exc}", True
+            return f"{platform}-Versand fehlgeschlagen: {exc}", True
         return r.get("preview", "Nachricht vorbereitet. Bestätigen?"), False
 
     def _exec_apple_mail(self, tool_input: dict[str, Any]) -> tuple[str, bool]:

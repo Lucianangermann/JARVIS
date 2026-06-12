@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..applescript import osa, ASError
+
 _CHAT_DB = (
     Path.home()
     / "Library"
@@ -62,10 +64,12 @@ class WAChat:
 
 
 class WhatsAppReader:
-    """Read-only WhatsApp message access via ChatStorage.sqlite."""
+    """WhatsApp access: reads messages from ChatStorage.sqlite, sends via
+    the whatsapp:// URL scheme + System Events."""
 
-    def __init__(self, db_path: Path | str = _CHAT_DB) -> None:
-        self._db = Path(db_path)
+    def __init__(self, db_path: Path | str = _CHAT_DB, comm_db: Any = None) -> None:
+        self._db = Path(db_path)          # the WhatsApp chat.db (read)
+        self._comm_db = comm_db           # CommunicationDB for send logging
 
     @property
     def available(self) -> bool:
@@ -227,6 +231,93 @@ class WhatsAppReader:
             ts = time.strftime("%H:%M", time.localtime(m.timestamp))
             lines.append(f"{ts} {m.sender}: {m.text[:80]}")
         return f"WhatsApp – {msgs[0].chat_name}. " + ". ".join(lines) + "."
+
+    # ── sending ──────────────────────────────────────────────────────── #
+
+    def resolve_phone(self, contact: str) -> tuple[str, str] | None:
+        """Look up a contact's phone number from the chat DB by name.
+
+        Returns (display_name, phone_digits) or None. Only resolves 1:1
+        chats (ZCONTACTJID like '4915...@s.whatsapp.net') — group chats
+        (@g.us) have no single phone and are skipped for sending."""
+        conn = self._connect()
+        if conn is None:
+            return None
+        try:
+            cur = conn.execute(
+                """
+                SELECT ZPARTNERNAME, ZCONTACTJID FROM ZWACHATSESSION
+                WHERE  lower(ZPARTNERNAME) LIKE lower(?)
+                  AND  ZCONTACTJID LIKE '%@s.whatsapp.net'
+                  AND  ZARCHIVED = 0
+                ORDER  BY ZLASTMESSAGEDATE DESC
+                LIMIT  1
+                """,
+                (f"%{contact}%",),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            name, jid = row[0] or contact, row[1] or ""
+            phone = jid.split("@")[0]
+            if not phone.isdigit():
+                return None
+            return (name, phone)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WhatsApp] resolve_phone failed: {exc}")
+            return None
+        finally:
+            conn.close()
+
+    def send(self, contact: str, message: str, *, auto_send: bool = True) -> str:
+        """Send a WhatsApp message to ``contact``.
+
+        Resolves the contact name to a phone number via the chat DB, opens
+        the chat with the message prefilled via the whatsapp:// URL scheme,
+        then (if auto_send) presses Return via System Events to send.
+
+        Requires: WhatsApp signed in + running, and Accessibility permission
+        for the controlling app (Electron/Terminal) to send the keystroke.
+        Returns a spoken-style status string. The CALLER owns the
+        confirm-before-send gate — this is the raw transport."""
+        from urllib.parse import quote
+
+        resolved = self.resolve_phone(contact)
+        if resolved is None:
+            return (f"Ich konnte keine WhatsApp-Nummer für '{contact}' finden. "
+                    f"Schreib der Person einmal manuell, dann kenne ich den Chat.")
+        name, phone = resolved
+
+        # Open the chat with the text prefilled.
+        url = f"whatsapp://send?phone={phone}&text={quote(message)}"
+        try:
+            osa('on run argv\nopen location (item 1 of argv)\nend run', url)
+        except ASError as exc:
+            return f"Konnte WhatsApp nicht öffnen: {exc}"
+
+        if not auto_send:
+            return (f"WhatsApp-Chat mit {name} ist geöffnet, die Nachricht ist "
+                    f"vorbereitet. Drück Enter zum Senden.")
+
+        # Give WhatsApp a moment to focus the message field, then press Return.
+        time.sleep(1.5)
+        press_return = (
+            'tell application "WhatsApp" to activate\n'
+            'delay 0.4\n'
+            'tell application "System Events" to key code 36\n'  # 36 = Return
+        )
+        try:
+            osa(press_return)
+        except ASError as exc:
+            return (f"Nachricht für {name} vorbereitet, aber das automatische "
+                    f"Senden ging nicht ({exc}). Drück Enter im WhatsApp-Fenster.")
+        if self._comm_db is not None:
+            try:
+                self._comm_db.log_message("whatsapp", "out", name, message,
+                                          delivered=True)
+            except Exception:  # noqa: BLE001
+                pass
+        return f"WhatsApp-Nachricht an {name} gesendet."
 
 
 def _extract_last_text(raw: str | None) -> str:
