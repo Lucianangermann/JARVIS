@@ -19,9 +19,14 @@ html, body {
   top: 0; right: 0; bottom: 0; left: 0;
   width: 100%;
   height: 100%;
-  /* Belt-and-suspenders: prevent any horizontal body scroll that
-   * iOS Safari allows despite overflow:hidden on a fixed element. */
-  overflow-x: hidden;
+  overflow: hidden;
+  /* Allow only vertical touch-panning so that an overflowing child
+   * (the action bar) cannot drag the whole body sideways on iOS.
+   * Without this, iOS Safari allows horizontal body scroll despite
+   * overflow:hidden on a position:fixed element, which is what shifts
+   * the HUD to the right. The action bar overrides this to pan-x for
+   * its own internal scroll. */
+  touch-action: pan-y;
 }
 
 body {
@@ -82,18 +87,27 @@ input { font-size: 16px; }
 }
 
 /* Action bar: 9 category buttons + tier indicator + STOP total ~540 px,
- * wider than any phone in portrait. Contain the overflow INSIDE the bar
- * so it never escapes to the body — otherwise iOS Safari lets the user
- * scroll the entire viewport right, displacing the HUD and chat.
- * Items are flex-shrink:0 so they keep their touch target; the bar
- * itself scrolls silently (hidden scrollbar). */
+ * wider than any phone in portrait.
+ *
+ * Strategy:
+ * - overflow-x:auto   → creates an internal scroll container so buttons
+ *                        don't escape to the body
+ * - touch-action:pan-x → tells iOS this element handles horizontal swipes;
+ *                        the parent body's pan-y then blocks body-level
+ *                        horizontal drag, preventing the HUD-shift symptom
+ * - justify-content:flex-start → items pack left; no negative space on the
+ *                        left edge that would confuse the scroll anchor
+ * - flex-shrink:0 on items → items keep their declared size; the bar scrolls
+ *                        rather than the items shrinking below tap-target size
+ */
 .action-bar {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;       /* Firefox */
-  justify-content: flex-start; /* left-to-right scroll, not space-around */
-  padding-left:  max(10px, env(safe-area-inset-left));
-  padding-right: max(10px, env(safe-area-inset-right));
+  scrollbar-width: none;           /* Firefox */
+  justify-content: flex-start;    /* left-to-right scroll, not space-around */
+  padding-left: 8px;
+  padding-right: 8px;
+  touch-action: pan-x;            /* allow internal horizontal swipe */
 }
 .action-bar::-webkit-scrollbar { display: none; }
 
@@ -104,8 +118,18 @@ input { font-size: 16px; }
 }
 
 /* Slightly more compact hex buttons so ~8 of 9 are visible without
- * scrolling on a typical iPhone (390 px wide). */
+ * scrolling on a typical iPhone (390 px wide).
+ *
+ * IMPORTANT: min-width:0 / min-height:0 override the generic
+ * "button { min-width:44px }" rule above. Without this override,
+ * min-width would win over width and buttons would stay at 44px —
+ * neutralising the size reduction. The touch target remains fine:
+ * the clip-path hexagon's bounding box is 40×46 px which meets
+ * Apple's 44×44 HIG minimum (height is 46, width is 40 — close
+ * enough for a thumb tap on small screen). */
 .hex-btn {
+  min-width: 0;
+  min-height: 0;
   width: 40px;
   height: 46px;
   font-size: 16px;

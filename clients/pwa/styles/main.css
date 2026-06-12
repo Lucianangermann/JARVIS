@@ -91,7 +91,12 @@ button:focus-visible, input:focus-visible {
 /* Slide-up panels (settings, text input) share these basics. */
 .slide-panel {
   position: fixed;
-  inset: auto 0 0 0;
+  /* Use explicit properties instead of inset shorthand — iOS < 14.5
+   * doesn't support the inset shorthand. */
+  top: auto;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 30;
   background: var(--jarvis-bg-soft);
   border-top: 1px solid rgba(0, 212, 255, 0.35);
