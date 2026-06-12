@@ -420,8 +420,59 @@ def _check_productivity_slump(engine: ProactiveEngine) -> str | None:
     last_ts = hist[-1][0]
     if (now - last_ts) < timedelta(minutes=60):
         return None
+    try:
+        from pathlib import Path
+        from ..productivity.task_manager import TaskManager
+        tm = TaskManager(Path("data/jarvis.db"))
+        try:
+            tasks = tm.get_today_tasks()
+        finally:
+            conn = getattr(tm, "_conn", None)
+            if conn is not None:
+                conn.close()
+        if tasks:
+            names = ", ".join(t["title"] for t in tasks[:3])
+            extra = " ..." if len(tasks) > 3 else ""
+            return (f"Ruhiger Nachmittag. Offene Tasks: {names}{extra}. "
+                    "Womit fangen wir an?")
+    except Exception:  # noqa: BLE001
+        pass
     return ("Ruhiger Nachmittag. Soll ich die offenen Punkte für heute "
             "kurz zusammenfassen?")
+
+
+def _check_budget_warning(engine: ProactiveEngine) -> str | None:
+    """Fire when any tracked budget category is ≥ 80 % spent."""
+    try:
+        from pathlib import Path
+        from ..finance import FinanceManager
+        fm = FinanceManager(Path("data/finance.db"))
+        try:
+            rows = fm.expenses.budget_status()
+        finally:
+            conn = getattr(fm.expenses, "_db", None)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        if not rows:
+            return None
+        warnings = [
+            r for r in rows
+            if r["limit"] > 0 and r["spent"] / r["limit"] >= 0.80
+        ]
+        if not warnings:
+            return None
+        parts = [
+            f"{r['category']} ({r['spent']:.0f}/{r['limit']:.0f} {r['currency']})"
+            for r in warnings[:3]
+        ]
+        plural = "s" if len(warnings) != 1 else ""
+        return (f"Budget-Warnung: {len(warnings)} Kategorie{plural} fast aufgebraucht — "
+                + ", ".join(parts) + ".")
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _check_forgotten_task(engine: ProactiveEngine) -> str | None:
@@ -655,5 +706,13 @@ def _build_specs() -> tuple[NotificationSpec, ...]:
             max_per_day=1,
             active_hours=(17, 22),
             check=_check_lernziel_reminder,
+        ),
+        NotificationSpec(
+            name="budget_warning",
+            priority="medium",
+            cooldown_minutes=6 * 60,
+            max_per_day=1,
+            active_hours=(8, 21),
+            check=_check_budget_warning,
         ),
     )

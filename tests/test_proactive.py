@@ -77,6 +77,7 @@ def test_registry_has_all_triggers():
         "important_email", "weather_morning", "package_delivery",
         "hydration", "forgotten_task", "productivity_slump",
         "morning_learning", "flashcard_due", "lernziel_reminder",
+        "budget_warning",
     }
 
 
