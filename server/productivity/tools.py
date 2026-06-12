@@ -207,12 +207,14 @@ def productivity_tools() -> list[dict[str, Any]]:
         {
             "name": "schedule_action",
             "description": (
-                "Schedule a deferred reminder that JARVIS itself will speak / "
-                "push (via Telegram) at a future time — for 'erinnere mich in "
-                "2 Stunden an X', 'um 18 Uhr Y', 'morgen früh Z'. YOU compute "
-                "the timing: pass delay_minutes (minutes from now) OR at "
-                "(today/tomorrow 'HH:MM'). action='schedule' (default) needs "
-                "message; 'list' shows pending; 'cancel' needs id."
+                "Schedule a deferred reminder that JARVIS will SPEAK ALOUD at "
+                "a future time — for 'erinnere mich in 2 Stunden an X', 'um 18 "
+                "Uhr Y', 'morgen um 9 Z'. YOU compute the timing: pass "
+                "delay_minutes (minutes from now) OR at ('HH:MM') optionally "
+                "combined with date ('morgen', 'übermorgen', or 'YYYY-MM-DD'). "
+                "Without a date, a past 'HH:MM' rolls to tomorrow. "
+                "action='schedule' (default) needs message; 'list' shows "
+                "pending; 'cancel' needs id."
             ),
             "input_schema": {
                 "type": "object",
@@ -224,8 +226,10 @@ def productivity_tools() -> list[dict[str, Any]]:
                     "delay_minutes": {"type": "integer",
                                       "description": "Minutes from now."},
                     "at": {"type": "string",
-                           "description": "Clock time 'HH:MM' (today, or "
-                                          "tomorrow if already past)."},
+                           "description": "Clock time 'HH:MM'."},
+                    "date": {"type": "string",
+                             "description": "Optional date for 'at': 'morgen', "
+                                            "'übermorgen', or 'YYYY-MM-DD'."},
                     "id": {"type": "integer", "description": "Trigger id (cancel)."},
                 },
                 "required": [],

@@ -98,14 +98,16 @@ def _mac_action_tool() -> dict[str, Any]:
             "    capped at 1000 chars in the return value. Only use this when\n"
             "    open_app or a more specific action (create_note, music_transport,\n"
             "    …) doesn't fit.\n"
-            "  list_dir(path), read_file(path), create_file(path, content),\n"
+            "  list_dir(path), read_file(path, page), create_file(path, content),\n"
             "  edit_file(path, content, mode), create_dir(path),\n"
             "  rename(path, new_name), move(src, dst), trash(path)\n"
             "    — paths are sandboxed to ~/Desktop, ~/Downloads, ~/Documents\n"
             "    (and their subfolders). read_file extracts text from PDFs\n"
-            "    too. edit_file changes an EXISTING text file; mode is\n"
-            "    'overwrite' (default) or 'append'. Every file action needs\n"
-            "    the user's confirmation (Tier 3) before it runs.\n"
+            "    too. For LONG PDFs, read_file(path) first returns the total\n"
+            "    page count — then call read_file(path, page=N) to read ONE\n"
+            "    page at a time (1-based) to keep context small. edit_file\n"
+            "    changes an EXISTING text file; mode is 'overwrite' (default)\n"
+            "    or 'append'.\n"
             "  terminal(command, args)  # command ∈ {say, caffeinate, display_sleep, mac_sleep}\n"
             "  install_app(pkg), uninstall_app(pkg)  # brew package names\n"
             "  open_prefs_pane(pane), screenshot()   # Tier 3 — simple confirm\n"
@@ -510,6 +512,38 @@ def _apple_tools() -> list[dict[str, Any]]:
                     },
                     "date_from": {"type": "string", "description": "Start date YYYY-MM-DD (for range)"},
                     "date_to":   {"type": "string", "description": "End date YYYY-MM-DD (for range)"},
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "track_task",
+            "description": (
+                "Persistent progress notepad for LONG multi-step tasks "
+                "(writing a big document section by section, processing many "
+                "items). Survives context resets and restarts. ALWAYS use this "
+                "for any task with 3+ steps so you can resume after an "
+                "interruption instead of starting over.\n"
+                "- action='save': write the current progress. Pass 'name' (a "
+                "short task id like 'lernziele_loesungen') and 'progress' (what "
+                "is done + what remains, e.g. 'Lernziele 1-3 erledigt, 4-8 "
+                "offen. Datei: loesungen_m4.txt').\n"
+                "- action='load': read back the saved progress for 'name'. Call "
+                "this at the START of a task to check if you were already "
+                "working on it.\n"
+                "- action='list': show all tracked tasks.\n"
+                "- action='done': mark task 'name' complete (deletes the note)."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["save", "load", "list", "done"]},
+                    "name": {"type": "string",
+                             "description": "Short task id (kebab-case)."},
+                    "progress": {"type": "string",
+                                 "description": "Progress note (for save)."},
                 },
                 "required": ["action"],
                 "additionalProperties": False,
@@ -1551,6 +1585,7 @@ class Brain:
             "apple_mail":        self._exec_apple_mail,
             "send_imessage":     self._exec_send_imessage,
             "get_calendar":      self._exec_get_calendar,
+            "track_task":        self._exec_track_task,
             "safari_control":    self._exec_safari_control,
             "finance":           self._exec_finance,
         }
@@ -1853,6 +1888,65 @@ class Brain:
             loc = f" ({ev.location})" if ev.location else ""
             lines.append(f"{start_str}–{end_str}: {ev.title}{loc}")
         return "\n".join(lines), False
+
+    def _exec_track_task(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        """Persistent progress notepad for long multi-step tasks. Plain text
+        files under ~/.jarvis/tasks/ so a context reset or restart never
+        loses where JARVIS was."""
+        import re as _re
+        from pathlib import Path as _Path
+        task_dir = _Path.home() / ".jarvis" / "tasks"
+        inp = tool_input or {}
+        action = inp.get("action", "load")
+        try:
+            task_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            return f"Task-Ordner nicht verfügbar: {exc}", True
+
+        def _safe(name: str) -> str:
+            return _re.sub(r"[^a-z0-9_-]", "", (name or "").lower())[:60]
+
+        if action == "list":
+            files = sorted(task_dir.glob("*.txt"))
+            if not files:
+                return "Keine laufenden Aufgaben gespeichert.", False
+            names = ", ".join(f.stem for f in files)
+            return f"Laufende Aufgaben: {names}.", False
+
+        name = _safe(inp.get("name", ""))
+        if not name:
+            return "name ist erforderlich (kurze Aufgaben-ID).", True
+        path = task_dir / f"{name}.txt"
+
+        if action == "save":
+            progress = inp.get("progress", "")
+            if not progress:
+                return "progress ist erforderlich.", True
+            import datetime as _dt
+            stamp = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+            try:
+                path.write_text(f"[{stamp}]\n{progress}", encoding="utf-8")
+            except Exception as exc:  # noqa: BLE001
+                return f"Speichern fehlgeschlagen: {exc}", True
+            return f"Fortschritt für '{name}' gespeichert.", False
+
+        if action == "load":
+            if not path.is_file():
+                return (f"Keine gespeicherte Aufgabe '{name}' — das ist neu.", False)
+            try:
+                return path.read_text(encoding="utf-8"), False
+            except Exception as exc:  # noqa: BLE001
+                return f"Laden fehlgeschlagen: {exc}", True
+
+        if action == "done":
+            try:
+                if path.is_file():
+                    path.unlink()
+                return f"Aufgabe '{name}' als erledigt markiert.", False
+            except Exception as exc:  # noqa: BLE001
+                return f"Konnte nicht abschließen: {exc}", True
+
+        return f"Unbekannte action: {action}", True
 
     def _exec_send_imessage(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
         """Send a text via iMessage through the communication layer's
@@ -2209,21 +2303,40 @@ class Brain:
                 elif inp.get("at"):
                     try:
                         hh, mm = (int(x) for x in str(inp["at"]).split(":"))
-                        now = _t.localtime()
-                        import time as _tt
-                        target = _tt.struct_time((now.tm_year, now.tm_mon,
-                            now.tm_mday, hh, mm, 0, now.tm_wday, now.tm_yday,
-                            now.tm_isdst))
-                        fire_at = _tt.mktime(target)
-                        if fire_at <= _t.time():
-                            fire_at += 86400  # already past → tomorrow
                     except Exception:  # noqa: BLE001
-                        return "Konnte die Zeit nicht verstehen.", True
+                        return "Konnte die Uhrzeit nicht verstehen (HH:MM).", True
+                    import datetime as _dt
+                    now_dt = _dt.datetime.now()
+                    # Optional explicit date: 'YYYY-MM-DD', or 'morgen' /
+                    # 'übermorgen' day-offset shortcut.
+                    base = now_dt
+                    date_str = str(inp.get("date", "")).strip().lower()
+                    if date_str in ("morgen", "tomorrow"):
+                        base = now_dt + _dt.timedelta(days=1)
+                    elif date_str in ("übermorgen", "uebermorgen"):
+                        base = now_dt + _dt.timedelta(days=2)
+                    elif date_str:
+                        try:
+                            d = _dt.date.fromisoformat(date_str)
+                            base = _dt.datetime(d.year, d.month, d.day)
+                        except ValueError:
+                            return "Datum bitte als 'YYYY-MM-DD', 'morgen' oder 'übermorgen'.", True
+                    target = base.replace(hour=hh, minute=mm, second=0, microsecond=0)
+                    # Without an explicit date, roll a past time to tomorrow.
+                    if not date_str and target <= now_dt:
+                        target += _dt.timedelta(days=1)
+                    fire_at = target.timestamp()
                 if fire_at is None:
-                    return "Sag mir, wann (in X Minuten oder um HH:MM).", True
+                    return "Sag mir, wann (in X Minuten oder um HH:MM, optional mit Datum).", True
                 trg.add(fire_at, message)
-                when = _t.strftime("%H:%M", _t.localtime(fire_at))
-                return f"Erinnerung um {when} gesetzt: {message}.", False
+                # Speak a friendly confirmation: include the day if not today.
+                import datetime as _dt2
+                fire_dt = _dt2.datetime.fromtimestamp(fire_at)
+                if fire_dt.date() == _dt2.date.today():
+                    when = fire_dt.strftime("%H:%M Uhr")
+                else:
+                    when = fire_dt.strftime("%d.%m. um %H:%M Uhr")
+                return f"Erinnerung für {when} gesetzt: {message}.", False
 
             if tool_name == "meeting_control":
                 meeting = getattr(pm, "meeting", None)

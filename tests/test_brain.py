@@ -94,6 +94,36 @@ def test_send_imessage_requires_to_and_message(brain: Brain) -> None:
     assert is_err is True and "erforderlich" in out
 
 
+def test_track_task_save_load_done_cycle(brain: Brain) -> None:
+    """Persistent task notes survive across calls and clean up on done."""
+    out, err = brain._exec_track_task(
+        {"action": "save", "name": "pytest-track",
+         "progress": "Schritt 1 fertig, 2-3 offen"})
+    assert err is False and "gespeichert" in out
+    loaded, err = brain._exec_track_task({"action": "load", "name": "pytest-track"})
+    assert err is False and "Schritt 1 fertig" in loaded
+    listed, _ = brain._exec_track_task({"action": "list"})
+    assert "pytest-track" in listed
+    done, err = brain._exec_track_task({"action": "done", "name": "pytest-track"})
+    assert err is False
+    # After done, load reports it's new/gone.
+    gone, err = brain._exec_track_task({"action": "load", "name": "pytest-track"})
+    assert err is False and ("neu" in gone or "Keine" in gone)
+
+
+def test_track_task_requires_name(brain: Brain) -> None:
+    out, err = brain._exec_track_task({"action": "save", "progress": "x"})
+    assert err is True and "name ist erforderlich" in out
+
+
+def test_schedule_action_with_date_morgen(brain: Brain) -> None:
+    """schedule_action accepts date='morgen' with a clock time."""
+    out, err = brain._exec_productivity(
+        "schedule_action",
+        {"action": "schedule", "message": "Test", "at": "09:00", "date": "morgen"})
+    assert err is False and "gesetzt" in out
+
+
 def test_short_circuit_swallows_handler_errors(brain: Brain) -> None:
     class _Boom:
         async def process_command(self, text):

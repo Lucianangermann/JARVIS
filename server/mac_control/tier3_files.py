@@ -146,9 +146,15 @@ def _list_dir(*, path: str = "~/Desktop", **_kw) -> str:
     return f"{d}:\n" + "\n".join(items[:200])  # cap at 200 entries
 
 
-def _read_pdf(f: Path) -> str:
+def _read_pdf(f: Path, page: int | None = None) -> str:
     """Extract text from a PDF (pypdf). Returns a clear note for scanned /
-    image-only PDFs (no extractable text) rather than garbage."""
+    image-only PDFs (no extractable text) rather than garbage.
+
+    If ``page`` is given (1-based), only that single page's text is returned
+    — cheap context-wise for long documents. Without ``page`` the whole PDF
+    is read (capped at MAX_PDF_PAGES / MAX_PDF_TEXT) and a leading line
+    reports the total page count so the caller can request specific pages.
+    """
     try:
         from pypdf import PdfReader
     except Exception:  # noqa: BLE001
@@ -161,36 +167,61 @@ def _read_pdf(f: Path) -> str:
                 reader.decrypt("")  # try empty password
             except Exception:  # noqa: BLE001
                 return "Die PDF ist passwortgeschützt — kann nicht gelesen werden."
+        total_pages = len(reader.pages)
+
+        # Single-page mode: 1-based page number.
+        if page is not None:
+            if page < 1 or page > total_pages:
+                return (f"Seite {page} existiert nicht — die PDF hat "
+                        f"{total_pages} Seite(n).")
+            t = (reader.pages[page - 1].extract_text() or "").strip()
+            if not t:
+                return (f"Seite {page} von {total_pages} enthält keinen "
+                        f"extrahierbaren Text (evtl. ein Bild/Diagramm).")
+            if len(t) > MAX_PDF_TEXT:
+                t = t[:MAX_PDF_TEXT] + "\n…(Text gekürzt)"
+            return f"[Seite {page} von {total_pages}]\n{t}"
+
+        # Full-document mode.
         parts: list[str] = []
-        for i, page in enumerate(reader.pages):
+        for i, pg in enumerate(reader.pages):
             if i >= MAX_PDF_PAGES:
                 parts.append(f"…(weitere Seiten ab {MAX_PDF_PAGES} ausgelassen)")
                 break
-            t = (page.extract_text() or "").strip()
+            t = (pg.extract_text() or "").strip()
             if t:
-                parts.append(t)
+                parts.append(f"[Seite {i + 1}]\n{t}")
         text = "\n\n".join(parts).strip()
         if not text:
             return ("Die PDF enthält keinen extrahierbaren Text — sie ist "
                     "wahrscheinlich gescannt (Bild-PDF). Ich könnte sie per "
                     "Bilderkennung lesen, falls gewünscht.")
+        header = (f"[PDF mit {total_pages} Seiten — für eine einzelne Seite "
+                  f"read_file mit page=N aufrufen]\n\n")
         if len(text) > MAX_PDF_TEXT:
-            text = text[:MAX_PDF_TEXT] + "\n…(Text gekürzt)"
-        return text
+            text = text[:MAX_PDF_TEXT] + "\n…(Text gekürzt — nutze page=N für gezielte Seiten)"
+        return header + text
     except Exception as exc:  # noqa: BLE001
         return f"PDF-Lesen fehlgeschlagen: {exc}"
 
 
-def _read_file(*, path: str = "", **_kw) -> str:
+def _read_file(*, path: str = "", page: int | None = None, **_kw) -> str:
     try:
         f = _validate_path(path, must_exist=True)
     except SandboxError as exc:
         return str(exc)
     if not f.is_file():
         return f"Keine Datei: {f}"
-    # PDFs: extract text rather than reading raw bytes as UTF-8.
+    # PDFs: extract text rather than reading raw bytes as UTF-8. The optional
+    # 'page' param (1-based) reads just one page — cheap for long documents.
     if f.suffix.lower() == ".pdf":
-        return _read_pdf(f)
+        pg = None
+        if page is not None:
+            try:
+                pg = int(page)
+            except (TypeError, ValueError):
+                return "page muss eine Zahl sein (1-basiert)."
+        return _read_pdf(f, page=pg)
     if f.stat().st_size > MAX_READ_BYTES:
         return f"Datei zu groß ({f.stat().st_size} B, Limit {MAX_READ_BYTES})."
     try:

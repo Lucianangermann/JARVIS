@@ -48,6 +48,19 @@ def test_read_pdf_extracts_text(sandbox) -> None:
     pdf.write_bytes(_make_pdf("Hallo Mechatronik M4 Inhalt"))
     out = t3._read_file(path=str(pdf))
     assert "Mechatronik" in out and "M4" in out
+    # Full read announces the page count so Claude can request pages.
+    assert "Seite" in out
+
+
+def test_read_pdf_single_page(sandbox) -> None:
+    pdf = sandbox / "doc.pdf"
+    pdf.write_bytes(_make_pdf("Seiteninhalt eins"))
+    # Page 1 returns just that page with a header.
+    out = t3._read_file(path=str(pdf), page=1)
+    assert "Seite 1" in out and "Seiteninhalt" in out
+    # Out-of-range page → clear error, not a crash.
+    oob = t3._read_file(path=str(pdf), page=99)
+    assert "existiert nicht" in oob
 
 
 def test_scanned_pdf_note(sandbox) -> None:
