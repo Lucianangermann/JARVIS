@@ -476,6 +476,81 @@ def _check_package_delivery(engine: ProactiveEngine) -> str | None:
     return None
 
 
+def _check_flashcard_due(engine: ProactiveEngine) -> str | None:
+    """Nudge when there are enough due flashcards to make a review session worthwhile."""
+    try:
+        from ..knowledge.flashcards import FlashcardManager
+        fm = FlashcardManager("data/knowledge.db")
+        try:
+            n = fm.due_count()
+        finally:
+            fm.close()
+        if n < 3:
+            return None
+        plural = "n" if n != 1 else ""
+        return f"Du hast {n} fällige Karteikarte{plural} zum Wiederholen."
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _check_lernziel_reminder(engine: ProactiveEngine) -> str | None:
+    """Evening nudge about still-open Lernziele so nothing slips through the day."""
+    try:
+        from ..knowledge.lerntrack import LerntrackDB
+        db = LerntrackDB("data/lerntrack.db")
+        try:
+            st = db.stats()
+            if st["total"] == 0 or st["offen"] == 0:
+                return None
+            open_rows = db.list_group(status="offen")[:2]
+        finally:
+            db.close()
+        names = ", ".join(r["display_name"] for r in open_rows)
+        extra = " ..." if st["offen"] > 2 else ""
+        plural = "e" if st["offen"] != 1 else ""
+        return (
+            f"Du hast noch {st['offen']} offene"
+            f" Lernziel{plural} für heute: {names}{extra}."
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _check_morning_learning(engine: ProactiveEngine) -> str | None:
+    """Morning overview: fällige Karteikarten + offene Lernziele in one sentence."""
+    parts: list[str] = []
+    try:
+        from ..knowledge.flashcards import FlashcardManager
+        fm = FlashcardManager("data/knowledge.db")
+        try:
+            n = fm.due_count()
+        finally:
+            fm.close()
+        if n > 0:
+            plural = "n" if n != 1 else ""
+            parts.append(f"{n} fällige Karteikarte{plural}")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from ..knowledge.lerntrack import LerntrackDB
+        db = LerntrackDB("data/lerntrack.db")
+        try:
+            st = db.stats()
+        finally:
+            db.close()
+        if st.get("offen", 0) > 0:
+            n = st["offen"]
+            plural = "e" if n != 1 else ""
+            parts.append(f"{n} offene Lernziel{plural}")
+    except Exception:  # noqa: BLE001
+        pass
+    if not parts:
+        return None
+    return "Lernstand heute: " + " und ".join(parts) + "."
+
+
 # -- registry build ------------------------------------------------------- #
 
 def _build_specs() -> tuple[NotificationSpec, ...]:
@@ -556,5 +631,29 @@ def _build_specs() -> tuple[NotificationSpec, ...]:
             max_per_day=2,
             active_hours=(13, 18),
             check=_check_productivity_slump,
+        ),
+        NotificationSpec(
+            name="morning_learning",
+            priority="low",
+            cooldown_minutes=12 * 60,
+            max_per_day=1,
+            active_hours=(7, 10),
+            check=_check_morning_learning,
+        ),
+        NotificationSpec(
+            name="flashcard_due",
+            priority="medium",
+            cooldown_minutes=4 * 60,
+            max_per_day=2,
+            active_hours=(8, 20),
+            check=_check_flashcard_due,
+        ),
+        NotificationSpec(
+            name="lernziel_reminder",
+            priority="low",
+            cooldown_minutes=6 * 60,
+            max_per_day=1,
+            active_hours=(17, 22),
+            check=_check_lernziel_reminder,
         ),
     )

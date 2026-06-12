@@ -70,12 +70,13 @@ def _spec(
 
 # --- registry ------------------------------------------------------------- #
 
-def test_registry_has_all_nine_triggers():
+def test_registry_has_all_triggers():
     names = {s.name for s in _build_specs()}
     assert names == {
         "battery_warning", "meeting_warning", "traffic_warning",
         "important_email", "weather_morning", "package_delivery",
         "hydration", "forgotten_task", "productivity_slump",
+        "morning_learning", "flashcard_due", "lernziel_reminder",
     }
 
 
