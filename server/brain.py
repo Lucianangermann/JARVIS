@@ -756,6 +756,7 @@ class Brain(
         # prompt builder. Falls back to in-memory only if storage can't
         # be opened — the brain keeps working either way.
         self.memory = MemoryManager()
+        self.memory.context_builder.client = self.client
         self._started_sessions: set[str] = set()
 
     def refresh_smarthome_tool(self) -> None:
@@ -1591,13 +1592,16 @@ class Brain(
             "safari_control":    self._exec_safari_control,
             "finance":           self._exec_finance,
         }
-        for n in ("analyze_screen", "check_screen_for_errors", "read_screen_text"):
+        for n in ("analyze_screen", "check_screen_for_errors", "read_screen_text",
+                  "scan_document", "translate_image", "identify_object"):
             h[n] = lambda inp, _n=n: self._exec_vision_tool(_n, inp)
         for n in ("manage_tasks", "manage_focus", "get_productivity_score",
                   "add_knowledge_note", "recall_knowledge", "flashcards",
                   "get_email_smart_summary", "meeting_control",
-                  "schedule_action"):
+                  "schedule_action", "search_memory", "track_mood",
+                  "self_reflect"):
             h[n] = lambda inp, _n=n: self._exec_productivity(_n, inp)
+        h["extract_lernziele"] = lambda inp: self._exec_extract_lernziele(inp)
         for n in ("play_mood_music", "manage_watchlist", "play_game",
                   "manage_gaming_mode", "get_birthdays", "get_news_briefing"):
             h[n] = lambda inp, _n=n: self._exec_entertainment(_n, inp)

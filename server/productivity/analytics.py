@@ -100,6 +100,75 @@ class ProductivityAnalytics:
             return {"score": 0.0, "tasks_done": 0, "tasks_planned": 0,
                     "focus_minutes": 0.0, "breakdown": {}}
 
+    def deep_work_blocks(self, since_ts: float | None = None) -> list[dict[str, Any]]:
+        """Time entries with duration >= 25 min (deep work threshold)."""
+        try:
+            if since_ts is None:
+                since_ts = _today_epoch()
+            cur = self._conn.execute(
+                """SELECT start_time, duration_minutes,
+                          COALESCE(project, task_title, 'Sonstiges') as label
+                   FROM time_entries
+                   WHERE start_time >= ? AND duration_minutes >= 25
+                   ORDER BY start_time DESC""",
+                (since_ts,),
+            )
+            return [{"start": r[0], "minutes": float(r[1]), "label": r[2]}
+                    for r in cur.fetchall()]
+        except Exception as exc:
+            print(f"[ProductivityAnalytics] deep_work_blocks failed: {exc}")
+            return []
+
+    def deadline_risk_score(self) -> dict[str, Any]:
+        """Tasks due within 3 days; risk score 0-100 (25 per at-risk task)."""
+        try:
+            cutoff = (date.today() + timedelta(days=3)).isoformat()
+            cur = self._conn.execute(
+                """SELECT id, title, due_date, status FROM tasks
+                   WHERE due_date IS NOT NULL AND due_date <= ?
+                   AND status NOT IN ('done', 'cancelled')
+                   ORDER BY due_date""",
+                (cutoff,),
+            )
+            rows = cur.fetchall()
+            tasks = [{"title": r["title"] or str(r["id"]),
+                      "due_date": r["due_date"],
+                      "status": r["status"]} for r in rows]
+            return {"score": min(len(tasks) * 25, 100), "at_risk": tasks}
+        except Exception as exc:
+            print(f"[ProductivityAnalytics] deadline_risk_score failed: {exc}")
+            return {"score": 0, "at_risk": []}
+
+    def project_time_distribution(self, since_ts: float | None = None) -> list[dict[str, Any]]:
+        """Total focus minutes per project label for the given period (default: last 7 days)."""
+        try:
+            if since_ts is None:
+                today = date.today()
+                since_ts = (datetime(today.year, today.month, today.day)
+                            - timedelta(days=6)).timestamp()
+            cur = self._conn.execute(
+                """SELECT COALESCE(project, task_title, 'Sonstiges') as label,
+                          COALESCE(SUM(duration_minutes), 0) as minutes
+                   FROM time_entries
+                   WHERE start_time >= ? AND duration_minutes IS NOT NULL
+                   GROUP BY label ORDER BY minutes DESC""",
+                (since_ts,),
+            )
+            return [{"label": r[0], "minutes": float(r[1])} for r in cur.fetchall()]
+        except Exception as exc:
+            print(f"[ProductivityAnalytics] project_time_distribution failed: {exc}")
+            return []
+
+    def spoken_deep_work_summary(self, since_ts: float | None = None) -> str:
+        blocks = self.deep_work_blocks(since_ts)
+        if not blocks:
+            return "Noch kein Deep-Work-Block."
+        total = sum(b["minutes"] for b in blocks)
+        h, m = int(total // 60), int(total % 60)
+        label = f"{h}h {m}min" if h else f"{m}min"
+        n = len(blocks)
+        return f"{n} Deep-Work-Block{'s' if n > 1 else ''}, gesamt {label}."
+
     def spoken_daily_score(self) -> str:
         try:
             d = self.daily_score()

@@ -98,10 +98,101 @@ def read_screen_text_tool() -> dict[str, Any]:
     }
 
 
+def scan_document_tool() -> dict[str, Any]:
+    return {
+        "name": "scan_document",
+        "description": (
+            "Scan and extract content from a document image (receipt, "
+            "invoice, business card, contract, letter, ID). Pass a "
+            "base64-encoded image; JARVIS classifies the doc type "
+            "automatically and returns a structured summary. Use for "
+            "'scan this', 'was steht auf dem Foto', 'extrahiere den "
+            "Beleg'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "image": {
+                    "type": "string",
+                    "description": "Base64-encoded image of the document.",
+                },
+                "doc_type": {
+                    "type": "string",
+                    "description": (
+                        "Force a doc type (receipt, invoice, business_card, "
+                        "contract, letter, id_card, general). Default 'auto'."
+                    ),
+                },
+            },
+            "required": ["image"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def translate_image_tool() -> dict[str, Any]:
+    return {
+        "name": "translate_image",
+        "description": (
+            "OCR-extract and translate text in a photo. Useful for "
+            "foreign-language signs, menus, documents, or screenshots. "
+            "Returns both the original extracted text and the translation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "image": {
+                    "type": "string",
+                    "description": "Base64-encoded image containing text.",
+                },
+                "target_language": {
+                    "type": "string",
+                    "description": "Target language code, e.g. 'de', 'en', 'fr'. Default 'de'.",
+                },
+            },
+            "required": ["image"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def identify_object_tool() -> dict[str, Any]:
+    return {
+        "name": "identify_object",
+        "description": (
+            "Identify what's in a photo. Recognises everyday objects, "
+            "plants, animals, food, damage, or gives style advice. "
+            "Use for 'was ist das', 'welche Pflanze ist das', 'wie viele "
+            "Kalorien', 'was ist beschädigt'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "image": {
+                    "type": "string",
+                    "description": "Base64-encoded image to identify.",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": (
+                        "Hint for the classifier: 'object' (default), "
+                        "'plant', 'food', 'animal', 'damage', 'style'."
+                    ),
+                },
+            },
+            "required": ["image"],
+            "additionalProperties": False,
+        },
+    }
+
+
 def vision_tools() -> list[dict[str, Any]]:
     """Single entry-point the brain calls to populate its tool list."""
     return [
         analyze_screen_tool(),
         check_screen_for_errors_tool(),
         read_screen_text_tool(),
+        scan_document_tool(),
+        translate_image_tool(),
+        identify_object_tool(),
     ]

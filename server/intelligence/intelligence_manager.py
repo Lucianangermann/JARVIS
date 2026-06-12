@@ -160,6 +160,10 @@ class IntelligenceManager:
         if the user is in a meeting."""
         self.proactive.set_handler(fn)
 
+    def set_client(self, client: object) -> None:
+        """Wire the Anthropic client so LLM-enhanced routines can use it."""
+        self._client = client
+
     def run_routine(self, name: str) -> str | None:
         """Assemble a routine on demand by name. Returns the text
         ready for TTS / display, or ``None`` if no routine of that
@@ -169,6 +173,9 @@ class IntelligenceManager:
         if fn is None:
             return None
         try:
+            client = getattr(self, "_client", None)
+            if name == "morning" and client is not None:
+                return fn(client=client)  # type: ignore[call-arg]
             return fn()
         except Exception as exc:  # noqa: BLE001
             print(f"[INTEL] routine {name!r} failed: {exc}")

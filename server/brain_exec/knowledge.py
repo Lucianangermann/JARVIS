@@ -160,6 +160,88 @@ class KnowledgeExecMixin:
 
         return f"Unbekannte action: {action}", True
 
+    def _exec_extract_lernziele(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        """Extract Lernziele / topics from text or a file using Claude Haiku.
+
+        Optional ``save=true`` imports them directly into lerntrack."""
+        inp = tool_input or {}
+        text = inp.get("text", "").strip()
+        file_path = inp.get("file_path", "").strip()
+
+        # Load text from file if text not provided inline.
+        if not text and file_path:
+            from pathlib import Path as _Path
+            try:
+                p = _Path(file_path)
+                if not p.is_file():
+                    return f"Datei nicht gefunden: {file_path}", True
+                text = p.read_text(encoding="utf-8", errors="replace")[:6000]
+            except Exception as exc:  # noqa: BLE001
+                return f"Datei lesen fehlgeschlagen: {exc}", True
+
+        if not text:
+            return "text oder file_path ist erforderlich.", True
+
+        client = self.client  # type: ignore[attr-defined]
+        if client is None:
+            return "Claude-Client nicht verfügbar.", True
+
+        try:
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        "Extrahiere aus dem folgenden Text alle Lernziele, Themen "
+                        "oder Kernaussagen, die man lernen/verstehen sollte. "
+                        "Antworte AUSSCHLIESSLICH als JSON-Array von Strings, "
+                        "ohne Markdown, ohne Erklärung. Maximal 10 Einträge. "
+                        'Beispiel: ["Ohmsches Gesetz", "Kirchhoffsche Regeln"]\n\n'
+                        + text[:4000]
+                    ),
+                }],
+            )
+            import json as _json
+            raw = ""
+            for block in resp.content:
+                if getattr(block, "type", None) == "text":
+                    raw = block.text.strip()
+                    break
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            topics: list[str] = _json.loads(raw)
+            if not isinstance(topics, list):
+                return "Extraktion lieferte kein Array.", True
+            topics = [str(t).strip() for t in topics if str(t).strip()][:10]
+        except Exception as exc:  # noqa: BLE001
+            return f"Extraktion fehlgeschlagen: {exc}", True
+
+        if not topics:
+            return "Keine Lernziele im Text gefunden.", False
+
+        save = bool(inp.get("save", False))
+        group = str(inp.get("group") or "")
+
+        if save:
+            from ..knowledge.lerntrack import LerntrackDB as _LT
+            db = _LT()
+            added = 0
+            for t in topics:
+                if db.add(t, group=group):
+                    added += 1
+            msg = f"{len(topics)} Lernziele gefunden, {added} neu in lerntrack gespeichert"
+            if group:
+                msg += f" (Gruppe: {group})"
+            return msg + ": " + ", ".join(topics) + ".", False
+
+        joined = ", ".join(f'"{t}"' for t in topics)
+        return (
+            f"{len(topics)} Lernziele gefunden: {joined}. "
+            "Soll ich sie in lerntrack speichern? "
+            "Falls ja, wiederhole den Befehl mit save=true."
+        ), False
+
     def _get_flashcards(self) -> Any:
         """Lazily build the flashcard manager (Second Brain SRS). Shares the
         brain's Claude client for card generation."""

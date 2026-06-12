@@ -48,11 +48,12 @@ def _fmt_event(ev: calendar_tool.CalendarEvent) -> str:
     return f"{hhmm} {title}{suffix}"
 
 
-def morning_briefing() -> str:
+def morning_briefing(*, client: object = None) -> str:
     """Greeting, weekday, weather, today's calendar — one paragraph.
 
     Each sub-section degrades independently: a failed weather lookup
     just drops that sentence; the rest of the briefing still goes out.
+    When ``client`` is provided, appends an LLM-generated daily plan.
     """
     now = datetime.now(_LOCAL_TZ)
     lines: list[str] = [
@@ -215,6 +216,82 @@ def morning_briefing() -> str:
                 )
     except Exception:
         pass
+
+    # ── LLM-generated daily plan ────────────────────────────────────
+    if client is not None:
+        try:
+            _plan_ctx: list[str] = []
+            # Open tasks with deadlines
+            from ..productivity.task_manager import TaskManager as _TM2
+            _tm2 = _TM2(_DATA_DIR / "jarvis.db")
+            try:
+                _tasks = _tm2._conn.execute(
+                    "SELECT title, due_date, priority FROM tasks "
+                    "WHERE status IN ('todo','in_progress') "
+                    "ORDER BY CASE WHEN due_date IS NOT NULL THEN due_date ELSE '9999' END, "
+                    "CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END "
+                    "LIMIT 6"
+                ).fetchall()
+            finally:
+                _tm2._conn.close()
+            if _tasks:
+                task_lines = []
+                for t in _tasks:
+                    entry = t["title"] or "?"
+                    if t["due_date"]:
+                        entry += f" (fällig {t['due_date']})"
+                    if t["priority"] == "high":
+                        entry += " [HOCH]"
+                    task_lines.append(entry)
+                _plan_ctx.append("Offene Tasks: " + "; ".join(task_lines))
+            # Yesterday's productivity score
+            from ..productivity.analytics import ProductivityAnalytics as _PA2
+            _pa2 = _PA2(_DATA_DIR / "jarvis.db")
+            try:
+                import datetime as _dt2
+                _yesterday = _dt2.date.today() - _dt2.timedelta(days=1)
+                _yd_start = _dt2.datetime(
+                    _yesterday.year, _yesterday.month, _yesterday.day
+                ).timestamp()
+                _yd_end = _yd_start + 86400
+                _yd_done = _pa2._conn.execute(
+                    "SELECT COUNT(*) FROM tasks WHERE status='done' "
+                    "AND completed_at >= ? AND completed_at < ?",
+                    (_yd_start, _yd_end),
+                ).fetchone()[0]
+                _yd_focus = _pa2._conn.execute(
+                    "SELECT COALESCE(SUM(duration_minutes),0) FROM time_entries "
+                    "WHERE start_time >= ? AND start_time < ?",
+                    (_yd_start, _yd_end),
+                ).fetchone()[0]
+                if _yd_done or _yd_focus:
+                    _plan_ctx.append(
+                        f"Gestern: {_yd_done} Tasks erledigt, "
+                        f"{int(_yd_focus)}min fokussiert gearbeitet."
+                    )
+            finally:
+                _pa2._conn.close()
+            if _plan_ctx:
+                _prompt_body = "\n".join(_plan_ctx)
+                _resp = client.messages.create(  # type: ignore[union-attr]
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=120,
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            "Erstelle einen kurzen Tagesplan in 2-3 Sätzen auf Deutsch. "
+                            "Nenne konkrete Prioritäten — was zuerst, warum. "
+                            "Kein Markdown, keine Listen. Nur Fließtext.\n\n"
+                            + _prompt_body
+                        ),
+                    }],
+                )
+                for _b in _resp.content:
+                    if getattr(_b, "type", None) == "text" and _b.text:
+                        lines.append("Empfehlung für heute: " + _b.text.strip())
+                        break
+        except Exception:  # noqa: BLE001
+            pass
 
     return " ".join(lines)
 
@@ -449,6 +526,51 @@ def weekly_summary() -> str:
                     pass
         if trend and "stabil" not in trend and "keine" not in trend.lower():
             lines.append(trend)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── mood / wellbeing trend ─────────────────────────────────────────
+    try:
+        from ..productivity.mood_tracker import MoodTracker as _Mood
+        _mood = _Mood(_DATA_DIR / "jarvis.db")
+        try:
+            _mood_text = _mood.spoken_weekly()
+        finally:
+            _mood.close()
+        if _mood_text:
+            lines.append(_mood_text)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── deep work + deadline risk ──────────────────────────────────────
+    try:
+        from ..productivity.analytics import ProductivityAnalytics as _PA
+        pa = _PA(_DATA_DIR / "jarvis.db")
+        try:
+            dw_blocks = pa.deep_work_blocks(since_ts=week_start.timestamp())
+            risk = pa.deadline_risk_score()
+            proj_dist = pa.project_time_distribution(since_ts=week_start.timestamp())
+        finally:
+            try:
+                pa._conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if dw_blocks:
+            total_dw = sum(b["minutes"] for b in dw_blocks)
+            h, m = int(total_dw // 60), int(total_dw % 60)
+            dw_label = f"{h}h {m}min" if h else f"{m}min"
+            n_dw = len(dw_blocks)
+            lines.append(f"{n_dw} Deep-Work-Block{'s' if n_dw != 1 else ''}, gesamt {dw_label}.")
+        if risk["at_risk"]:
+            n_risk = len(risk["at_risk"])
+            titles = ", ".join(t["title"] for t in risk["at_risk"][:2])
+            extra = " ..." if n_risk > 2 else ""
+            lines.append(f"Achtung: {n_risk} Task{'s' if n_risk != 1 else ''} bald fällig — {titles}{extra}.")
+        if proj_dist:
+            top = proj_dist[0]
+            h2, m2 = int(top["minutes"] // 60), int(top["minutes"] % 60)
+            lbl = f"{h2}h {m2}min" if h2 else f"{m2}min"
+            lines.append(f"Meiste Zeit in '{top['label']}' ({lbl}).")
     except Exception:  # noqa: BLE001
         pass
 

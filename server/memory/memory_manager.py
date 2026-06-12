@@ -26,6 +26,7 @@ from .context_builder import ContextBuilder
 from .error_memory import ErrorMemory
 from .long_term import LongTermMemory
 from .profile_manager import ProfileManager
+from .self_improvement import SelfImprovementDB
 from .short_term import ShortTermMemory
 
 
@@ -91,12 +92,16 @@ class MemoryManager:
             self.data_dir / "profile.json",
             self.data_dir / "jarvis.db",
         )
+        self.self_improvement = SelfImprovementDB(self.data_dir / "jarvis.db")
         self.context_builder = ContextBuilder(
             profile=self.profile,
             long_term=self.long_term,
             error_mem=self.error_mem,
             short_term=self.short_term,
+            self_improvement=self.self_improvement,
         )
+        # Tracks the last JARVIS response per session for correction detection.
+        self._prev_responses: dict[str, str] = {}
 
         self._mem_log = _make_file_logger("jarvis.memlog.memory", "memory.log")
         self._learn_log = _make_file_logger("jarvis.memlog.learning", "learning.log")
@@ -229,7 +234,8 @@ class MemoryManager:
                       response: str) -> None:
         """Called AFTER the Claude reply lands. Adds the assistant
         turn to short-term, lets the profile manager scan the new
-        text for facts, and writes a learning line."""
+        text for facts, writes a learning line, and checks for
+        corrections to extract behavioral lessons."""
         session_id = session_id or self.default_session_id
         try:
             self.short_term.add(session_id, "assistant", response)
@@ -242,6 +248,18 @@ class MemoryManager:
                 for f in (added_user + added_jarvis):
                     self._learn_log.info("LEARNED: %s = %r",
                                          f["category"], f["value"])
+            # Self-improvement: check if current user message is a correction
+            # of the PREVIOUS JARVIS response, and extract a lesson if so.
+            if self.self_improvement.available:
+                prev = self._prev_responses.get(session_id, "")
+                if prev:
+                    self.self_improvement.maybe_learn(
+                        jarvis_response=prev,
+                        user_reply=user_text,
+                        session_id=session_id,
+                        client=self.context_builder.client,
+                    )
+            self._prev_responses[session_id] = response
         except Exception as exc:  # noqa: BLE001
             self._mem_log.warning("after_message failed: %s", exc)
 

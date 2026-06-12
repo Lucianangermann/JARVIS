@@ -282,4 +282,119 @@ def productivity_tools() -> list[dict[str, Any]]:
                 "additionalProperties": False,
             },
         },
+        {
+            "name": "search_memory",
+            "description": (
+                "Search past JARVIS sessions semantically. Use this when the "
+                "user asks 'wann haben wir über X gesprochen', 'erinnerst du dich "
+                "an', or wants to find something from a previous conversation. "
+                "Returns dated session excerpts ranked by relevance."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to search for in past sessions.",
+                    },
+                    "n": {
+                        "type": "integer",
+                        "description": "Max results (default 5, max 10).",
+                    },
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "track_mood",
+            "description": (
+                "Log and query the user's daily wellbeing/mood. "
+                "Use action='log' to save today's mood (score 1–10, optional note). "
+                "Use action='today' to recall today's entry. "
+                "Use action='weekly' for the weekly mood summary."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["log", "today", "weekly"],
+                        "description": "What to do.",
+                    },
+                    "score": {
+                        "type": "integer",
+                        "description": "Mood score 1 (awful) – 10 (amazing). Required for action='log'.",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Optional free-text note about the mood.",
+                    },
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "self_reflect",
+            "description": (
+                "Manage JARVIS's learned behavioral rules. Use action='list' "
+                "to see all active rules (what JARVIS has learned from corrections). "
+                "Use action='remove' with an id to delete a wrong rule. "
+                "Use action='add' with a lesson string to add a rule manually. "
+                "Use action='stats' for a summary of feedback signals received."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "remove", "add", "stats"],
+                        "description": "What to do.",
+                    },
+                    "id": {
+                        "type": "integer",
+                        "description": "Lesson ID to remove (from action='list').",
+                    },
+                    "lesson": {
+                        "type": "string",
+                        "description": "Rule text to add manually (for action='add').",
+                    },
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "extract_lernziele",
+            "description": (
+                "Extract Lernziele / topics from a text or file using AI. "
+                "Pass text inline or a file_path (PDF path also accepted — "
+                "reads the first 4000 chars). Set save=true to import directly "
+                "into lerntrack. Useful when the user shares study material and "
+                "asks 'extrahiere die Lernziele' or 'speicher die Themen'."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Source text to extract topics from.",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to a text or PDF file (alternative to text).",
+                    },
+                    "save": {
+                        "type": "boolean",
+                        "description": "If true, save extracted topics to lerntrack immediately.",
+                    },
+                    "group": {
+                        "type": "string",
+                        "description": "Optional lerntrack group/subject area for saved topics.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
     ]

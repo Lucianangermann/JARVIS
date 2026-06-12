@@ -192,6 +192,7 @@ async def lifespan(app: FastAPI):
                     print(f"[PROACTIVE] tts failed: {exc}")
 
         intelligence.set_notification_handler(_notification_to_users)
+        intelligence.set_client(app.state.brain.client)
         intelligence.start()
         app.state.intelligence = intelligence
         app.state.brain.intelligence = intelligence

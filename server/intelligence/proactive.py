@@ -674,6 +674,45 @@ def _check_morning_learning(engine: ProactiveEngine) -> str | None:
     return "Lernstand heute: " + " und ".join(parts) + "."
 
 
+def _check_mood_checkin(engine: "ProactiveEngine") -> str | None:
+    """Prompt the user to log their mood if they haven't done so today."""
+    try:
+        from pathlib import Path
+        from ..productivity.mood_tracker import MoodTracker as _MT
+        mt = _MT(Path("data/jarvis.db"))
+        today = mt.today_mood()
+        mt.close()
+        if today is not None:
+            return None  # already logged today
+        return "Wie war dein Tag? Sag mir deine Stimmung von 1 bis 10."
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _check_breaking_news(engine: "ProactiveEngine") -> str | None:
+    """Fire when a recent headline (<30 min) matches the user's news_topics."""
+    try:
+        from pathlib import Path
+        from ..memory.profile_manager import ProfileManager as _PM
+        prof = _PM(Path("data/profile.json"), Path("data/jarvis.db"))
+        topics: list[str] = (prof.get().get("preferences") or {}).get("news_topics") or []
+        if not topics:
+            return None
+        from datetime import datetime, timezone, timedelta
+        from ..tools.news import get_headlines_for_topics
+        headlines = get_headlines_for_topics(topics, n=5)
+        if not headlines:
+            return None
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+        breaking = [h for h in headlines if h.published and h.published > cutoff]
+        if not breaking:
+            return None
+        h = breaking[0]
+        return f"Aktuelle Meldung zu deinen Themen: {h.title} ({h.source})"
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # -- registry build ------------------------------------------------------- #
 
 def _build_specs() -> tuple[NotificationSpec, ...]:
@@ -802,5 +841,21 @@ def _build_specs() -> tuple[NotificationSpec, ...]:
             max_per_day=1,
             active_hours=(8, 21),
             check=_check_spending_spike,
+        ),
+        NotificationSpec(
+            name="breaking_news",
+            priority="medium",
+            cooldown_minutes=30,
+            max_per_day=6,
+            active_hours=(7, 22),
+            check=_check_breaking_news,
+        ),
+        NotificationSpec(
+            name="mood_checkin",
+            priority="low",
+            cooldown_minutes=12 * 60,
+            max_per_day=1,
+            active_hours=(19, 22),
+            check=_check_mood_checkin,
         ),
     )

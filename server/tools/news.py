@@ -120,6 +120,28 @@ def _fetch_feed(url: str) -> list[Headline]:
     return items
 
 
+def get_headlines_for_topics(topics: list[str], n: int = 5,
+                              feeds: list[str] | None = None) -> list[Headline]:
+    """Return up to ``n`` headlines that match any of the given topic keywords.
+
+    Scoring: each topic keyword found in the title adds 1 point.
+    Sorted by score desc, then by date. Falls back to unfiltered headlines
+    when no matches are found."""
+    pool = get_headlines(max(n * 4, 20), feeds)
+    if not topics:
+        return pool[:n]
+    topics_lower = [t.lower() for t in topics]
+    scored: list[tuple[int, Headline]] = []
+    for h in pool:
+        title_lower = h.title.lower()
+        score = sum(1 for t in topics_lower if t in title_lower)
+        if score > 0:
+            scored.append((score, h))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    result = [h for _, h in scored[:n]]
+    return result if result else pool[:n]
+
+
 def get_headlines(n: int = 5,
                   feeds: list[str] | None = None) -> list[Headline]:
     """Top ``n`` headlines across all configured feeds.

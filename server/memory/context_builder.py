@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from .error_memory import ErrorMemory
     from .long_term import LongTermMemory
     from .profile_manager import ProfileManager
+    from .self_improvement import SelfImprovementDB
     from .short_term import ShortTermMemory
 
 log = logging.getLogger("jarvis.memory.context")
@@ -104,11 +105,15 @@ class ContextBuilder:
                  profile: "ProfileManager | None" = None,
                  long_term: "LongTermMemory | None" = None,
                  error_mem: "ErrorMemory | None" = None,
-                 short_term: "ShortTermMemory | None" = None) -> None:
+                 short_term: "ShortTermMemory | None" = None,
+                 client: "Any | None" = None,
+                 self_improvement: "SelfImprovementDB | None" = None) -> None:
         self.profile = profile
         self.long_term = long_term
         self.error_mem = error_mem
         self.short_term = short_term
+        self.client = client
+        self.self_improvement = self_improvement
 
     # ---- system prompt ---------------------------------------------------
 
@@ -158,6 +163,9 @@ class ContextBuilder:
         issues = self._issues_block()
         if issues:
             stable.append(issues)
+        lessons = self._lessons_block()
+        if lessons:
+            stable.append(lessons)
         stable.append(_INSTRUCTIONS)
 
         # ---- per-turn suffix ---- #
@@ -269,6 +277,16 @@ class ContextBuilder:
         return ("## Saved Knowledge (the user asked you to remember this)\n"
                 + "\n".join(bullets))
 
+    def _lessons_block(self, *, limit: int = 10) -> str:
+        """Active learned behavioral rules from past corrections."""
+        if self.self_improvement is None or not self.self_improvement.available:
+            return ""
+        lessons = self.self_improvement.get_active_lessons(limit=limit)
+        if not lessons:
+            return ""
+        bullets = [f"- {r['lesson']}" for r in lessons]
+        return "## Learned Behaviors\n" + "\n".join(bullets)
+
     def _current_context_block(self, session_count: int) -> str:
         now = _dt.datetime.now()
         date_str = now.strftime("%Y-%m-%d (%A)")
@@ -282,18 +300,39 @@ class ContextBuilder:
 
     def build_session_summary(self, session_id: str,
                               *, max_chars: int = 600) -> str:
-        """Produce the text that gets stored in the long-term
-        ``conversations`` collection at session end. Cheap (no LLM
-        call): wraps short_term.summarise + a header. The model can
-        always do a higher-quality summary later if we add an explicit
-        "summarise" tool call before flushing."""
+        """Produce the text stored in long-term memory at session end.
+
+        When a Claude client is available, calls Haiku to produce a
+        structured 3-5 bullet summary (topic / decisions / follow-up).
+        Falls back to the naive string-join summary on any failure."""
         if self.short_term is None:
             return ""
         body = self.short_term.summarise(session_id, max_chars=max_chars)
         if not body:
             return ""
         ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")
-        return f"[Session {session_id} ended {ts}]\n{body}"
+        header = f"[Session {session_id} ended {ts}]\n"
+        if self.client is not None:
+            try:
+                resp = self.client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=300,
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            "Fasse diese JARVIS-Session in 3-5 Stichpunkten zusammen. "
+                            "Struktur: was wurde besprochen, was wurde entschieden, "
+                            "was braucht Follow-up. Kurz und präzise, auf Deutsch.\n\n"
+                            + body
+                        ),
+                    }],
+                )
+                for block in resp.content:
+                    if getattr(block, "type", None) == "text" and block.text:
+                        return header + block.text.strip()
+            except Exception as exc:
+                log.warning("LLM session summary failed: %s", exc)
+        return header + body
 
     def extract_learnings(self, session_id: str) -> list[str]:
         """Pull out memory-worthy items from the current session for

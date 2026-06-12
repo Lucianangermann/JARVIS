@@ -78,6 +78,7 @@ def test_registry_has_all_triggers():
         "hydration", "forgotten_task", "productivity_slump",
         "morning_learning", "flashcard_due", "lernziel_reminder",
         "budget_warning", "watchlist_alert", "spending_spike",
+        "breaking_news", "mood_checkin",
     }
 
 

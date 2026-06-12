@@ -267,6 +267,107 @@ class ProductivityExecMixin:
                     return (r.get("spoken") or "Meeting verarbeitet."), not r.get("ok")
                 return f"Unbekannte action: {action}", True
 
+            if tool_name == "search_memory":
+                query = inp.get("query", "")
+                if not query:
+                    return "query ist erforderlich.", True
+                n = int(inp.get("n") or 5)
+                hits = self.memory.long_term.search_similar(  # type: ignore[attr-defined]
+                    query, n_results=n)
+                hits = [h for h in hits if (h.get("distance") or 1.0) < 0.85]
+                if not hits:
+                    return f"Keine passenden Gespräche zu '{query}' gefunden.", False
+                import datetime as _dt
+                parts = []
+                for h in hits[:5]:
+                    ts = (h.get("metadata") or {}).get("ended_at", 0)
+                    when = _dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else "?"
+                    body = (h.get("document") or "").strip().replace("\n", " ")
+                    if len(body) > 160:
+                        body = body[:160] + "…"
+                    parts.append(f"[{when}] {body}")
+                return "\n".join(parts), False
+
+            if tool_name == "track_mood":
+                from pathlib import Path as _Path
+                from ..productivity.mood_tracker import MoodTracker as _MT
+                mt = _MT(_Path("data/jarvis.db"))
+                action = inp.get("action", "log")
+                if action == "log":
+                    score_raw = inp.get("score")
+                    if score_raw is None:
+                        return "score (1-10) ist erforderlich.", True
+                    try:
+                        score = int(score_raw)
+                    except (ValueError, TypeError):
+                        return "score muss eine Zahl von 1-10 sein.", True
+                    note = str(inp.get("note") or "")
+                    eid = mt.log(score, note)
+                    mt.close()
+                    if eid:
+                        mood_labels = {
+                            1: "sehr schlecht", 2: "schlecht", 3: "nicht so gut",
+                            4: "mäßig", 5: "okay", 6: "ganz gut",
+                            7: "gut", 8: "sehr gut", 9: "super", 10: "fantastisch",
+                        }
+                        label = mood_labels.get(score, str(score))
+                        msg = f"Stimmung {score}/10 ({label}) gespeichert."
+                        if note:
+                            msg += f" Notiz: {note[:60]}."
+                        return msg, False
+                    return "Konnte Stimmung nicht speichern.", True
+                if action == "today":
+                    entry = mt.today_mood()
+                    mt.close()
+                    if not entry:
+                        return "Heute noch keine Stimmung eingetragen.", False
+                    score = entry["score"]
+                    note = entry.get("note", "")
+                    msg = f"Heutige Stimmung: {score}/10."
+                    if note:
+                        msg += f" '{note}'"
+                    return msg, False
+                if action == "weekly":
+                    text = mt.spoken_weekly()
+                    mt.close()
+                    return text or "Keine Stimmungsdaten dieser Woche.", False
+                mt.close()
+                return f"Unbekannte action: {action}", True
+
+            if tool_name == "self_reflect":
+                si = getattr(self.memory, "self_improvement", None)  # type: ignore[attr-defined]
+                if si is None or not si.available:
+                    return "Self-improvement-System nicht verfügbar.", True
+                action = inp.get("action", "list")
+                if action == "list":
+                    lessons = si.get_active_lessons(limit=20)
+                    if not lessons:
+                        return "Noch keine Verhaltensregeln gelernt.", False
+                    import datetime as _dt
+                    lines = []
+                    for r in lessons:
+                        when = _dt.datetime.fromtimestamp(r["ts"]).strftime("%Y-%m-%d")
+                        src = r.get("source", "")
+                        lines.append(f"[#{r['id']} | {when} | {src}] {r['lesson']}")
+                    return "\n".join(lines), False
+                if action == "remove":
+                    lid = inp.get("id")
+                    if lid is None:
+                        return "id ist erforderlich.", True
+                    ok = si.deactivate_lesson(int(lid))
+                    return (f"Regel #{lid} deaktiviert." if ok
+                            else f"Regel #{lid} nicht gefunden."), not ok
+                if action == "add":
+                    lesson = str(inp.get("lesson") or "").strip()
+                    if not lesson:
+                        return "lesson ist erforderlich.", True
+                    eid = si.add_lesson(lesson, source="manual")
+                    return (f"Regel gespeichert: {lesson}" if eid
+                            else "Regel konnte nicht gespeichert werden (Duplikat?)."), not bool(eid)
+                if action == "stats":
+                    return si.spoken_summary(), False
+                return f"Unbekannte action: {action}", True
+
             return f"Unbekanntes Productivity-Tool: {tool_name}", True
         except Exception as exc:  # noqa: BLE001
             return f"Productivity-Fehler: {exc}", True
