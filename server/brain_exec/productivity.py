@@ -117,7 +117,7 @@ class ProductivityExecMixin:
                 if not query:
                     return "query ist erforderlich.", True
                 category = inp.get("category")
-                results = self.memory.long_term.search_knowledge(  # type: ignore[attr-defined]
+                results, cluster_hints = self.memory.long_term.search_knowledge_with_clusters(  # type: ignore[attr-defined]
                     query, n_results=int(inp.get("n", 5)))
                 if category:
                     results = [r for r in results
@@ -125,7 +125,15 @@ class ProductivityExecMixin:
                 if not results:
                     return f"Ich weiß nichts über '{query}'.", False
                 facts = [r["document"] for r in results[:5]]
-                return ("Dazu weiß ich: " + " · ".join(facts)), False
+                answer = "Dazu weiß ich: " + " · ".join(facts)
+                if cluster_hints:
+                    hints_txt = "; ".join(
+                        f"Du hast {h['total']} Notiz{'en' if h['total'] != 1 else ''} "
+                        f"zu '{h['tag']}'"
+                        for h in cluster_hints[:2]
+                    )
+                    answer += f" — {hints_txt}."
+                return answer, False
 
             if tool_name == "get_email_smart_summary":
                 from ..tools.mail_tool import list_unread
@@ -337,6 +345,54 @@ class ProductivityExecMixin:
                 mt.close()
                 return f"Unbekannte action: {action}", True
 
+            if tool_name == "manage_goals":
+                from ..productivity.goals import GoalDB as _GoalDB
+                gdb = _GoalDB(_DATA_DIR / "jarvis.db")
+                action = inp.get("action", "list")
+                try:
+                    if action == "list":
+                        return gdb.spoken_status(), False
+                    if action == "add":
+                        title = str(inp.get("title") or "").strip()
+                        if not title:
+                            return "title ist erforderlich.", True
+                        gid = gdb.add(
+                            title,
+                            description=str(inp.get("description") or ""),
+                            deadline=inp.get("deadline"),
+                        )
+                        if gid:
+                            dl = inp.get("deadline")
+                            suffix = f" (Deadline: {dl})" if dl else ""
+                            return f"Ziel gespeichert (#{gid}): {title}{suffix}.", False
+                        return "Konnte Ziel nicht speichern.", True
+                    if action == "update":
+                        gid = inp.get("goal_id")
+                        pct = inp.get("pct")
+                        if gid is None or pct is None:
+                            return "goal_id und pct sind erforderlich.", True
+                        ok = gdb.update_progress(int(gid), int(pct),
+                                                 str(inp.get("note") or ""))
+                        return (f"Fortschritt aktualisiert: {pct}%." if ok
+                                else "Ziel nicht gefunden."), not ok
+                    if action == "achieve":
+                        gid = inp.get("goal_id")
+                        if gid is None:
+                            return "goal_id ist erforderlich.", True
+                        ok = gdb.achieve(int(gid))
+                        return ("Ziel als erreicht markiert!" if ok
+                                else "Ziel nicht gefunden."), not ok
+                    if action == "abandon":
+                        gid = inp.get("goal_id")
+                        if gid is None:
+                            return "goal_id ist erforderlich.", True
+                        ok = gdb.abandon(int(gid))
+                        return ("Ziel aufgegeben." if ok
+                                else "Ziel nicht gefunden."), not ok
+                    return f"Unbekannte action: {action}", True
+                finally:
+                    gdb.close()
+
             if tool_name == "journal":
                 from pathlib import Path as _Path
                 from ..productivity.journal import JournalDB as _Journal
@@ -425,6 +481,12 @@ class ProductivityExecMixin:
                         return "Claude-Client nicht verfügbar für Konsolidierung.", True
                     result = si.consolidate_lessons(client)
                     return result, False
+                if action == "quality_audit":
+                    qm = getattr(self.memory, "quality_metrics", None)  # type: ignore[attr-defined]
+                    if qm is None or not qm.available:
+                        return "Qualitäts-Metriken nicht verfügbar.", True
+                    client = getattr(self, "client", None)  # type: ignore[attr-defined]
+                    return qm.audit_report(client=client), False
                 return f"Unbekannte action: {action}", True
 
             return f"Unbekanntes Productivity-Tool: {tool_name}", True

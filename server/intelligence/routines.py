@@ -574,6 +574,19 @@ def weekly_summary() -> str:
     except Exception:  # noqa: BLE001
         pass
 
+    # ── active long-term goals ─────────────────────────────────────────
+    try:
+        from ..productivity.goals import GoalDB as _GoalDB
+        gdb = _GoalDB(_DATA_DIR / "jarvis.db")
+        try:
+            goal_text = gdb.weekly_spoken()
+        finally:
+            gdb.close()
+        if goal_text:
+            lines.append(goal_text)
+    except Exception:  # noqa: BLE001
+        pass
+
     if len(lines) == 1:
         lines.append("Keine Aktivitäten diese Woche erfasst.")
 

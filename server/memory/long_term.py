@@ -34,13 +34,36 @@ logged once at startup.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from . import embeddings
+
+# Stop-words filtered when auto-generating cluster tags from knowledge text.
+_TAG_STOP = frozenset([
+    "und", "oder", "ist", "die", "der", "das", "ein", "eine", "von", "für",
+    "mit", "auf", "in", "zu", "ich", "du", "wir", "sie", "er", "es", "war",
+    "hat", "habe", "haben", "sein", "wird", "kann", "will", "aus", "bei",
+    "nach", "auch", "nur", "noch", "schon", "immer", "nie", "mein", "dein",
+    "sein", "ihr", "nicht", "kein", "aber", "wenn", "dass", "than", "the",
+    "this", "that", "with", "have", "from", "been", "were", "they", "their",
+])
+
+
+def _extract_cluster_tags(text: str, n: int = 2) -> str:
+    """Extract top-N keyword tags from text for clustering.
+
+    Returns a comma-separated lowercase string e.g. 'statistik,python'.
+    Pure keyword frequency — no LLM call, instant."""
+    words = [w.lower() for w in re.findall(r'\b[a-zäöüA-ZÄÖÜ]{4,}\b', text)]
+    keywords = [w for w in words if w not in _TAG_STOP]
+    top = [w for w, _ in Counter(keywords).most_common(n)]
+    return ",".join(top)
 
 log = logging.getLogger("jarvis.memory.long_term")
 
@@ -175,13 +198,24 @@ class LongTermMemory:
     def save_knowledge(self, fact: str, *,
                        source: str = "conversation",
                        category: str = "general") -> str | None:
-        """Store a single fact about the user / environment."""
+        """Store a single fact about the user / environment.
+
+        Automatically tags the entry with up to 2 keyword-based cluster
+        tags stored in metadata[``"cluster"``]. These are used by
+        :meth:`search_knowledge_with_clusters` to surface related entries.
+        """
         if not self.available or not fact.strip():
             return None
         entry_id = f"kn-{uuid.uuid4().hex[:12]}"
         try:
             vec = embeddings.encode(fact)
-            meta = {"ts": time.time(), "source": source, "category": category}
+            cluster = _extract_cluster_tags(fact, n=2)
+            meta: dict[str, Any] = {
+                "ts": time.time(),
+                "source": source,
+                "category": category,
+                "cluster": cluster,
+            }
             with self._lock:
                 self._kn.upsert(
                     ids=[entry_id],
@@ -255,6 +289,50 @@ class LongTermMemory:
         except Exception as exc:  # noqa: BLE001
             log.warning("search_knowledge failed: %s", exc)
             return []
+
+    def cluster_summary(self) -> list[dict[str, Any]]:
+        """Return a list of {tag, count} for all cluster tags in knowledge.
+
+        Used to show the user a topic-level map of what JARVIS remembers."""
+        if not self.available:
+            return []
+        try:
+            with self._lock:
+                got = self._kn.get(include=["metadatas"])
+            metas = got.get("metadatas") or []
+            counts: Counter = Counter()
+            for m in metas:
+                cluster_str = (m or {}).get("cluster", "")
+                for tag in (t.strip() for t in cluster_str.split(",") if t.strip()):
+                    counts[tag] += 1
+            return [{"tag": t, "count": c} for t, c in counts.most_common(10)]
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cluster_summary failed: %s", exc)
+            return []
+
+    def search_knowledge_with_clusters(
+        self, query: str, n_results: int = 5,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Semantic search + cluster context.
+
+        Returns ``(hits, cluster_hints)`` where ``cluster_hints`` is a list
+        of ``{tag, count}`` for tags that appear in the search results —
+        useful for showing 'Du hast 7 Notizen zu Statistik'."""
+        hits = self.search_knowledge(query, n_results=n_results)
+        # Collect tags from result set.
+        tag_counts: Counter = Counter()
+        for h in hits:
+            cluster_str = (h.get("metadata") or {}).get("cluster", "")
+            for tag in (t.strip() for t in cluster_str.split(",") if t.strip()):
+                tag_counts[tag] += 1
+        # Enrich with total counts from the full store.
+        all_clusters = {c["tag"]: c["count"] for c in self.cluster_summary()}
+        hints = [
+            {"tag": tag, "in_results": cnt, "total": all_clusters.get(tag, cnt)}
+            for tag, cnt in tag_counts.most_common(3)
+            if all_clusters.get(tag, cnt) > 1  # only surface tags with multiple entries
+        ]
+        return hits, hints
 
     def list_knowledge(self, *, category: str | None = None,
                        limit: int = 50) -> list[dict[str, Any]]:

@@ -350,8 +350,8 @@ def productivity_tools() -> list[dict[str, Any]]:
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["list", "remove", "add", "stats", "consolidate"],
-                        "description": "What to do.",
+                        "enum": ["list", "remove", "add", "stats", "consolidate", "quality_audit"],
+                        "description": "What to do. quality_audit = tool correction-rate report.",
                     },
                     "id": {
                         "type": "integer",
@@ -365,6 +365,53 @@ def productivity_tools() -> list[dict[str, Any]]:
                         "type": "string",
                         "enum": ["stil", "fakt", "tool", "präferenz", "general"],
                         "description": "Rule category for action='add' (default: general).",
+                    },
+                },
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "manage_goals",
+            "description": (
+                "Track long-term goals (Prüfungen, Fitness, Projekte). "
+                "action='add' — set a new goal with title + optional deadline (YYYY-MM-DD). "
+                "action='list' — show all active goals with progress and days remaining. "
+                "action='update' — update progress percentage (0-100) for a goal (goal_id + pct, optional note). "
+                "action='achieve' — mark a goal as reached (goal_id). "
+                "action='abandon' — drop a goal (goal_id). "
+                "Use this whenever the user mentions a long-term objective or asks about their goals."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["add", "list", "update", "achieve", "abandon"],
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Goal title (for add).",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional longer description (for add).",
+                    },
+                    "deadline": {
+                        "type": "string",
+                        "description": "Deadline in YYYY-MM-DD format (for add).",
+                    },
+                    "goal_id": {
+                        "type": "integer",
+                        "description": "Goal ID from list (for update/achieve/abandon).",
+                    },
+                    "pct": {
+                        "type": "integer",
+                        "description": "Progress percentage 0-100 (for update).",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Optional checkpoint note (for update).",
                     },
                 },
                 "required": ["action"],

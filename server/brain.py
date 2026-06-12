@@ -1202,6 +1202,14 @@ class Brain(
                         metrics.record_tool(block.name, error=bool(is_error))
                     except Exception:  # noqa: BLE001
                         pass
+                    # Record in quality metrics for correction-rate tracking.
+                    try:
+                        if self.memory.quality_metrics.available:
+                            self.memory.quality_metrics.record_call(
+                                block.name, session_id,
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass
                     # Limit large tool results before they reach Claude.
                     # A 4.5 MB PDF can produce 100k+ chars of text — sending
                     # that verbatim to Claude fills the 200k context window on
@@ -1609,7 +1617,7 @@ class Brain(
                   "add_knowledge_note", "recall_knowledge", "flashcards",
                   "get_email_smart_summary", "meeting_control",
                   "schedule_action", "search_memory", "track_mood",
-                  "self_reflect", "journal", "study_plan"):
+                  "self_reflect", "journal", "study_plan", "manage_goals"):
             h[n] = lambda inp, _n=n: self._exec_productivity(_n, inp)
         h["extract_lernziele"] = lambda inp: self._exec_extract_lernziele(inp)
         for n in ("play_mood_music", "manage_watchlist", "play_game",

@@ -26,6 +26,7 @@ from .context_builder import ContextBuilder
 from .error_memory import ErrorMemory
 from .long_term import LongTermMemory
 from .profile_manager import ProfileManager
+from .quality_metrics import QualityMetricsDB
 from .self_improvement import SelfImprovementDB
 from .short_term import ShortTermMemory
 
@@ -93,6 +94,7 @@ class MemoryManager:
             self.data_dir / "jarvis.db",
         )
         self.self_improvement = SelfImprovementDB(self.data_dir / "jarvis.db")
+        self.quality_metrics = QualityMetricsDB(self.data_dir / "jarvis.db")
         self.context_builder = ContextBuilder(
             profile=self.profile,
             long_term=self.long_term,
@@ -259,7 +261,26 @@ class MemoryManager:
                         session_id=session_id,
                         client=self.context_builder.client,
                     )
+                    # Mirror correction signal into quality metrics so
+                    # tool-level correction rates can be computed.
+                    if (self.quality_metrics.available
+                            and self.self_improvement._has_correction_signal(user_text)):
+                        self.quality_metrics.mark_corrected(
+                            session_id, since_ts=time.time() - 300,
+                        )
             self._prev_responses[session_id] = response
+            # Goal auto-extraction: if the user text contains a goal
+            # signal, ask Haiku to extract and save it automatically.
+            if self.context_builder.client is not None:
+                try:
+                    from ..productivity.goals import GoalDB as _GoalDB
+                    _gdb = _GoalDB(self.data_dir / "jarvis.db")
+                    _gdb.maybe_extract_goal(
+                        user_text, self.context_builder.client,
+                    )
+                    _gdb.close()
+                except Exception:  # noqa: BLE001 — never crash on goal extraction
+                    pass
         except Exception as exc:  # noqa: BLE001
             self._mem_log.warning("after_message failed: %s", exc)
 
