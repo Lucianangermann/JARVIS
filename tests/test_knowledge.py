@@ -28,6 +28,8 @@ def _seed(lt: LongTermMemory) -> None:
                       source="explicit", category="learning")
     lt.save_knowledge("Idee: ein Finanz-Layer mit Beleg-Scan aus Mail.",
                       source="explicit", category="idea")
+    # Flush async writes so subsequent reads see all three entries.
+    lt.flush()
 
 
 def test_save_and_recall(lt: LongTermMemory) -> None:

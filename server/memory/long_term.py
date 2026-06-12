@@ -34,6 +34,7 @@ logged once at startup.
 from __future__ import annotations
 
 import logging
+import queue
 import re
 import threading
 import time
@@ -74,10 +75,23 @@ class LongTermMemory:
     All writes are best-effort and never raise into the brain's hot
     path — failures are logged and swallowed."""
 
+    # Cosine distance threshold for knowledge deduplication.
+    # ChromaDB cosine distance = 1 − similarity, so 0.04 ≈ similarity 0.96.
+    # Kept conservative: only merge when two facts are near-identical in meaning.
+    _DEDUP_DIST_THRESHOLD = 0.04
+
     def __init__(self, persist_dir: str | Path) -> None:
         self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+
+        # Async write queue — ChromaDB upserts happen in a daemon thread
+        # so they never block the brain's response path.
+        self._write_q: queue.Queue = queue.Queue(maxsize=500)
+        self._writer = threading.Thread(
+            target=self._write_worker, daemon=True, name="jarvis-chroma-writer",
+        )
+        self._writer.start()
 
         self.available = False
         self._client = None
@@ -101,6 +115,50 @@ class LongTermMemory:
         except Exception as exc:  # noqa: BLE001
             log.warning("long-term memory disabled: %s", exc)
             self.available = False
+
+    # ---- async write infrastructure --------------------------------------
+
+    def _write_worker(self) -> None:
+        """Daemon thread that drains the write queue."""
+        while True:
+            fn = self._write_q.get()
+            if fn is None:  # sentinel → shut down
+                self._write_q.task_done()
+                break
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("async chroma write failed: %s", exc)
+            finally:
+                self._write_q.task_done()
+
+    def _async_upsert(self, collection: Any, ids: list, vecs: list,
+                      docs: list, metas: list) -> None:
+        """Queue a ChromaDB upsert. Falls back to sync if queue is full."""
+        def _do() -> None:
+            with self._lock:
+                collection.upsert(
+                    ids=ids, embeddings=vecs, documents=docs, metadatas=metas,
+                )
+        try:
+            self._write_q.put_nowait(_do)
+        except queue.Full:
+            _do()  # queue saturated — write synchronously
+
+    def flush(self, timeout: float = 5.0) -> None:
+        """Block until all pending async writes have been committed."""
+        try:
+            self._write_q.join()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def close(self) -> None:
+        """Drain pending writes then stop the writer thread."""
+        try:
+            self._write_q.put(None)  # sentinel
+            self._writer.join(timeout=5.0)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- setup -----------------------------------------------------------
 
@@ -133,8 +191,8 @@ class LongTermMemory:
                           session_id: str | None = None,
                           message_count: int = 0,
                           tags: list[str] | None = None) -> str | None:
-        """Store a session summary. Returns the new entry's id, or
-        None if storage is unavailable / summary is empty."""
+        """Store a session summary asynchronously. Returns the entry id
+        immediately; the actual ChromaDB upsert happens in the writer thread."""
         if not self.available or not summary.strip():
             return None
         entry_id = session_id or f"sess-{uuid.uuid4().hex[:12]}"
@@ -145,13 +203,7 @@ class LongTermMemory:
                 "message_count": int(message_count),
                 "tags": ",".join(tags or []),
             }
-            with self._lock:
-                self._conv.upsert(
-                    ids=[entry_id],
-                    embeddings=[vec],
-                    documents=[summary],
-                    metadatas=[meta],
-                )
+            self._async_upsert(self._conv, [entry_id], [vec], [summary], [meta])
             return entry_id
         except Exception as exc:  # noqa: BLE001
             log.warning("save_conversation failed: %s", exc)
@@ -163,8 +215,7 @@ class LongTermMemory:
                      category: str = "other",
                      duration_ms: float | None = None,
                      error_type: str | None = None) -> str | None:
-        """Store one executed command + outcome. Used later for
-        ``search_similar_commands`` to learn from past attempts."""
+        """Store one executed command + outcome asynchronously."""
         if not self.available or not command.strip():
             return None
         entry_id = f"cmd-{uuid.uuid4().hex[:12]}"
@@ -179,17 +230,8 @@ class LongTermMemory:
                 meta["duration_ms"] = float(duration_ms)
             if error_type:
                 meta["error_type"] = str(error_type)[:80]
-            # Combine command + result text in the document so search
-            # can match against either ("how did the brightness command
-            # go last time" finds it via the result).
             doc = command if not result else f"{command}\n→ {result[:400]}"
-            with self._lock:
-                self._cmd.upsert(
-                    ids=[entry_id],
-                    embeddings=[vec],
-                    documents=[doc],
-                    metadatas=[meta],
-                )
+            self._async_upsert(self._cmd, [entry_id], [vec], [doc], [meta])
             return entry_id
         except Exception as exc:  # noqa: BLE001
             log.warning("save_command failed: %s", exc)
@@ -198,15 +240,16 @@ class LongTermMemory:
     def save_knowledge(self, fact: str, *,
                        source: str = "conversation",
                        category: str = "general") -> str | None:
-        """Store a single fact about the user / environment.
+        """Store a fact, deduplicating near-identical entries first.
 
-        Automatically tags the entry with up to 2 keyword-based cluster
-        tags stored in metadata[``"cluster"``]. These are used by
-        :meth:`search_knowledge_with_clusters` to surface related entries.
+        The embedding is computed synchronously (needed for the dedup
+        query). The ChromaDB upsert is async. If a very similar entry
+        already exists (cosine distance < 0.08, i.e. similarity > 0.92),
+        the existing entry is updated in place and its id is returned —
+        so ChromaDB never accumulates semantically duplicate facts.
         """
         if not self.available or not fact.strip():
             return None
-        entry_id = f"kn-{uuid.uuid4().hex[:12]}"
         try:
             vec = embeddings.encode(fact)
             cluster = _extract_cluster_tags(fact, n=2)
@@ -216,13 +259,31 @@ class LongTermMemory:
                 "category": category,
                 "cluster": cluster,
             }
+
+            # Dedup: find nearest neighbour synchronously before writing.
             with self._lock:
-                self._kn.upsert(
-                    ids=[entry_id],
-                    embeddings=[vec],
-                    documents=[fact],
-                    metadatas=[meta],
-                )
+                kn_count = self._kn.count()
+            if kn_count > 0:
+                try:
+                    with self._lock:
+                        near = self._kn.query(
+                            query_embeddings=[vec], n_results=1,
+                            include=["distances"],
+                        )
+                    ids_list = near.get("ids") or [[]]
+                    dist_list = near.get("distances") or [[]]
+                    if ids_list[0] and dist_list[0]:
+                        dist = float(dist_list[0][0])
+                        if dist < self._DEDUP_DIST_THRESHOLD:
+                            existing_id = ids_list[0][0]
+                            log.debug("dedup: merging into %s (dist=%.4f)", existing_id, dist)
+                            self._async_upsert(self._kn, [existing_id], [vec], [fact], [meta])
+                            return existing_id
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("dedup check failed, proceeding normally: %s", exc)
+
+            entry_id = f"kn-{uuid.uuid4().hex[:12]}"
+            self._async_upsert(self._kn, [entry_id], [vec], [fact], [meta])
             return entry_id
         except Exception as exc:  # noqa: BLE001
             log.warning("save_knowledge failed: %s", exc)

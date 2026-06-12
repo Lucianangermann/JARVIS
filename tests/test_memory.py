@@ -223,6 +223,7 @@ def test_long_term_save_and_search(long_term_mem):
         "User wanted Spotify paused. JARVIS paused playback.",
         message_count=4,
     )
+    long_term_mem.flush()
     results = long_term_mem.search_similar("weather forecast", n_results=2)
     assert results, "search_similar returned empty"
     # The weather session must outrank the Spotify session for a weather query.
@@ -233,6 +234,7 @@ def test_long_term_save_and_search(long_term_mem):
 def test_long_term_persists_across_instantiations(tmp_path: Path):
     a = long_term.LongTermMemory(tmp_path / "chromadb")
     a.save_conversation("Persistent: a test summary about apple pie.")
+    a.flush()  # commit before b opens the same path
     # Drop and re-open from the same path.
     b = long_term.LongTermMemory(tmp_path / "chromadb")
     hits = b.search_similar("apple pie")
@@ -243,6 +245,7 @@ def test_long_term_persists_across_instantiations(tmp_path: Path):
 def test_long_term_wipe_clears_collections(long_term_mem):
     long_term_mem.save_conversation("entry one")
     long_term_mem.save_conversation("entry two")
+    long_term_mem.flush()
     counts_before = long_term_mem.stats()
     assert counts_before["conversations"] == 2
     wiped = long_term_mem.wipe_all()
@@ -261,6 +264,7 @@ def test_context_builder_includes_all_sections(memory: MemoryManager):
     memory.long_term.save_conversation(
         "User asked about lights, JARVIS turned them off."
     )
+    memory.long_term.flush()
     eid = memory.error_mem.record_error(
         "open lights", RuntimeError("gateway timeout"), category="lights",
     )
@@ -316,7 +320,8 @@ def test_record_command_result_drives_both_layers(memory: MemoryManager):
     # Error memory should now have one failure tracked.
     problematic = memory.known_errors()
     assert any("homekit_lights" in r["command"] for r in problematic)
-    # Long-term should hold both commands.
+    # Long-term should hold both commands (flush async writes first).
+    memory.long_term.flush()
     cmd_stats = memory.long_term.stats()
     assert cmd_stats["commands"] >= 2
 
@@ -328,6 +333,7 @@ def test_full_wipe_requires_confirmation_and_clears_everything(memory: MemoryMan
     memory.before_message(sid, "Mein Name ist Test")
     memory.after_message(sid, "Mein Name ist Test", "Hallo Test!")
     memory.session_end(sid)
+    memory.long_term.flush()  # commit async writes before wipe
     # Refusal path.
     refused = memory.forget_everything(confirmation_token=None)
     assert refused["ok"] is False

@@ -198,6 +198,9 @@ class GoalDB:
                         line += f" (noch {days_left}d)"
                 except ValueError:
                     line += f" (bis {g['deadline']})"
+            ts = self.link_summary(g["id"])
+            if ts["linked"] > 0:
+                line += f" [{ts['done']}/{ts['linked']} Tasks erledigt]"
             lines.append(line)
         n = len(goals)
         return f"{n} aktive{'s' if n == 1 else ''} Ziel{'e' if n != 1 else ''}:\n" + "\n".join(lines)
@@ -282,6 +285,63 @@ class GoalDB:
         if len(due) == 1:
             return f"Ziel '{due[0]['title'][:40]}' wartet auf dein Update."
         return f"{len(due)} Ziele warten auf ein Fortschritts-Update."
+
+    # ── goal-task linkage ─────────────────────────────────────────────── #
+
+    def auto_link_task(self, task_title: str) -> int | None:
+        """Return goal_id of the best-matching active goal for a task title.
+
+        Uses word-Jaccard overlap. Returns None if no goal scores > 0.15
+        or if there are no active goals. Never raises.
+        """
+        if not self.available or not task_title.strip():
+            return None
+        goals = self.get_active()
+        if not goals:
+            return None
+        task_words = {w.lower() for w in task_title.split() if len(w) > 2}
+        best_id: int | None = None
+        best_score = 0.15  # minimum threshold
+        for g in goals:
+            goal_words = {w.lower() for w in g["title"].split() if len(w) > 2}
+            if not goal_words:
+                continue
+            union = task_words | goal_words
+            if not union:
+                continue
+            score = len(task_words & goal_words) / len(union)
+            if score > best_score:
+                best_score = score
+                best_id = g["id"]
+        return best_id
+
+    def link_summary(self, goal_id: int) -> dict:
+        """Return {linked, done, pct} for tasks linked to this goal.
+
+        Queries the tasks table in the same jarvis.db connection.
+        pct is None when no tasks are linked yet.
+        """
+        try:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done "
+                "FROM tasks WHERE goal_id=?",
+                (goal_id,),
+            ).fetchone()
+            total = int(row[0] or 0)
+            done = int(row[1] or 0)
+            pct = int(done / total * 100) if total > 0 else None
+            return {"linked": total, "done": done, "pct": pct}
+        except Exception:
+            return {"linked": 0, "done": 0, "pct": None}
+
+    def update_progress_from_tasks(self, goal_id: int) -> bool:
+        """Auto-compute progress from linked tasks and update the goal."""
+        summary = self.link_summary(goal_id)
+        if summary["linked"] == 0 or summary["pct"] is None:
+            return False
+        return self.update_progress(goal_id, summary["pct"],
+                                    note="auto-calculated from linked tasks")
 
     # ── auto-extraction ───────────────────────────────────────────────── #
 

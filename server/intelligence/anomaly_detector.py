@@ -56,7 +56,7 @@ class AnomalyDetector:
             row = conn.execute(
                 "SELECT COALESCE(SUM(duration_minutes), 0) AS m "
                 "FROM time_entries "
-                "WHERE started_at >= strftime('%s', 'now', 'weekday 0', '-7 days')"
+                "WHERE start_time >= strftime('%s', 'now', 'weekday 0', '-7 days')"
             ).fetchone()
             if row and (row[0] or 0) == 0:
                 return {

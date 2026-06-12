@@ -34,14 +34,30 @@ class ProductivityExecMixin:
                     title = inp.get("title", "")
                     if not title:
                         return "title ist erforderlich.", True
+                    # Auto-link to a goal if keyword overlap exists.
+                    goal_id: int | None = None
+                    goal_hint = ""
+                    try:
+                        from ..productivity.goals import GoalDB as _GoalDB
+                        _gdb = _GoalDB(_DATA_DIR / "jarvis.db")
+                        goal_id = _gdb.auto_link_task(title)
+                        if goal_id:
+                            goals = _gdb.get_active()
+                            g = next((g for g in goals if g["id"] == goal_id), None)
+                            if g:
+                                goal_hint = f" → Ziel '{g['title'][:30]}'"
+                        _gdb.close()
+                    except Exception:
+                        pass
                     tid = pm.tasks.add_task(
                         title,
                         priority=int(inp.get("priority", 2)),
                         due_date=inp.get("due_date"),
                         project_name=inp.get("project"),
                         context=inp.get("context", "work"),
+                        goal_id=goal_id,
                     )
-                    return f"Task erstellt (id={tid}): {title}", False
+                    return f"Task erstellt (id={tid}): {title}{goal_hint}", False
                 if action == "list_today":
                     tasks = pm.tasks.get_today_tasks()
                     if not tasks:
@@ -59,6 +75,19 @@ class ProductivityExecMixin:
                     if not tid:
                         return "task_id ist erforderlich.", True
                     ok = pm.tasks.complete_task(int(tid))
+                    if ok:
+                        # Auto-update goal progress from linked tasks.
+                        try:
+                            row = pm.tasks._conn.execute(
+                                "SELECT goal_id FROM tasks WHERE id=?", (int(tid),)
+                            ).fetchone()
+                            if row and row[0]:
+                                from ..productivity.goals import GoalDB as _GoalDB
+                                _gdb = _GoalDB(_DATA_DIR / "jarvis.db")
+                                _gdb.update_progress_from_tasks(int(row[0]))
+                                _gdb.close()
+                        except Exception:
+                            pass
                     return ("Task erledigt." if ok else "Task nicht gefunden."), not ok
                 if action == "project_status":
                     proj = inp.get("project", "")
@@ -540,6 +569,20 @@ class ProductivityExecMixin:
                         lines.append(line)
                     total = cmap.get("total_nodes", len(nodes))
                     return (f"Top Themen ({total} gesamt):\n" + "\n".join(lines)), False
+                if action == "compress_prompt":
+                    from ..memory.prompt_compressor import PromptCompressor as _PC
+                    client = getattr(self, "client", None)  # type: ignore[attr-defined]
+                    if client is None:
+                        return "Claude-Client nicht verfügbar.", True
+                    pc = _PC()
+                    si = getattr(self.memory, "self_improvement", None)  # type: ignore[attr-defined]
+                    result = pc.run(self.memory.profile, si, client)  # type: ignore[attr-defined]
+                    # Invalidate context cache so next turn uses compressed context.
+                    try:
+                        self.memory.context_builder.invalidate_cache()  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    return result, False
                 return f"Unbekannte action: {action}", True
 
             return f"Unbekanntes Productivity-Tool: {tool_name}", True

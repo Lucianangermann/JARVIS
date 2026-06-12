@@ -351,11 +351,13 @@ def productivity_tools() -> list[dict[str, Any]]:
                     "action": {
                         "type": "string",
                         "enum": ["list", "remove", "add", "stats", "consolidate",
-                                 "quality_audit", "staleness_review", "topic_map"],
+                                 "quality_audit", "staleness_review", "topic_map",
+                                 "compress_prompt"],
                         "description": (
                             "What to do. quality_audit = tool correction-rate report. "
                             "staleness_review = archive outdated knowledge notes. "
-                            "topic_map = show top conversation themes and their connections."
+                            "topic_map = show top conversation themes and their connections. "
+                            "compress_prompt = deduplicate profile facts + lesson rules to reduce token usage."
                         ),
                     },
                     "id": {

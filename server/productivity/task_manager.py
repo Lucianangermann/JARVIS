@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     estimated_minutes  INTEGER,
     context            TEXT DEFAULT 'work',
     energy_level       TEXT DEFAULT 'medium',
-    tags               TEXT DEFAULT ''
+    tags               TEXT DEFAULT '',
+    goal_id            INTEGER DEFAULT NULL
 )
 """
 
@@ -68,6 +69,13 @@ class TaskManager:
             self._conn.execute(_CREATE_PROJECTS)
             self._conn.execute(_CREATE_TASKS)
             self._conn.execute(_CREATE_TIME_ENTRIES)
+            # Migrate: add goal_id column for existing databases.
+            try:
+                self._conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN goal_id INTEGER DEFAULT NULL"
+                )
+            except Exception:
+                pass  # column already exists
             self._conn.commit()
         except Exception as exc:
             print(f"[TaskManager] DB init failed: {exc}")
@@ -121,6 +129,7 @@ class TaskManager:
         context: str = "work",
         tags: str = "",
         description: str = "",
+        goal_id: int | None = None,
     ) -> int:
         try:
             project_id: int | None = None
@@ -129,10 +138,10 @@ class TaskManager:
             cur = self._conn.execute(
                 """INSERT INTO tasks
                    (title, description, project_id, priority, due_date,
-                    created_at, context, tags)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    created_at, context, tags, goal_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (title, description, project_id, priority, due_date,
-                 time.time(), context, tags),
+                 time.time(), context, tags, goal_id),
             )
             self._conn.commit()
             return cur.lastrowid or 0

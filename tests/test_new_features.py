@@ -34,8 +34,8 @@ def _seed_jarvis_tables(path: Path) -> None:
             score INTEGER NOT NULL, note TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS time_entries (
-            id INTEGER PRIMARY KEY, started_at REAL NOT NULL,
-            duration_minutes REAL DEFAULT 0, task_id INTEGER, project TEXT
+            id INTEGER PRIMARY KEY, start_time REAL NOT NULL,
+            duration_minutes REAL DEFAULT 0, task_id INTEGER, project TEXT DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS tasks (
             id INTEGER PRIMARY KEY, title TEXT NOT NULL,
@@ -201,7 +201,7 @@ class TestAnomalyDetector:
     def test_focus_gap_not_detected_with_entry(self):
         conn = sqlite3.connect(str(self.db_path))
         conn.execute(
-            "INSERT INTO time_entries (started_at, duration_minutes) VALUES (?, ?)",
+            "INSERT INTO time_entries (start_time, duration_minutes) VALUES (?, ?)",
             (time.time() - 3600, 25),
         )
         conn.commit()
