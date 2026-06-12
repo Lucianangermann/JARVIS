@@ -55,6 +55,7 @@ _ROUTINE_REGISTRY: dict[str, Callable[[], str]] = {
     "work_start": routines.work_start_briefing,
     "lunch":      routines.lunch_briefing,
     "evening":    routines.evening_briefing,
+    "weekly":     routines.weekly_summary,
 }
 
 
@@ -92,6 +93,7 @@ class IntelligenceManager:
             "work_start": _hhmm("WORK_START_TIME",    "09:00"),
             "lunch":      _hhmm("LUNCH_TIME",         "12:30"),
             "evening":    _hhmm("EVENING_TIME",       "18:00"),
+            "weekly":     _hhmm("WEEKLY_SUMMARY_TIME", "17:00"),
         }
         # Optional callback: text → side-effect (TTS, WS push). The
         # server registers one in main.py; without it, scheduled
@@ -110,10 +112,11 @@ class IntelligenceManager:
                 # iteration — without it every job would close over
                 # the same `name` reference and all four would run
                 # the last routine.
+                weekdays = {4} if name == "weekly" else _DEFAULT_WEEKDAYS
                 self.scheduler.daily(
                     hhmm,
                     lambda n=name: self._fire_routine(n),
-                    weekdays=_DEFAULT_WEEKDAYS,
+                    weekdays=weekdays,
                     name=f"{name}-briefing",
                 )
             print("[INTEL] briefings scheduled Mon–Fri: " +

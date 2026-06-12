@@ -527,6 +527,47 @@ def _check_package_delivery(engine: ProactiveEngine) -> str | None:
     return None
 
 
+def _check_watchlist_alerts(engine: ProactiveEngine) -> str | None:
+    """Warn when a watched asset is within 5 % of a price target."""
+    try:
+        from pathlib import Path
+        from ..finance import FinanceManager
+        fm = FinanceManager(Path("data/finance.db"))
+        try:
+            items = fm.market._db.get_watchlist()
+        finally:
+            conn = getattr(getattr(fm.market, "_db", None), "_conn", None)
+            if conn:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        if not items:
+            return None
+        near: list[str] = []
+        for w in items:
+            price = w.get("last_price")
+            if not price:
+                continue
+            above = w.get("target_above")
+            below = w.get("target_below")
+            sym = w["symbol"]
+            cur = w.get("last_currency", "")
+            if above and not w.get("alert_armed") is False:
+                gap_pct = (above - price) / above
+                if 0 < gap_pct <= 0.05:
+                    near.append(f"{sym} nähert sich {above:.0f} {cur} (aktuell {price:.2f})")
+            if below and not w.get("alert_armed") is False:
+                gap_pct = (price - below) / below
+                if 0 < gap_pct <= 0.05:
+                    near.append(f"{sym} nähert sich {below:.0f} {cur} (aktuell {price:.2f})")
+        if not near:
+            return None
+        return "Kursalarm nah: " + "; ".join(near[:3]) + "."
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _check_flashcard_due(engine: ProactiveEngine) -> str | None:
     """Nudge when there are enough due flashcards to make a review session worthwhile."""
     try:
@@ -714,5 +755,13 @@ def _build_specs() -> tuple[NotificationSpec, ...]:
             max_per_day=1,
             active_hours=(8, 21),
             check=_check_budget_warning,
+        ),
+        NotificationSpec(
+            name="watchlist_alert",
+            priority="medium",
+            cooldown_minutes=2 * 60,
+            max_per_day=3,
+            active_hours=(8, 22),
+            check=_check_watchlist_alerts,
         ),
     )

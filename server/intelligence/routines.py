@@ -324,3 +324,101 @@ def evening_briefing() -> str:
         pass
 
     return " ".join(lines)
+
+
+def weekly_summary() -> str:
+    """Friday-evening recap — what happened this week across all modules.
+
+    Pulls completed tasks, finished Lernziele, budget burn, and flashcard
+    activity. Each section degrades independently on errors.
+    """
+    now = datetime.now(_LOCAL_TZ)
+    week_start = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+
+    lines: list[str] = ["Wochenrückblick."]
+
+    # ── completed tasks ────────────────────────────────────────────────
+    try:
+        from ..productivity.task_manager import TaskManager as _TM
+        tm = _TM(_DATA_DIR / "jarvis.db")
+        try:
+            done = tm._conn.execute(
+                "SELECT title FROM tasks WHERE status='done' AND completed_at >= ?",
+                (week_start.timestamp(),),
+            ).fetchall()
+        finally:
+            tm._conn.close()
+        n = len(done)
+        if n:
+            lines.append(f"{n} Task{'s' if n != 1 else ''} abgeschlossen.")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── finished Lernziele ─────────────────────────────────────────────
+    try:
+        from ..knowledge.lerntrack import LerntrackDB as _LT
+        lt = _LT(_DATA_DIR / "lerntrack.db")
+        try:
+            finished = lt.list_group(status="abgeschlossen")
+            this_week = [
+                r for r in finished
+                if r.get("updated_at", 0) >= week_start.timestamp()
+            ]
+        finally:
+            lt.close()
+        n = len(this_week)
+        if n:
+            names = ", ".join(r["display_name"] for r in this_week[:3])
+            extra = " ..." if n > 3 else ""
+            plural = "e" if n != 1 else ""
+            lines.append(f"{n} Lernziel{plural} abgeschlossen: {names}{extra}.")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── budget burn ────────────────────────────────────────────────────
+    try:
+        from ..finance import FinanceManager as _FM
+        fm = _FM(_DATA_DIR / "finance.db")
+        try:
+            rows = fm.expenses.budget_status()
+        finally:
+            conn = getattr(getattr(fm, "expenses", None), "_db", None)
+            if conn:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        if rows:
+            total_spent = sum(r["spent"] for r in rows)
+            total_limit = sum(r["limit"] for r in rows)
+            cur = rows[0].get("currency", "EUR")
+            over = [r for r in rows if r.get("over")]
+            budget_line = (f"Ausgaben: {total_spent:.0f} von {total_limit:.0f} {cur}.")
+            if over:
+                cats = ", ".join(r["category"] for r in over[:2])
+                budget_line += f" Überzogen: {cats}."
+            lines.append(budget_line)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── flashcard activity ─────────────────────────────────────────────
+    try:
+        from ..knowledge.flashcards import FlashcardManager as _FC
+        fc = _FC(_DATA_DIR / "knowledge.db")
+        try:
+            due = fc.due_count()
+        finally:
+            fc.close()
+        if due:
+            plural = "n" if due != 1 else ""
+            lines.append(f"Noch {due} Karteikarte{plural} fällig.")
+    except Exception:  # noqa: BLE001
+        pass
+
+    if len(lines) == 1:
+        lines.append("Keine Aktivitäten diese Woche erfasst.")
+
+    lines.append("Schönes Wochenende!")
+    return " ".join(lines)

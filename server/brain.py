@@ -32,6 +32,7 @@ from .brain_exec.entertainment import EntertainmentExecMixin
 from .brain_exec.knowledge import KnowledgeExecMixin
 from .brain_exec.productivity import ProductivityExecMixin
 from .brain_exec.smarthome_finance import SmartHomeFinanceExecMixin
+from .brain_exec.system_mac_exec import SystemMacExecMixin
 from .config import settings
 from .mac_control import dispatcher as mac_dispatcher
 from .mac_control import permission_manager as mac_pm
@@ -605,6 +606,7 @@ class Brain(
     AppleAppsExecMixin,
     CommunicationExecMixin,
     SmartHomeFinanceExecMixin,
+    SystemMacExecMixin,
 ):
     """Conversation manager + agentic tool loop around Claude Haiku."""
 
@@ -1487,92 +1489,6 @@ class Brain(
         except Exception:  # noqa: BLE001 — memory must never break the brain
             pass
 
-    def _exec_vision_tool(
-        self, name: str, tool_input: dict[str, Any],
-    ) -> tuple[str, bool]:
-        """Dispatch a vision tool_use to the VisionManager.
-
-        Returns ``(text, is_error)`` so the surrounding tool loop can
-        decide whether to surface the result as content or as an
-        error to the model. We deliberately keep the error case
-        non-fatal — Claude can still wrap a "I couldn't see the
-        screen" reply around it rather than aborting the turn."""
-        if self.vision is None:
-            return (
-                "vision unavailable (deps missing or init failed)",
-                True,
-            )
-        try:
-            if name == "analyze_screen":
-                question = (tool_input or {}).get("question") or "describe"
-                if not isinstance(question, str):
-                    return ("`question` must be a string.", True)
-                result = self.vision.screen.analyze_screen(question)
-            elif name == "check_screen_for_errors":
-                result = self.vision.screen.detect_error_on_screen()
-            elif name == "read_screen_text":
-                result = self.vision.screen.analyze_screen("read")
-            else:
-                return (f"Unknown vision tool {name!r}.", True)
-        except Exception as exc:  # noqa: BLE001
-            return (f"vision tool {name!r} crashed: {exc}", True)
-
-        if not result:
-            return (
-                "vision call returned no result — likely Screen "
-                "Recording permission missing or capture failed",
-                True,
-            )
-        return (result, False)
-
-    def _exec_system_command(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
-        """Dispatch a `system_command` tool_use to the whitelist."""
-        command = (tool_input or {}).get("command", "")
-        args = (tool_input or {}).get("args") or {}
-        if not isinstance(args, dict):
-            return ("`args` must be an object.", True)
-        try:
-            return (command_guard.execute(command, args), False)
-        except ValueError as exc:
-            return (str(exc), True)
-
-    def _exec_mac_action(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
-        """Dispatch a `mac_action` tool_use through the staged-permission
-        dispatcher and serialise the envelope as JSON so Claude can read
-        the ``status`` field and decide what to tell the user."""
-        action_name = (tool_input or {}).get("action", "")
-        params = (tool_input or {}).get("params") or {}
-        if not isinstance(params, dict):
-            return ("`params` must be an object.", True)
-        envelope = mac_dispatcher.dispatch(action_name, params)
-        is_error = envelope.get("status") == "rejected"
-        return (json.dumps(envelope, ensure_ascii=False), is_error)
-
-    def _exec_confirm_action(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
-        """Confirm or cancel a Tier-3 pending. Tier 4 is refused here —
-        the password must come from the web UI, never via chat."""
-        pid = (tool_input or {}).get("id", "")
-        approve = bool((tool_input or {}).get("approve", False))
-        if not isinstance(pid, str) or not pid:
-            return ("`id` is required and must be a string.", True)
-        # Inspect first so we can refuse Tier-4 before consuming.
-        from .mac_control import confirmation as _cf
-        peek = _cf.peek(pid)
-        if peek is None:
-            return (json.dumps({"status": "rejected",
-                                "reason": "Pending id unknown or expired."}),
-                    True)
-        if peek.requires_password:
-            return (json.dumps({
-                "status": "rejected",
-                "tier": peek.tier,
-                "reason": ("Tier 4 cannot be confirmed via chat. Ask the user "
-                          "to enter the JARVIS password in the web UI."),
-            }), True)
-        envelope = (mac_dispatcher.consume(pid) if approve
-                    else mac_dispatcher.cancel(pid))
-        is_error = envelope.get("status") == "rejected"
-        return (json.dumps(envelope, ensure_ascii=False), is_error)
 
 
     def _run_security_command(self, user_text: str) -> str | None:
@@ -1751,36 +1667,6 @@ class Brain(
             return None
 
 
-    def _exec_safari_control(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
-        from .tools.safari_tool import (
-            open_url, search_in_safari, current_url, current_title,
-            current_page_text, navigate_back, navigate_forward, open_new_tab,
-        )
-        inp = tool_input or {}
-        action = inp.get("action", "")
-        if action == "open_url":
-            url = inp.get("url", "")
-            if not url:
-                return "url ist erforderlich.", True
-            return open_url(url)
-        if action == "search":
-            query = inp.get("query", "")
-            if not query:
-                return "query ist erforderlich.", True
-            return search_in_safari(query)
-        if action == "current_url":
-            return current_url()
-        if action == "current_title":
-            return current_title()
-        if action == "read_page":
-            return current_page_text()
-        if action == "back":
-            return navigate_back()
-        if action == "forward":
-            return navigate_forward()
-        if action == "new_tab":
-            return open_new_tab(inp.get("url"))
-        return f"Unbekannte Aktion: {action}", True
 
 
 _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n+")
