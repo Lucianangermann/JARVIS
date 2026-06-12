@@ -199,6 +199,23 @@ def morning_briefing() -> str:
     except Exception:
         pass
 
+    # Gestrige Gespräche — pull yesterday's session summaries from ChromaDB
+    # so JARVIS can reference what was discussed the day before.
+    try:
+        from ..memory.long_term import LongTermMemory as _LTM
+        _lt = _LTM(_DATA_DIR / "chromadb")
+        if _lt.available:
+            _sessions = _lt.get_recent_sessions(days=1)
+            n_sess = len(_sessions)
+            if n_sess:
+                plural = "e" if n_sess != 1 else ""
+                lines.append(
+                    f"Gestern {n_sess} Gespräch{plural} mit JARVIS — "
+                    "Details auf Anfrage verfügbar."
+                )
+    except Exception:
+        pass
+
     return " ".join(lines)
 
 
@@ -414,6 +431,24 @@ def weekly_summary() -> str:
         if due:
             plural = "n" if due != 1 else ""
             lines.append(f"Noch {due} Karteikarte{plural} fällig.")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── spending trend ─────────────────────────────────────────────────
+    try:
+        from ..finance import FinanceManager as _FM2
+        fm2 = _FM2(_DATA_DIR / "finance.db")
+        try:
+            trend = fm2.expenses.spoken_trend()
+        finally:
+            conn2 = getattr(getattr(fm2, "expenses", None), "_db", None)
+            if conn2:
+                try:
+                    conn2.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        if trend and "stabil" not in trend and "keine" not in trend.lower():
+            lines.append(trend)
     except Exception:  # noqa: BLE001
         pass
 

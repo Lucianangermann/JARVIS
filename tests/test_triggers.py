@@ -52,3 +52,45 @@ def test_spoken_pending(store: TriggerStore) -> None:
     assert "Keine" in store.spoken_pending()
     store.add(time.time() + 3600, "Arzt anrufen")
     assert "Arzt anrufen" in store.spoken_pending()
+
+
+# ── recurring triggers ───────────────────────────────────────────────────── #
+
+def test_daily_trigger_reschedules(store: TriggerStore) -> None:
+    """A daily recurring trigger stays pending and reschedules after firing."""
+    fire_at = time.time() - 1
+    store.add(fire_at, "Sport", recurrence="daily")
+    assert store.fire_due() == 1
+    pending = store.pending()
+    # Still one pending entry — rescheduled, NOT marked fired
+    assert len(pending) == 1
+    assert pending[0]["fire_at"] > time.time()  # ~24h from now
+
+def test_weekly_trigger_reschedules(store: TriggerStore) -> None:
+    fire_at = time.time() - 1
+    store.add(fire_at, "Wochenrückblick", recurrence="weekly")
+    store.fire_due()
+    pending = store.pending()
+    assert len(pending) == 1
+    # 7 days ± small tolerance
+    delay = pending[0]["fire_at"] - time.time()
+    assert 6.9 * 86400 <= delay <= 7.1 * 86400
+
+def test_one_shot_trigger_is_marked_fired(store: TriggerStore) -> None:
+    store.add(time.time() - 1, "Einmalig")
+    store.fire_due()
+    assert store.pending() == []
+
+def test_recurring_label_in_spoken_pending(store: TriggerStore) -> None:
+    store.add(time.time() + 3600, "Meditation", recurrence="daily")
+    text = store.spoken_pending()
+    assert "täglich" in text
+
+def test_weekdays_recurrence_skips_weekend(store: TriggerStore) -> None:
+    """_next_fire_at for 'weekdays' must land on Mon–Fri."""
+    import datetime as _dt
+    # fire_at set to right now
+    trigger = {"fire_at": time.time() - 1, "recurrence": "weekdays"}
+    next_at = store._next_fire_at(trigger)
+    wd = _dt.datetime.fromtimestamp(next_at).weekday()
+    assert wd < 5, f"Expected weekday, got weekday {wd}"

@@ -143,3 +143,68 @@ def test_price_alert_fires_once(db: FinanceDB) -> None:
     assert len(alerts) == 1
     mk.refresh_prices()                 # disarmed → no re-fire
     assert len(alerts) == 1
+
+
+# ── spending trends ──────────────────────────────────────────────────────── #
+
+def test_spending_trend_empty(db: FinanceDB) -> None:
+    et = ExpenseTracker(db)
+    trends = et.spending_trend()
+    assert trends == []
+
+def test_spending_trend_current_only(db: FinanceDB) -> None:
+    """Expenses only in current month → previous=0, change_pct=None."""
+    et = ExpenseTracker(db)
+    et.add_expense(50.0, "REWE")
+    trends = et.spending_trend()
+    assert len(trends) == 1
+    assert trends[0]["category"] == "lebensmittel"
+    assert trends[0]["previous"] == 0.0
+    assert trends[0]["change_pct"] is None
+
+def test_spending_trend_with_previous_month(db: FinanceDB) -> None:
+    """Inject an expense in previous month via raw DB and verify trend."""
+    from datetime import datetime
+    et = ExpenseTracker(db)
+    now = datetime.now()
+    # Previous month start timestamp
+    if now.month == 1:
+        prev_ts = datetime(now.year - 1, 12, 15).timestamp()
+    else:
+        prev_ts = datetime(now.year, now.month - 1, 15).timestamp()
+    # Insert directly with old timestamp
+    db.execute(
+        "INSERT INTO expenses (ts, amount, currency, category, source) "
+        "VALUES (?, ?, 'EUR', 'lebensmittel', 'manual')",
+        (prev_ts, 40.0),
+    )
+    et.add_expense(60.0, "REWE")  # current month
+    trends = et.spending_trend()
+    lm = next(t for t in trends if t["category"] == "lebensmittel")
+    assert lm["previous"] == 40.0
+    assert lm["current"] == 60.0
+    assert lm["change_pct"] == 50.0
+
+def test_spoken_trend_stable(db: FinanceDB) -> None:
+    et = ExpenseTracker(db)
+    # No data → fallback message
+    result = et.spoken_trend()
+    assert isinstance(result, str)
+
+def test_spoken_trend_has_spike(db: FinanceDB) -> None:
+    from datetime import datetime
+    et = ExpenseTracker(db)
+    now = datetime.now()
+    if now.month == 1:
+        prev_ts = datetime(now.year - 1, 12, 15).timestamp()
+    else:
+        prev_ts = datetime(now.year, now.month - 1, 15).timestamp()
+    db.execute(
+        "INSERT INTO expenses (ts, amount, currency, category, source) "
+        "VALUES (?, ?, 'EUR', 'essen', 'manual')",
+        (prev_ts, 20.0),
+    )
+    et.add_expense(80.0, "restaurant XYZ", "essen")  # +300 %
+    result = et.spoken_trend()
+    assert "essen" in result
+    assert "%" in result

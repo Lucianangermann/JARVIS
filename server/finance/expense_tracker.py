@@ -152,6 +152,63 @@ class ExpenseTracker:
                 "by_category": by_cat,
                 "budgets": self.budget_status()}
 
+    def spending_trend(self) -> list[dict]:
+        """Compare current-month vs previous-month spend per category.
+
+        Returns a list sorted by current-month spend, descending.
+        Each entry: {category, current, previous, change_pct | None}."""
+        now = datetime.now()
+        # Current month start
+        cur_start = datetime(now.year, now.month, 1).timestamp()
+        # Previous month start / end
+        if now.month == 1:
+            prev_start = datetime(now.year - 1, 12, 1).timestamp()
+        else:
+            prev_start = datetime(now.year, now.month - 1, 1).timestamp()
+        prev_end = cur_start
+
+        cur_by_cat = {r["category"]: float(r["total"] or 0)
+                      for r in self._db.expenses_by_category(cur_start)}
+        prev_by_cat = {r["category"]: float(r["total"] or 0)
+                       for r in self._db.expenses_by_category(prev_start, prev_end)}
+
+        all_cats = set(cur_by_cat) | set(prev_by_cat)
+        result = []
+        for cat in all_cats:
+            cur = cur_by_cat.get(cat, 0.0)
+            prev = prev_by_cat.get(cat, 0.0)
+            change_pct: float | None = None
+            if prev > 0:
+                change_pct = round((cur - prev) / prev * 100, 1)
+            result.append({"category": cat, "current": round(cur, 2),
+                           "previous": round(prev, 2), "change_pct": change_pct})
+        result.sort(key=lambda x: x["current"], reverse=True)
+        return result
+
+    def spoken_trend(self) -> str:
+        """One-sentence spoken summary of month-over-month changes."""
+        trends = self.spending_trend()
+        if not trends:
+            return "Noch keine Ausgaben erfasst."
+        has_prev = any(t["previous"] > 0 for t in trends)
+        if not has_prev:
+            return "Keine Vormonatsdaten für Vergleich vorhanden."
+        significant = [t for t in trends
+                       if t.get("change_pct") is not None
+                       and abs(t["change_pct"]) >= 10]
+        if not significant:
+            return "Ausgaben im Vergleich zum Vormonat stabil."
+        up = sorted([t for t in significant if t["change_pct"] > 0],
+                    key=lambda t: t["change_pct"], reverse=True)
+        down = sorted([t for t in significant if t["change_pct"] < 0],
+                      key=lambda t: t["change_pct"])
+        parts = []
+        for t in up[:2]:
+            parts.append(f"{t['category']} +{t['change_pct']:.0f}%")
+        for t in down[:2]:
+            parts.append(f"{t['category']} {t['change_pct']:.0f}%")
+        return "Monatstrend: " + ", ".join(parts) + "."
+
     def spoken_month_summary(self) -> str:
         s = self.monthly_summary()
         if s["total"] == 0:

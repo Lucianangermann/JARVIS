@@ -694,6 +694,37 @@ class Brain(
         self._tools.extend(finance_tools())
         self._finance = None  # type: ignore[assignment]
 
+        # SmartHome automation management (create / list / enable / disable)
+        self._tools.append({
+            "name": "manage_automation",
+            "description": (
+                "Manage time-based SmartHome automations — routines that "
+                "activate a scene automatically at a set time.\n\n"
+                "Actions:\n"
+                "  list   — show all automations with enabled/disabled status\n"
+                "  create — create a new automation (name, scene, time HH:MM, days)\n"
+                "  enable / disable — toggle an existing automation by id\n"
+                "  delete — remove a custom automation by id\n\n"
+                "days options: 'daily', 'weekday' (Mon–Fri), 'weekend'\n"
+                "scene options: kinoabend, gute_nacht, guten_morgen, entspannen, "
+                "arbeiten, party, lesen, fokus, gaming, romantisch, alles_aus, "
+                "alles_an, verlasse_haus, ankunft_zuhause"
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string",
+                               "enum": ["list", "create", "enable", "disable", "delete"]},
+                    "id":     {"type": "string", "description": "Automation ID"},
+                    "name":   {"type": "string", "description": "Human-readable name"},
+                    "scene":  {"type": "string", "description": "Scene to activate"},
+                    "time":   {"type": "string", "description": "HH:MM"},
+                    "days":   {"type": "string", "description": "daily | weekday | weekend"},
+                },
+                "required": ["action"],
+            },
+        })
+
         # Tool-name → handler dispatch table, built lazily on first tool use
         # (see _tool_dispatch). Replaces a long elif chain.
         self._tool_handlers: dict[str, Any] | None = None
@@ -1546,7 +1577,8 @@ class Brain(
             "system_command":    self._exec_system_command,
             "mac_action":        self._exec_mac_action,
             "confirm_action":    self._exec_confirm_action,
-            "smarthome_control": self._exec_smarthome_tool,
+            "smarthome_control":  self._exec_smarthome_tool,
+            "manage_automation":  self._exec_manage_automation,
             "macos_app":         self._exec_macos_app,
             "apple_reminders":   self._exec_apple_reminders,
             "apple_music":       self._exec_apple_music,

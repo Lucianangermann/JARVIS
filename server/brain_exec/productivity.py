@@ -222,14 +222,20 @@ class ProductivityExecMixin:
                     fire_at = target.timestamp()
                 if fire_at is None:
                     return "Sag mir, wann (in X Minuten oder um HH:MM, optional mit Datum).", True
-                trg.add(fire_at, message)
+                recurrence = str(inp.get("recurrence") or "none").lower()
+                rec_weekday = inp.get("recurrence_weekday")
+                trg.add(fire_at, message, recurrence=recurrence,
+                        recurrence_weekday=int(rec_weekday) if rec_weekday is not None else None)
                 import datetime as _dt2
                 fire_dt = _dt2.datetime.fromtimestamp(fire_at)
                 if fire_dt.date() == _dt2.date.today():
                     when = fire_dt.strftime("%H:%M Uhr")
                 else:
                     when = fire_dt.strftime("%d.%m. um %H:%M Uhr")
-                return f"Erinnerung für {when} gesetzt: {message}.", False
+                rec_label = {"daily": " (täglich wiederholt)",
+                             "weekly": " (wöchentlich wiederholt)",
+                             "weekdays": " (Mo–Fr wiederholt)"}.get(recurrence, "")
+                return f"Erinnerung für {when} gesetzt: {message}{rec_label}.", False
 
             if tool_name == "meeting_control":
                 meeting = getattr(pm, "meeting", None)

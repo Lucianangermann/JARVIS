@@ -11,6 +11,79 @@ class SmartHomeFinanceExecMixin:
     """Exec methods for SmartHome control and the Finance layer
     (expenses, budgets, market watchlist, subscriptions)."""
 
+    def _exec_manage_automation(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
+        """List, create, enable, or disable SmartHome time automations."""
+        sm = getattr(self, "smarthome", None)  # type: ignore[attr-defined]
+        if sm is None or getattr(sm, "automations", None) is None:
+            return "SmartHome nicht verfügbar.", True
+        eng = sm.automations
+        inp = tool_input or {}
+        action = inp.get("action", "list")
+
+        if action == "list":
+            items = eng.all_automations()
+            if not items:
+                return "Keine Automationen konfiguriert.", False
+            lines = []
+            for a in items:
+                status = "✓" if a.get("enabled") else "✗"
+                t = a.get("time", "")
+                days = a.get("days", ["daily"])
+                scene = a.get("scene", "")
+                lines.append(
+                    f"[{status}] {a['name']} — {t} ({', '.join(days)}) → {scene}"
+                )
+            return "\n".join(lines), False
+
+        if action in ("enable", "disable"):
+            aid = inp.get("id", "")
+            if not aid:
+                return "id ist erforderlich.", True
+            ok = eng.enable(aid, action == "enable")
+            if not ok:
+                return f"Automation '{aid}' nicht gefunden.", True
+            label = "aktiviert" if action == "enable" else "deaktiviert"
+            return f"Automation {label}.", False
+
+        if action == "create":
+            name = inp.get("name", "")
+            scene = inp.get("scene", "")
+            trigger_time = inp.get("time", "")
+            days_raw = inp.get("days", "daily")
+            if not name or not scene:
+                return "name und scene sind erforderlich.", True
+            days = [days_raw] if isinstance(days_raw, str) else list(days_raw)
+            import asyncio as _aio
+            from .. import events as _events
+            try:
+                coro = eng.create(
+                    name=name, trigger="time", scene=scene,
+                    time=trigger_time, days=days,
+                )
+                main_loop = _events._loop
+                if main_loop is not None and main_loop.is_running():
+                    auto = _aio.run_coroutine_threadsafe(coro, main_loop).result(timeout=5)
+                else:
+                    auto = _aio.run(coro)
+            except Exception as exc:  # noqa: BLE001
+                return f"Automation konnte nicht erstellt werden: {exc}", True
+            return (f"Automation '{name}' erstellt (ID: {auto['id']}). "
+                    f"Szene '{scene}' wird täglich um {trigger_time} ausgeführt."), False
+
+        if action == "delete":
+            aid = inp.get("id", "")
+            if not aid:
+                return "id ist erforderlich.", True
+            items = eng.all_automations()
+            before = len(items)
+            eng._automations = [a for a in items if a.get("id") != aid]
+            if len(eng._automations) == before:
+                return f"Automation '{aid}' nicht gefunden.", True
+            eng._save()
+            return "Automation gelöscht.", False
+
+        return f"Unbekannte Aktion: {action}", True
+
     def _exec_smarthome_tool(self, tool_input: dict[str, Any]) -> tuple[str, bool]:
         """Dispatch a smarthome_control tool_use to the SmartHomeManager.
 

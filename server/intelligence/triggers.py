@@ -21,14 +21,18 @@ from ..common.sqlite_store import ThreadSafeDB
 
 _CREATE = """
 CREATE TABLE IF NOT EXISTS triggers (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at REAL NOT NULL,
-    fire_at    REAL NOT NULL,
-    message    TEXT NOT NULL,
-    priority   TEXT NOT NULL DEFAULT 'high',
-    fired      INTEGER NOT NULL DEFAULT 0
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at        REAL NOT NULL,
+    fire_at           REAL NOT NULL,
+    message           TEXT NOT NULL,
+    priority          TEXT NOT NULL DEFAULT 'high',
+    fired             INTEGER NOT NULL DEFAULT 0,
+    recurrence        TEXT NOT NULL DEFAULT 'none',
+    recurrence_weekday INTEGER
 )
 """
+
+_RECURRENCE_VALUES = ("none", "daily", "weekly", "weekdays")
 
 # (message, priority) -> None
 DeliverFn = Callable[[str, str], None]
@@ -50,16 +54,29 @@ class TriggerStore(ThreadSafeDB):
         conn.execute(_CREATE)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_trg_due ON triggers(fired, fire_at)")
+        # Migration: add recurrence columns to existing DBs (ignored if present)
+        for stmt in (
+            "ALTER TABLE triggers ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'none'",
+            "ALTER TABLE triggers ADD COLUMN recurrence_weekday INTEGER",
+        ):
+            try:
+                conn.execute(stmt)
+            except Exception:  # noqa: BLE001 — column already exists
+                pass
 
     # ── authoring ──────────────────────────────────────────────────────── #
 
-    def add(self, fire_at: float, message: str, priority: str = "high") -> int | None:
+    def add(self, fire_at: float, message: str, priority: str = "high",
+            recurrence: str = "none",
+            recurrence_weekday: int | None = None) -> int | None:
         if not message.strip() or fire_at <= 0:
             return None
+        rec = recurrence if recurrence in _RECURRENCE_VALUES else "none"
         return self._execute(
-            "INSERT INTO triggers (created_at, fire_at, message, priority) "
-            "VALUES (?, ?, ?, ?)",
-            (time.time(), fire_at, message.strip(), priority))
+            "INSERT INTO triggers "
+            "(created_at, fire_at, message, priority, recurrence, recurrence_weekday) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (time.time(), fire_at, message.strip(), priority, rec, recurrence_weekday))
 
     def pending(self) -> list[dict[str, Any]]:
         return self.query(
@@ -78,6 +95,30 @@ class TriggerStore(ThreadSafeDB):
     def _mark_fired(self, trigger_id: int) -> None:
         self._execute("UPDATE triggers SET fired=1 WHERE id=?", (trigger_id,))
 
+    def _next_fire_at(self, trigger: dict) -> float:
+        """Compute the next fire_at timestamp for a recurring trigger."""
+        import datetime as _dt
+        rec = trigger.get("recurrence", "none")
+        current = trigger["fire_at"]
+        now = time.time()
+        base = max(current, now)
+        if rec == "daily":
+            # Advance by one day, keep same time-of-day
+            return base + 86400
+        if rec == "weekdays":
+            # Advance 1 day at a time until we hit Mon–Fri
+            next_ts = base + 86400
+            for _ in range(7):
+                wd = _dt.datetime.fromtimestamp(next_ts).weekday()
+                if wd < 5:
+                    return next_ts
+                next_ts += 86400
+            return base + 86400  # fallback
+        if rec == "weekly":
+            # Advance by 7 days
+            return base + 7 * 86400
+        return current  # 'none' — should not be called
+
     def spoken_pending(self) -> str:
         p = self.pending()
         if not p:
@@ -85,14 +126,17 @@ class TriggerStore(ThreadSafeDB):
         parts = []
         for t in p[:5]:
             when = time.strftime("%H:%M", time.localtime(t["fire_at"]))
-            parts.append(f"{when}: {t['message']}")
+            rec = t.get("recurrence", "none")
+            rec_label = {"daily": " (täglich)", "weekly": " (wöchentlich)",
+                         "weekdays": " (Mo–Fr)"}.get(rec, "")
+            parts.append(f"{when}: {t['message']}{rec_label}")
         return f"{len(p)} geplante Erinnerung(en): " + ", ".join(parts) + "."
 
     # ── checker loop ───────────────────────────────────────────────────── #
 
     def fire_due(self, now: float | None = None) -> int:
-        """Deliver every due trigger and mark it fired. Returns the count.
-        Called by the loop, and directly in tests."""
+        """Deliver every due trigger; reschedule recurring ones instead of
+        marking them fired. Returns the count delivered."""
         fired = 0
         for t in self.due(now):
             msg = f"Erinnerung: {t['message']}"
@@ -103,7 +147,15 @@ class TriggerStore(ThreadSafeDB):
                     print(f"[Triggers] deliver failed: {exc}")
             else:
                 print(f"[Triggers] (no sink) {msg}")
-            self._mark_fired(t["id"])
+            rec = t.get("recurrence", "none")
+            if rec != "none":
+                next_at = self._next_fire_at(t)
+                self._execute(
+                    "UPDATE triggers SET fire_at=? WHERE id=?",
+                    (next_at, t["id"]),
+                )
+            else:
+                self._mark_fired(t["id"])
             fired += 1
         return fired
 

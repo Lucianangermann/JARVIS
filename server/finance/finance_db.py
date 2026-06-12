@@ -113,12 +113,19 @@ class FinanceDB(ThreadSafeDB):
             r["description"] = cipher.decrypt(r.get("description"))
         return rows
 
-    def expenses_by_category(self, since_ts: float) -> list[dict[str, Any]]:
+    def expenses_by_category(self, since_ts: float,
+                              until_ts: float | None = None) -> list[dict[str, Any]]:
+        if until_ts is None:
+            return self.query(
+                """SELECT category, SUM(amount) AS total, COUNT(*) AS n
+                   FROM expenses WHERE ts >= ? GROUP BY category
+                   ORDER BY total DESC""",
+                (since_ts,))
         return self.query(
             """SELECT category, SUM(amount) AS total, COUNT(*) AS n
-               FROM expenses WHERE ts >= ? GROUP BY category
+               FROM expenses WHERE ts >= ? AND ts < ? GROUP BY category
                ORDER BY total DESC""",
-            (since_ts,))
+            (since_ts, until_ts))
 
     # ── budgets ────────────────────────────────────────────────────────── #
 

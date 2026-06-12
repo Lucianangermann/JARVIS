@@ -527,6 +527,37 @@ def _check_package_delivery(engine: ProactiveEngine) -> str | None:
     return None
 
 
+def _check_spending_spike(engine: ProactiveEngine) -> str | None:
+    """Warn when any category is >30 % over its previous-month spend."""
+    try:
+        from pathlib import Path
+        from ..finance import FinanceManager
+        fm = FinanceManager(Path("data/finance.db"))
+        try:
+            trends = fm.expenses.spending_trend()
+        finally:
+            conn = getattr(getattr(fm, "expenses", None), "_db", None)
+            if conn:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        spikes = [
+            t for t in trends
+            if t.get("change_pct") is not None
+            and t["change_pct"] >= 30
+            and t["current"] >= 10  # ignore trivial amounts
+        ]
+        if not spikes:
+            return None
+        top = spikes[0]
+        return (f"Ausgaben-Spike: {top['category']} +{top['change_pct']:.0f} % "
+                f"gegenüber letztem Monat ({top['current']:.0f} vs "
+                f"{top['previous']:.0f} EUR).")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _check_watchlist_alerts(engine: ProactiveEngine) -> str | None:
     """Warn when a watched asset is within 5 % of a price target."""
     try:
@@ -763,5 +794,13 @@ def _build_specs() -> tuple[NotificationSpec, ...]:
             max_per_day=3,
             active_hours=(8, 22),
             check=_check_watchlist_alerts,
+        ),
+        NotificationSpec(
+            name="spending_spike",
+            priority="medium",
+            cooldown_minutes=24 * 60,
+            max_per_day=1,
+            active_hours=(8, 21),
+            check=_check_spending_spike,
         ),
     )
